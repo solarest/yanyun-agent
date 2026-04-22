@@ -1,10 +1,12 @@
 """应用层 - 任务 DTO"""
+
 from pydantic import BaseModel, Field
 from typing import Any, Dict, Optional
 
 
 class CreateTaskDTO(BaseModel):
     """创建任务请求 DTO"""
+
     message: str = Field(
         ...,
         min_length=1,
@@ -32,6 +34,7 @@ class CreateTaskDTO(BaseModel):
 
 class TaskResponseDTO(BaseModel):
     """任务响应 DTO"""
+
     id: str
     message: str
     workspace: str
@@ -49,5 +52,6 @@ class TaskResponseDTO(BaseModel):
 
 class TaskListResponseDTO(BaseModel):
     """任务列表响应 DTO"""
+
     data: list[TaskResponseDTO]
     total: int

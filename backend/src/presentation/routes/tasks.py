@@ -1,4 +1,5 @@
 """表现层 - 任务 CRUD 路由"""
+
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from src.application.dtos.task_dto import CreateTaskDTO, TaskListResponseDTO, TaskResponseDTO
@@ -21,7 +22,7 @@ async def create_task(
     task_repo: ITaskRepository = Depends(get_task_repository),
 ):
     """创建任务
-    
+
     创建任务实体并保存到数据库。
     任务创建后处于 idle 状态，等待执行。
     """
@@ -32,9 +33,9 @@ async def create_task(
         model=dto.model or "gpt-4",
         config=TaskConfig(max_turns=dto.max_turns or 100),
     )
-    
+
     task = await task_repo.add(task)
-    
+
     return TaskResponseDTO(
         id=task.id,
         message=task.message,
@@ -61,7 +62,7 @@ async def list_tasks(
     """获取任务列表"""
     offset = (page - 1) * page_size
     tasks = await task_repo.list_all(limit=page_size, offset=offset)
-    
+
     return TaskListResponseDTO(
         data=[
             TaskResponseDTO(
@@ -102,7 +103,7 @@ async def get_task(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"error": {"code": "TASK_NOT_FOUND", "message": "任务不存在"}},
         )
-    
+
     return TaskResponseDTO(
         id=task.id,
         message=task.message,

@@ -1,4 +1,5 @@
 """基础设施层 - Task SQLAlchemy 模型"""
+
 from datetime import datetime
 
 from sqlalchemy import Column, DateTime, Integer, JSON, String, Text
@@ -9,8 +10,9 @@ Base = declarative_base()
 
 class TaskModel(Base):
     """任务数据库模型"""
+
     __tablename__ = "tasks"
-    
+
     id = Column(String, primary_key=True)
     message = Column(Text, nullable=False)
     workspace = Column(String, nullable=False)
@@ -25,20 +27,21 @@ class TaskModel(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
-    
+
     def __repr__(self) -> str:
         return f"<TaskModel(id={self.id}, status={self.status})>"
 
 
 class EventModel(Base):
     """SSE 事件数据库模型"""
+
     __tablename__ = "sse_events"
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True)
     task_id = Column(String, nullable=False, index=True)
     event_type = Column(String, nullable=False)
     event_data = Column(JSON, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
-    
+
     def __repr__(self) -> str:
         return f"<EventModel(id={self.id}, task_id={self.task_id}, type={self.event_type})>"

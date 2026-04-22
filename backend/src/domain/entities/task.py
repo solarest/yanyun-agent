@@ -1,4 +1,5 @@
 """领域层 - Task 实体"""
+
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -9,6 +10,7 @@ from src.domain.entities.base import Entity
 
 class TaskStatus(str, Enum):
     """任务状态枚举"""
+
     IDLE = "idle"
     RUNNING = "running"
     COMPLETED = "completed"
@@ -20,6 +22,7 @@ class TaskStatus(str, Enum):
 @dataclass
 class TaskConfig:
     """任务配置"""
+
     max_turns: int = 100
     model: str = "gpt-4"
     temperature: float = 0.7
@@ -43,14 +46,15 @@ _MODEL_PRICING: dict[str, tuple[float, float]] = {
 @dataclass
 class CostTracker:
     """成本追踪器"""
+
     total_tokens: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_cost: float = 0.0
-    
+
     def add_tokens(self, prompt_tokens: int, completion_tokens: int, model: str) -> None:
         """累加 Token 并计算成本
-        
+
         Args:
             prompt_tokens: 输入 token 数
             completion_tokens: 输出 token 数
@@ -59,7 +63,7 @@ class CostTracker:
         self.prompt_tokens += prompt_tokens
         self.completion_tokens += completion_tokens
         self.total_tokens = self.prompt_tokens + self.completion_tokens
-        
+
         # 计算成本
         pricing = _MODEL_PRICING.get(model)
         if pricing is None:
@@ -68,11 +72,13 @@ class CostTracker:
                 if model.startswith(key):
                     pricing = price
                     break
-        
+
         if pricing:
             prompt_price, completion_price = pricing
-            self.total_cost += (prompt_tokens / 1000 * prompt_price) + (completion_tokens / 1000 * completion_price)
-    
+            self.total_cost += (prompt_tokens / 1000 * prompt_price) + (
+                completion_tokens / 1000 * completion_price
+            )
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "total_tokens": self.total_tokens,
@@ -85,16 +91,17 @@ class CostTracker:
 @dataclass
 class Task(Entity):
     """Agent 任务实体"""
-    message: str = ""                          # 用户输入的任务描述
-    workspace: str = ""                        # 工作目录路径
-    status: TaskStatus = TaskStatus.IDLE       # 任务状态
-    model: str = ""                            # 使用的模型标识
+
+    message: str = ""  # 用户输入的任务描述
+    workspace: str = ""  # 工作目录路径
+    status: TaskStatus = TaskStatus.IDLE  # 任务状态
+    model: str = ""  # 使用的模型标识
     config: TaskConfig = field(default_factory=TaskConfig)
-    current_turn: int = 0                      # 当前轮次
-    max_turns: int = 100                       # 最大轮次
+    current_turn: int = 0  # 当前轮次
+    max_turns: int = 100  # 最大轮次
     created_at: datetime = field(default_factory=datetime.now)
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
-    result: Optional[str] = None               # 最终结果
-    error: Optional[str] = None                # 错误信息
+    result: Optional[str] = None  # 最终结果
+    error: Optional[str] = None  # 错误信息
     cost: CostTracker = field(default_factory=CostTracker)

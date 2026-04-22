@@ -1,4 +1,5 @@
 """基础设施层 - SQLAlchemy 数据库配置"""
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
@@ -8,15 +9,11 @@ SQLALCHEMY_DATABASE_URL = "sqlite:///./app.db"
 SQLALCHEMY_ASYNC_DATABASE_URL = "sqlite+aiosqlite:///./app.db"
 
 # 同步引擎 (用于初始化)
-sync_engine = create_engine(
-    SQLALCHEMY_DATABASE_URL,
-    connect_args={"check_same_thread": False}
-)
+sync_engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
 
 # 异步引擎 (用于异步操作)
 async_engine = create_async_engine(
-    SQLALCHEMY_ASYNC_DATABASE_URL,
-    connect_args={"check_same_thread": False}
+    SQLALCHEMY_ASYNC_DATABASE_URL, connect_args={"check_same_thread": False}
 )
 
 # Session 工厂 (同步)
@@ -28,7 +25,7 @@ Base = declarative_base()
 
 def get_db():
     """获取数据库 Session 的依赖注入函数 (同步)
-    
+
     用法:
         @router.get("/example")
         def example(db: Session = Depends(get_db)):
@@ -43,7 +40,7 @@ def get_db():
 
 async def get_async_db():
     """获取异步数据库 Session 的依赖注入函数
-    
+
     用法:
         @router.get("/example")
         async def example(db: AsyncSession = Depends(get_async_db)):
@@ -60,5 +57,5 @@ def init_db():
     """初始化数据库(创建所有表)"""
     # 导入所有模型以注册
     from src.infrastructure.database.models.agent_model import TaskModel, EventModel  # noqa: F401
-    
+
     Base.metadata.create_all(bind=sync_engine)
