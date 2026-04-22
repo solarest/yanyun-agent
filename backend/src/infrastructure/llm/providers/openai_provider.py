@@ -1,4 +1,7 @@
 """基础设施层 - OpenAI 兼容提供商"""
+
+from typing import Optional
+
 from langchain_openai import ChatOpenAI
 from langchain_core.language_models import BaseChatModel
 
@@ -30,10 +33,10 @@ OPENAI_COMPATIBLE_PRICING = {
 
 class OpenAICompatibleProvider(ProviderAdapter):
     """OpenAI 兼容提供商
-    
+
     支持: OpenAI、Azure OpenAI、Ollama、Groq、DeepSeek、通义千问、智谱
     """
-    
+
     SUPPORTED_PROVIDERS = {
         LLMProvider.OPENAI,
         LLMProvider.AZURE_OPENAI,
@@ -43,51 +46,51 @@ class OpenAICompatibleProvider(ProviderAdapter):
         LLMProvider.QWEN,
         LLMProvider.ZHIPU,
     }
-    
+
     def __init__(self, settings: LLMSettings):
         self.settings = settings
-    
+
     def supports(self, provider: LLMProvider) -> bool:
         return provider in self.SUPPORTED_PROVIDERS
-    
+
     def create_model(self, config: LLMConfig) -> BaseChatModel:
         base_url = config.api_base or self._get_base_url(config.provider)
         api_key = config.api_key or self._get_api_key(config.provider)
-        
+
         kwargs = {
             "model": config.model,
             "temperature": config.temperature,
             "timeout": config.timeout,
             "max_retries": config.max_retries,
         }
-        
+
         if config.max_tokens:
             kwargs["max_tokens"] = config.max_tokens
-        
+
         if base_url:
             kwargs["base_url"] = base_url
-        
+
         if api_key:
             kwargs["api_key"] = api_key
-        
+
         # 合并 extra 参数
         kwargs.update(config.extra)
-        
+
         return ChatOpenAI(**kwargs)
-    
+
     def get_model_pricing(self, model: str) -> tuple[float, float]:
         # 精确匹配
         if model in OPENAI_COMPATIBLE_PRICING:
             return OPENAI_COMPATIBLE_PRICING[model]
-        
+
         # 前缀匹配
         for key, price in OPENAI_COMPATIBLE_PRICING.items():
             if model.startswith(key):
                 return price
-        
+
         # 未知模型，返回 0
         return (0.0, 0.0)
-    
+
     def _get_base_url(self, provider: LLMProvider) -> str | None:
         urls = {
             LLMProvider.OPENAI: self.settings.openai_api_base,
@@ -98,8 +101,8 @@ class OpenAICompatibleProvider(ProviderAdapter):
             LLMProvider.ZHIPU: "https://open.bigmodel.cn/api/paas/v4",
         }
         return urls.get(provider)
-    
-    def _get_api_key(self, provider: LLMProvider) -> str | None:
+
+    def _get_api_key(self, provider: LLMProvider) -> Optional[str]:
         keys = {
             LLMProvider.OPENAI: self.settings.openai_api_key,
             LLMProvider.GROQ: self.settings.groq_api_key,

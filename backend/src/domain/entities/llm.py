@@ -1,11 +1,15 @@
 """领域层 - LLM 配置实体"""
+
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Optional
 
 
 class LLMProvider(str, Enum):
     """LLM 提供商枚举"""
+
     OPENAI = "openai"
     AZURE_OPENAI = "azure_openai"
     ANTHROPIC = "anthropic"
@@ -19,9 +23,9 @@ class LLMProvider(str, Enum):
 @dataclass
 class LLMConfig:
     """LLM 配置实体
-    
+
     描述一个 LLM 实例的完整配置，是纯数据类。
-    
+
     Attributes:
         provider: LLM 提供商
         model: 模型名称
@@ -33,12 +37,13 @@ class LLMConfig:
         api_key: API 密钥
         extra: 提供商特有参数
     """
+
     provider: LLMProvider
     model: str
     temperature: float = 0.7
-    max_tokens: int | None = None
+    max_tokens: Optional[int] = None
     timeout: int = 60
     max_retries: int = 3
-    api_base: str | None = None
-    api_key: str | None = None
+    api_base: Optional[str] = None
+    api_key: Optional[str] = None
     extra: dict[str, Any] = field(default_factory=dict)
