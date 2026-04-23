@@ -25,6 +25,7 @@ OPENAI_COMPATIBLE_PRICING = {
     # 通义千问
     "qwen-turbo": (0.00028, 0.00083),
     "qwen-plus": (0.00056, 0.00166),
+    "qwen-max": (0.0028, 0.0083),
     # 智谱
     "glm-4": (0.01, 0.01),
     "glm-3-turbo": (0.001, 0.001),
@@ -91,7 +92,7 @@ class OpenAICompatibleProvider(ProviderAdapter):
         # 未知模型，返回 0
         return (0.0, 0.0)
 
-    def _get_base_url(self, provider: LLMProvider) -> str | None:
+    def _get_base_url(self, provider: LLMProvider) -> Optional[str]:
         urls = {
             LLMProvider.OPENAI: self.settings.openai_api_base,
             LLMProvider.OLLAMA: f"{self.settings.ollama_base_url}/v1",

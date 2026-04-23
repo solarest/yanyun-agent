@@ -70,7 +70,7 @@ class CreateLLMUseCase:
             LLMProvider.OLLAMA: ["llama3", "mistral", "phi3"],
             LLMProvider.GROQ: ["llama3-70b-8192", "llama3-8b-8192"],
             LLMProvider.DEEPSEEK: ["deepseek-chat"],
-            LLMProvider.QWEN: ["qwen-turbo", "qwen-plus"],
+            LLMProvider.QWEN: ["qwen-turbo", "qwen-plus", "qwen-max"],
             LLMProvider.ZHIPU: ["glm-4", "glm-3-turbo"],
         }
         return models.get(provider, [])
