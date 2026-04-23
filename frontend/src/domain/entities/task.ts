@@ -10,6 +10,7 @@ export interface AgentConfig {
   name: string;
   description: string;
   systemPrompt: string;
+  provider: string;
   model: string;
   maxIterations: number;
 }

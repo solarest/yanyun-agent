@@ -4,7 +4,7 @@ LangGraph Node: llm_call_node
 职责：调用 LLM 并流式输出文本到前端
 """
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, SystemMessage
 from langgraph.types import RunnableConfig
 
 from src.domain.entities.agent_state import AgentState
@@ -14,9 +14,10 @@ async def llm_call_node(state: AgentState, config: RunnableConfig) -> dict:
     """LLM 调用节点
 
     1. 发射阶段变更事件
-    2. 流式调用 LLM
-    3. 发射每个 token (llm-chunk)
-    4. 返回累积文本
+    2. 防御性注入 SystemMessage（如果 state 中有 system_prompt）
+    3. 流式调用 LLM
+    4. 发射每个 token (llm-chunk)
+    5. 返回累积文本
 
     Args:
         state: 当前 Agent 状态
@@ -41,8 +42,11 @@ async def llm_call_node(state: AgentState, config: RunnableConfig) -> dict:
         },
     )
 
-    # 流式调用 LLM
-    messages = state["messages"]
+    # 防御性 SystemMessage 注入
+    messages = list(state["messages"])
+    system_prompt = state.get("system_prompt", "")
+    if system_prompt and (not messages or not isinstance(messages[0], SystemMessage)):
+        messages = [SystemMessage(content=system_prompt)] + messages
     full_text = ""
     tool_calls_list = []
 

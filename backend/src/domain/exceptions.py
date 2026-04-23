@@ -41,3 +41,15 @@ class LLMProviderNotSupportedError(LLMError):
     """不支持的 LLM 提供商"""
 
     pass
+
+
+class AgentNotFoundError(DomainError):
+    """Agent 未找到"""
+
+    pass
+
+
+class DuplicateAgentNameError(DomainError):
+    """Agent 名称重复"""
+
+    pass

@@ -1,11 +1,9 @@
-"""基础设施层 - Task SQLAlchemy 模型"""
+"""基础设施层 - SQLAlchemy 数据库模型"""
 
 from datetime import datetime
 
 from sqlalchemy import Column, DateTime, Integer, JSON, String, Text
-from sqlalchemy.orm import declarative_base
-
-Base = declarative_base()
+from src.infrastructure.database.session import Base
 
 
 class TaskModel(Base):
@@ -24,6 +22,7 @@ class TaskModel(Base):
     result = Column(Text, nullable=True)
     error = Column(Text, nullable=True)
     cost = Column(JSON, default={})
+    agent_id = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
@@ -45,3 +44,19 @@ class EventModel(Base):
 
     def __repr__(self) -> str:
         return f"<EventModel(id={self.id}, task_id={self.task_id}, type={self.event_type})>"
+
+
+class AgentModel(Base):
+    """Agent 数据库模型"""
+
+    __tablename__ = "agents"
+
+    id = Column(String, primary_key=True)
+    name = Column(String, nullable=False, unique=True, index=True)
+    role = Column(Text, nullable=False)
+    system_prompt_template = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<AgentModel(id={self.id}, name={self.name})>"

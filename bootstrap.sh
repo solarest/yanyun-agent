@@ -56,6 +56,35 @@ is_process_running() {
     return 1
 }
 
+# 通过端口检查服务是否运行并杀死旧进程
+kill_existing_service_by_port() {
+    local port=$1
+    local service_name=$2
+    
+    # 查找占用指定端口的进程
+    local pid=$(lsof -ti :$port 2>/dev/null || true)
+    if [ -n "$pid" ]; then
+        log_warn "发现已在运行的 $service_name 服务 (端口: $port, PID: $pid)"
+        log_info "正在停止旧的 $service_name 服务..."
+        kill $pid 2>/dev/null || true
+        
+        # 等待进程结束
+        local count=0
+        while ps -p $pid > /dev/null 2>&1 && [ $count -lt 10 ]; do
+            sleep 1
+            count=$((count + 1))
+        done
+        
+        # 如果还没结束,强制杀死
+        if ps -p $pid > /dev/null 2>&1; then
+            log_warn "强制停止旧的 $service_name 服务..."
+            kill -9 $pid 2>/dev/null || true
+        fi
+        
+        log_info "旧的 $service_name 服务已停止"
+    fi
+}
+
 # 获取进程状态
 get_process_status() {
     local name=$1
@@ -81,6 +110,9 @@ ensure_log_dir() {
 # ==========================================
 
 start_backend() {
+    # 先检查并杀死可能存在的旧服务进程（基于端口）
+    kill_existing_service_by_port 8000 "后端"
+    
     if is_process_running "$BACKEND_PID_FILE"; then
         local pid=$(cat "$BACKEND_PID_FILE")
         log_warn "后端服务已在运行 (PID: $pid)"
@@ -151,6 +183,9 @@ stop_backend() {
 # ==========================================
 
 start_frontend() {
+    # 先检查并杀死可能存在的旧服务进程（基于端口）
+    kill_existing_service_by_port 3000 "前端"
+    
     if is_process_running "$FRONTEND_PID_FILE"; then
         local pid=$(cat "$FRONTEND_PID_FILE")
         log_warn "前端服务已在运行 (PID: $pid)"

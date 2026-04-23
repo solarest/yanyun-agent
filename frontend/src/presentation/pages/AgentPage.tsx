@@ -8,6 +8,7 @@ import { CreateAgentDialog } from '@presentation/components/CreateAgentDialog';
 import { TaskList } from '@presentation/components/TaskList';
 import { ChatInterface } from '@presentation/components/ChatInterface';
 import type { Task } from '../../domain/entities/task';
+import { llmConfigApi, type LLMProviderInfo } from '../../infrastructure/api/llmConfigApi';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
@@ -15,6 +16,7 @@ export const AgentPage: React.FC = () => {
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [llmProviders, setLlmProviders] = useState<LLMProviderInfo[]>([]);
 
   const {
     isLoading,
@@ -40,6 +42,24 @@ export const AgentPage: React.FC = () => {
     fetchTasks();
   }, [fetchTasks]);
 
+  // 加载 LLM 配置
+  useEffect(() => {
+    const loadLlmProviders = async () => {
+      try {
+        const providers = await llmConfigApi.getProviders();
+        setLlmProviders(providers);
+      } catch (err) {
+        console.error('加载 LLM 配置失败:', err);
+        // 使用默认配置作为降级方案
+        setLlmProviders([
+          { name: 'openai', availableModels: ['gpt-4', 'gpt-3.5-turbo'] },
+          { name: 'anthropic', availableModels: ['claude-3-opus', 'claude-3-sonnet'] },
+        ]);
+      }
+    };
+    loadLlmProviders();
+  }, []);
+
   // 当创建任务后，连接到 SSE
   useEffect(() => {
     if (currentTask && currentTask.status === 'running') {
@@ -64,6 +84,7 @@ export const AgentPage: React.FC = () => {
     agentName: string;
     userInput: string;
     systemPrompt: string;
+    provider: string;
     model: string;
   }) => {
     try {
@@ -72,6 +93,7 @@ export const AgentPage: React.FC = () => {
         userInput: data.userInput,
         config: {
           systemPrompt: data.systemPrompt,
+          provider: data.provider,
           model: data.model,
         },
       });
@@ -172,6 +194,7 @@ export const AgentPage: React.FC = () => {
         onClose={() => setShowCreateDialog(false)}
         onSubmit={handleCreateAgent}
         isLoading={isLoading}
+        llmProviders={llmProviders}
       />
     </div>
   );

@@ -4,8 +4,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from src.application.dtos.task_dto import CreateTaskDTO, TaskListResponseDTO, TaskResponseDTO
 from src.domain.entities.task import Task, TaskConfig, TaskStatus
+from src.domain.repositories.agent_repository import IAgentRepository
 from src.domain.repositories.task_repository import ITaskRepository
-from src.presentation.dependencies import get_task_repository
+from src.presentation.dependencies import get_agent_repository, get_task_repository
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -15,23 +16,43 @@ router = APIRouter(prefix="/api/tasks", tags=["tasks"])
     response_model=TaskResponseDTO,
     status_code=status.HTTP_201_CREATED,
     summary="创建任务",
-    description="创建一个新的 Agent 任务",
+    description="创建一个新的 Agent 任务，可选关联 Agent",
+    responses={
+        404: {"description": "关联的 Agent 不存在"},
+    },
 )
 async def create_task(
     dto: CreateTaskDTO,
     task_repo: ITaskRepository = Depends(get_task_repository),
+    agent_repo: IAgentRepository = Depends(get_agent_repository),
 ):
     """创建任务
 
     创建任务实体并保存到数据库。
+    如果指定了 agent_id，会校验 Agent 是否存在。
     任务创建后处于 idle 状态，等待执行。
     """
+    # 如果指定了 agent_id，校验 Agent 是否存在
+    if dto.agent_id is not None:
+        agent = await agent_repo.get_by_id(dto.agent_id)
+        if agent is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "error": {
+                        "code": "AGENT_NOT_FOUND",
+                        "message": f"Agent '{dto.agent_id}' 不存在",
+                    }
+                },
+            )
+
     task = Task(
         message=dto.message,
         workspace=dto.workspace,
         status=TaskStatus.IDLE,
         model=dto.model or "gpt-4",
         config=TaskConfig(max_turns=dto.max_turns or 100),
+        agent_id=dto.agent_id,
     )
 
     task = await task_repo.add(task)
@@ -44,6 +65,7 @@ async def create_task(
         model=task.model,
         current_turn=task.current_turn,
         max_turns=task.max_turns,
+        agent_id=task.agent_id,
         created_at=task.created_at.isoformat(),
     )
 
@@ -73,6 +95,7 @@ async def list_tasks(
                 model=t.model,
                 current_turn=t.current_turn,
                 max_turns=t.max_turns,
+                agent_id=t.agent_id,
                 result=t.result,
                 error=t.error,
                 cost=t.cost.to_dict(),
@@ -112,6 +135,7 @@ async def get_task(
         model=task.model,
         current_turn=task.current_turn,
         max_turns=task.max_turns,
+        agent_id=task.agent_id,
         result=task.result,
         error=task.error,
         cost=task.cost.to_dict(),

@@ -2,6 +2,7 @@
 
 组合根(Composition Root): 在这里将所有依赖组装在一起
 """
+
 from functools import lru_cache
 
 from fastapi import Depends
@@ -14,10 +15,12 @@ from src.domain.entities.base import Entity
 from src.domain.repositories.base import Repository
 from src.domain.repositories.event_repository import IEventRepository
 from src.domain.repositories.task_repository import ITaskRepository
+from src.domain.repositories.agent_repository import IAgentRepository
 from src.infrastructure.llm.config import LLMSettings
 from src.infrastructure.repositories.in_memory_repo import InMemoryRepository
 from src.infrastructure.repositories.sqlite_event_repo import SQLiteEventRepository
 from src.infrastructure.repositories.sqlite_task_repo import SQLiteTaskRepository
+from src.infrastructure.repositories.sqlite_agent_repo import SQLiteAgentRepository
 
 
 # 创建 Repository 实例(单例模式)
@@ -60,6 +63,13 @@ def get_event_repository(
 ) -> IEventRepository:
     """获取事件仓储实例"""
     return SQLiteEventRepository(db)
+
+
+def get_agent_repository(
+    db: AsyncSession = Depends(get_async_db),
+) -> IAgentRepository:
+    """获取 Agent 仓储实例"""
+    return SQLiteAgentRepository(db)
 
 
 def get_event_service(

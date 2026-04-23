@@ -1,7 +1,8 @@
 /**
  * 表现层 - 创建 Agent 对话框组件
  */
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { LLMProviderInfo } from '../../infrastructure/api/llmConfigApi';
 
 interface CreateAgentDialogProps {
   isOpen: boolean;
@@ -10,37 +11,43 @@ interface CreateAgentDialogProps {
     agentName: string;
     userInput: string;
     systemPrompt: string;
+    provider: string;
     model: string;
   }) => void;
   isLoading: boolean;
+  llmProviders: LLMProviderInfo[];
 }
-
-const MODELS = [
-  { value: 'gpt-4', label: 'GPT-4' },
-  { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo' },
-  { value: 'claude-3-opus', label: 'Claude 3 Opus' },
-  { value: 'claude-3-sonnet', label: 'Claude 3 Sonnet' },
-];
 
 export const CreateAgentDialog: React.FC<CreateAgentDialogProps> = ({
   isOpen,
   onClose,
   onSubmit,
   isLoading,
+  llmProviders,
 }) => {
   const [agentName, setAgentName] = useState('');
   const [userInput, setUserInput] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('You are a helpful coding assistant.');
-  const [model, setModel] = useState('gpt-4');
+  const [provider, setProvider] = useState(llmProviders[0]?.name || '');
+  const [model, setModel] = useState(llmProviders[0]?.availableModels[0] || '');
+
+  // 当提供商改变时，重置模型为该提供商的第一个可用模型
+  useEffect(() => {
+    const selectedProvider = llmProviders.find(p => p.name === provider);
+    if (selectedProvider && selectedProvider.availableModels.length > 0) {
+      setModel(selectedProvider.availableModels[0]);
+    }
+  }, [provider, llmProviders]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onSubmit({ agentName, userInput, systemPrompt, model });
+    onSubmit({ agentName, userInput, systemPrompt, provider, model });
     // 重置表单
     setAgentName('');
     setUserInput('');
     setSystemPrompt('You are a helpful coding assistant.');
-    setModel('gpt-4');
+    setProvider(llmProviders[0]?.name || '');
+    setModel(llmProviders[0]?.availableModels[0] || '');
   };
 
   if (!isOpen) return null;
@@ -93,6 +100,24 @@ export const CreateAgentDialog: React.FC<CreateAgentDialogProps> = ({
             />
           </div>
 
+          {/* 提供商选择 */}
+          <div>
+            <label className="mb-1 block text-sm font-medium">
+              LLM 提供商
+            </label>
+            <select
+              className="input"
+              value={provider}
+              onChange={(e) => setProvider(e.target.value)}
+            >
+              {llmProviders.map(p => (
+                <option key={p.name} value={p.name}>
+                  {p.name.toUpperCase()}
+                </option>
+              ))}
+            </select>
+          </div>
+
           {/* 模型选择 */}
           <div>
             <label className="mb-1 block text-sm font-medium">
@@ -103,11 +128,13 @@ export const CreateAgentDialog: React.FC<CreateAgentDialogProps> = ({
               value={model}
               onChange={(e) => setModel(e.target.value)}
             >
-              {MODELS.map(m => (
-                <option key={m.value} value={m.value}>
-                  {m.label}
-                </option>
-              ))}
+              {llmProviders
+                .find(p => p.name === provider)
+                ?.availableModels.map(m => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
             </select>
           </div>
 

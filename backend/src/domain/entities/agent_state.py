@@ -37,6 +37,9 @@ class AgentState(TypedDict):
     # === 流式输出 ===
     current_llm_text: str
 
+    # === 系统提示词 ===
+    system_prompt: str
+
     # === 结果 ===
     final_result: Optional[str]
     error: Optional[str]
