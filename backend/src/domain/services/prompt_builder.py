@@ -1,4 +1,4 @@
-"""应用层 - PromptBuilder 服务"""
+"""领域层 - PromptBuilder 领域服务"""
 
 from src.domain.entities.agent import Agent
 

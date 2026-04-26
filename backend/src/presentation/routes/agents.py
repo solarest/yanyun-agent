@@ -48,7 +48,12 @@ async def create_agent(
     if existing is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail={"error": {"code": "DUPLICATE_AGENT_NAME", "message": f"Agent 名称 '{dto.name}' 已存在"}},
+            detail={
+                "error": {
+                    "code": "DUPLICATE_AGENT_NAME",
+                    "message": f"Agent 名称 '{dto.name}' 已存在",
+                }
+            },
         )
 
     # 使用默认模板（如果未提供）
@@ -136,7 +141,12 @@ async def update_agent(
         if existing is not None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail={"error": {"code": "DUPLICATE_AGENT_NAME", "message": f"Agent 名称 '{dto.name}' 已存在"}},
+                detail={
+                    "error": {
+                        "code": "DUPLICATE_AGENT_NAME",
+                        "message": f"Agent 名称 '{dto.name}' 已存在",
+                    }
+                },
             )
         agent.name = dto.name
 

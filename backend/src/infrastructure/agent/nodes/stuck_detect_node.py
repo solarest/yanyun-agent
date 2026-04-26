@@ -25,7 +25,6 @@ async def stuck_detect_node(state: AgentState, config: RunnableConfig) -> dict:
         状态更新字典
     """
     messages = state["messages"]
-    current_turn = state["current_turn"]
 
     # 简化实现：检查最近几轮是否有实质进展
     # 如果连续 3 轮没有工具调用且文本内容相似，认为卡住

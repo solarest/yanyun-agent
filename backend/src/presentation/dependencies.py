@@ -8,7 +8,7 @@ from functools import lru_cache
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.application.services.stream_event import StreamEventService
+from src.application.use_cases.stream_event import StreamEventService
 from src.domain.entities.base import Entity
 from src.domain.repositories.base import Repository
 from src.domain.repositories.event_repository import IEventRepository

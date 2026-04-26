@@ -18,7 +18,7 @@ async def ping(
     """Ping 接口 - 健康检查"""
     entities = repository.list_all()
     entity_count = len(entities)
-    
+
     return PingResponse(
         status="ok",
         timestamp=datetime.now(),

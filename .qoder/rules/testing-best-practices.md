@@ -1,5 +1,6 @@
 ---
-trigger: always_on
+trigger: model_decision
+description: 编写测试用例时生效
 ---
 # 测试最佳实践
 
@@ -408,3 +409,11 @@ npm run test:watch
 - [ ] 边界条件已测试
 - [ ] 错误场景已测试
 - [ ] 没有跳过失败的测试
+
+### Spec 生成测试要求
+
+当生成 spec 时，必须遵循 [Spec 测试要求规范](spec-testing-requirements.md)，包括：
+- 功能测试场景说明（正常流程、异常流程、边界条件）
+- 单元测试用例设计
+- 回归测试计划
+- 反复验证与子回归支持方案

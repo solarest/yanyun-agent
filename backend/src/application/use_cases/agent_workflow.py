@@ -1,4 +1,4 @@
-"""应用层 - LangGraph StateGraph 构建器
+"""应用层 - Agent 工作流用例
 
 职责：
 1. 构建 Agent StateGraph
@@ -11,6 +11,7 @@ from langgraph.types import CompiledStateGraph
 
 from src.domain.entities.agent_state import AgentState
 from src.infrastructure.agent.nodes.complete_check_node import (
+    complete_check_node,
     is_claiming_complete,
 )
 from src.infrastructure.agent.nodes.context_compact_node import (

@@ -27,7 +27,6 @@ async def tool_execute_node(state: AgentState, config: RunnableConfig) -> dict:
         状态更新字典
     """
     tool_registry = config["configurable"]["tool_registry"]
-    security_chain = config["configurable"]["security_chain"]
     event_svc = config["configurable"]["event_service"]
     task_id = state["task_id"]
 

@@ -1,5 +1,6 @@
 ---
-trigger: always_on
+trigger: glob
+glob: frontend/src/**/*.{ts,tsx}
 ---
 # TypeScript 前端代码规范
 
