@@ -8,8 +8,6 @@ from functools import lru_cache
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.application.use_cases.create_llm_use_case import CreateLLMUseCase
-from src.application.use_cases.ping_use_case import PingUseCase
 from src.application.services.stream_event import StreamEventService
 from src.domain.entities.base import Entity
 from src.domain.repositories.base import Repository
@@ -27,15 +25,6 @@ from src.infrastructure.repositories.sqlite_agent_repo import SQLiteAgentReposit
 def get_repository() -> Repository[Entity]:
     """获取 Repository 实例"""
     return InMemoryRepository()
-
-
-def get_ping_use_case(repository: Repository[Entity] = Depends(get_repository)) -> PingUseCase:
-    """获取 Ping UseCase 实例
-
-    依赖注入链:
-    PingUseCase -> Repository[Entity] -> InMemoryRepository
-    """
-    return PingUseCase(repository)
 
 
 # 异步数据库依赖
@@ -84,10 +73,3 @@ def get_event_service(
 def get_llm_settings() -> LLMSettings:
     """获取 LLM 配置单例"""
     return LLMSettings()
-
-
-def get_llm_use_case(
-    settings: LLMSettings = Depends(get_llm_settings),
-) -> CreateLLMUseCase:
-    """获取 LLM 创建用例"""
-    return CreateLLMUseCase(settings=settings)

@@ -1,21 +1,27 @@
 """表现层 - Ping 路由"""
 
+from datetime import datetime
 from fastapi import APIRouter, Depends
-from src.application.use_cases.ping_use_case import PingUseCase
 from src.application.dtos.ping_dto import PingRequest, PingResponse
-from src.presentation.dependencies import get_ping_use_case
+from src.domain.repositories.base import Repository
+from src.domain.entities.base import Entity
+from src.presentation.dependencies import get_repository
 
 router = APIRouter(prefix="/api", tags=["ping"])
 
 
 @router.post("/ping", response_model=PingResponse)
-async def ping(request: PingRequest, use_case: PingUseCase = Depends(get_ping_use_case)):
-    """Ping 接口 - 演示 DDD 架构的完整流程
-
-    流程:
-    1. FastAPI 接收请求并验证 DTO
-    2. 注入 PingUseCase
-    3. UseCase 编排业务逻辑
-    4. 返回响应 DTO
-    """
-    return use_case.execute(request)
+async def ping(
+    request: PingRequest,
+    repository: Repository[Entity] = Depends(get_repository),
+) -> PingResponse:
+    """Ping 接口 - 健康检查"""
+    entities = repository.list_all()
+    entity_count = len(entities)
+    
+    return PingResponse(
+        status="ok",
+        timestamp=datetime.now(),
+        message=f"{request.message} - entity count: {entity_count}",
+        server="ddd-python-backend",
+    )

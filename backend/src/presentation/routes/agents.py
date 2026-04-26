@@ -1,5 +1,6 @@
 """表现层 - Agent CRUD 路由"""
 
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from src.application.dtos.agent_dto import (
@@ -8,15 +9,7 @@ from src.application.dtos.agent_dto import (
     CreateAgentDTO,
     UpdateAgentDTO,
 )
-from src.application.use_cases.agent_use_cases import (
-    CreateAgentUseCase,
-    DeleteAgentUseCase,
-    GetAgentUseCase,
-    ListAgentsUseCase,
-    UpdateAgentUseCase,
-)
-from src.domain.entities.agent import Agent
-from src.domain.exceptions import AgentNotFoundError, DuplicateAgentNameError
+from src.domain.entities.agent import Agent, DEFAULT_SYSTEM_PROMPT_TEMPLATE
 from src.domain.repositories.agent_repository import IAgentRepository
 from src.presentation.dependencies import get_agent_repository
 
@@ -50,14 +43,29 @@ async def create_agent(
     agent_repo: IAgentRepository = Depends(get_agent_repository),
 ) -> AgentResponseDTO:
     """创建 Agent"""
-    use_case = CreateAgentUseCase(agent_repo)
-    try:
-        agent = await use_case.execute(dto)
-    except DuplicateAgentNameError as e:
+    # 检查名称唯一性
+    existing = await agent_repo.get_by_name(dto.name)
+    if existing is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail={"error": {"code": "DUPLICATE_AGENT_NAME", "message": str(e)}},
+            detail={"error": {"code": "DUPLICATE_AGENT_NAME", "message": f"Agent 名称 '{dto.name}' 已存在"}},
         )
+
+    # 使用默认模板（如果未提供）
+    template = (
+        dto.system_prompt_template
+        if dto.system_prompt_template is not None
+        else DEFAULT_SYSTEM_PROMPT_TEMPLATE
+    )
+
+    agent = Agent(
+        name=dto.name,
+        role=dto.role,
+        system_prompt_template=template,
+        created_at=datetime.now(),
+        updated_at=None,
+    )
+    agent = await agent_repo.add(agent)
     return _to_response(agent)
 
 
@@ -73,9 +81,8 @@ async def list_agents(
     agent_repo: IAgentRepository = Depends(get_agent_repository),
 ) -> AgentListResponseDTO:
     """获取 Agent 列表"""
-    use_case = ListAgentsUseCase(agent_repo)
     offset = (page - 1) * page_size
-    agents = await use_case.execute(limit=page_size, offset=offset)
+    agents = await agent_repo.list_all(limit=page_size, offset=offset)
     return AgentListResponseDTO(
         data=[_to_response(a) for a in agents],
         total=len(agents),
@@ -93,13 +100,11 @@ async def get_agent(
     agent_repo: IAgentRepository = Depends(get_agent_repository),
 ) -> AgentResponseDTO:
     """获取 Agent 详情"""
-    use_case = GetAgentUseCase(agent_repo)
-    try:
-        agent = await use_case.execute(agent_id)
-    except AgentNotFoundError as e:
+    agent = await agent_repo.get_by_id(agent_id)
+    if agent is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail={"error": {"code": "AGENT_NOT_FOUND", "message": str(e)}},
+            detail={"error": {"code": "AGENT_NOT_FOUND", "message": f"Agent '{agent_id}' 不存在"}},
         )
     return _to_response(agent)
 
@@ -119,19 +124,30 @@ async def update_agent(
     agent_repo: IAgentRepository = Depends(get_agent_repository),
 ) -> AgentResponseDTO:
     """更新 Agent（PATCH 语义，所有字段可选）"""
-    use_case = UpdateAgentUseCase(agent_repo)
-    try:
-        agent = await use_case.execute(agent_id, dto)
-    except AgentNotFoundError as e:
+    agent = await agent_repo.get_by_id(agent_id)
+    if agent is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail={"error": {"code": "AGENT_NOT_FOUND", "message": str(e)}},
+            detail={"error": {"code": "AGENT_NOT_FOUND", "message": f"Agent '{agent_id}' 不存在"}},
         )
-    except DuplicateAgentNameError as e:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"error": {"code": "DUPLICATE_AGENT_NAME", "message": str(e)}},
-        )
+
+    if dto.name is not None and dto.name != agent.name:
+        existing = await agent_repo.get_by_name(dto.name)
+        if existing is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"error": {"code": "DUPLICATE_AGENT_NAME", "message": f"Agent 名称 '{dto.name}' 已存在"}},
+            )
+        agent.name = dto.name
+
+    if dto.role is not None:
+        agent.role = dto.role
+
+    if dto.system_prompt_template is not None:
+        agent.system_prompt_template = dto.system_prompt_template
+
+    agent.updated_at = datetime.now()
+    agent = await agent_repo.update(agent)
     return _to_response(agent)
 
 
@@ -146,11 +162,10 @@ async def delete_agent(
     agent_repo: IAgentRepository = Depends(get_agent_repository),
 ) -> None:
     """删除 Agent"""
-    use_case = DeleteAgentUseCase(agent_repo)
-    try:
-        await use_case.execute(agent_id)
-    except AgentNotFoundError as e:
+    agent = await agent_repo.get_by_id(agent_id)
+    if agent is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail={"error": {"code": "AGENT_NOT_FOUND", "message": str(e)}},
+            detail={"error": {"code": "AGENT_NOT_FOUND", "message": f"Agent '{agent_id}' 不存在"}},
         )
+    await agent_repo.remove(agent_id)
