@@ -1,33 +1,146 @@
 # yanyun-agent 项目大纲
 
+## 系统架构总览
+
+```mermaid
+graph LR
+    subgraph Cross["横向支撑"]
+        direction TB
+        Obs["可观测性"]
+        Cfg["配置管理"]
+        Sec["安全防护"]
+        Sand["沙箱能力"]
+    end
+
+    subgraph Main[" "]
+        direction TB
+        Client["1. 客户端 Web UI"]
+
+        Client <--> SSE
+
+        subgraph Comm["2. 通信层"]
+            direction LR
+            SSE["SSE 流式通信"]
+            Schema["协议 Schema"]
+            Reconnect["重连恢复"]
+            Backpressure["背压控制"]
+        end
+
+        SSE <--> ExecPlane
+
+        subgraph AgentLayer["3. Agent 核心层"]
+            subgraph AgentSelf["3.1 Agent"]
+                direction LR
+                CtrlPlane["控制面\n· Agent 定义\n· 角色/人格\n· 文件管理"]
+                ExecPlane["执行面\n· Agent Loop\n· ReAct 循环\n· Checkpoint/Resume\n· Cancel 处理\n· Context 管理"]
+            end
+
+            subgraph AgentAux["3.2 Agent 辅助"]
+                direction LR
+                ToolsHub["Tools Hub\n· Web Search\n· Function Call\n· File / Clarify / Plan"]
+                MCP["MCP 集成"]
+                Skills["Skills 系统"]
+                SubAgent["Sub-Agent"]
+                Memory["Memory 系统\n· Daily Memory\n· Dream Memory\n· 重要性评分\n· 情景/语义记忆"]
+            end
+
+            CtrlPlane --> ExecPlane
+            ExecPlane --> ToolsHub
+            ExecPlane --> MCP
+            ExecPlane --> Skills
+            ExecPlane --> SubAgent
+            ExecPlane --> Memory
+        end
+
+        ExecPlane <--> Adaptor
+
+        subgraph LLMLayer["4. LLM 适配层"]
+            direction LR
+            Adaptor["统一适配器"]
+            Router["模型路由"]
+            Fallback["降级链"]
+            StructOut["结构化输出"]
+            PCache["Prompt 缓存"]
+            Billing["计费监控"]
+        end
+
+        Adaptor --> ExtLLM["外部大模型 API"]
+
+        subgraph StorageLayer["5. 存储层"]
+            direction LR
+            RDB[("关系型数据库")]
+            VDB[("向量数据库")]
+            CacheDB[("缓存")]
+        end
+
+        Memory --> VDB
+        ExecPlane --> RDB
+        Adaptor --> CacheDB
+    end
+
+    Cross -.-> Main
+```
+
+### 核心数据流
+
+```mermaid
+graph LR
+    A[用户请求] --> B[SSE 通信层]
+    B --> C[Agent 控制面]
+    C --> D[Agent 执行面]
+    D --> E{ReAct 循环}
+    E --> F[调用工具/记忆/MCP]
+    E --> G[调用 LLM]
+    G --> H[LLM 适配层]
+    H --> I[外部大模型]
+    I --> H
+    H --> E
+    F --> E
+    E --> |完成| J[SSE 事件推送]
+    J --> K[客户端渲染]
+```
+
+---
+
 ## 1. agent
 
 ### 1.1 agent 定义
-- **agent.md** — Agent 核心配置与元信息
-  - 说明：定义 Agent 的名称、版本、能力描述、输入输出规范
-  - 注意：保持简洁，避免过度配置；与 soul.md 职责分离
 
-- **role.md** — Agent 角色与行为边界
-  - 说明：定义 Agent 扮演的角色、职责范围、权限边界
+> 详细技术方案：[1.1-agent-design.md](./1.1-agent-design.md)
+
+采用 OpenClaw 模式，Agent 定义由七个配置文件组成：
+
+- **IDENTITY.md** — 代理身份定义与系统边界约束
+  - 说明：定义 Agent 的名称、版本、能力描述、职责范围、权限边界
   - 注意：明确"能做什么"和"不能做什么"；与安全规范对齐
 
-- **soul.md** — Agent 人格与风格定义
-  - 说明：定义 Agent 的语言风格、性格特征、交互偏好
+- **SOUL.md** — 响应语气、行为特征及输出格式配置
+  - 说明：定义 Agent 的语言风格、性格特征、交互偏好、输出格式
   - 注意：使用正向描述；避免模糊的性格定义
 
-- **memory.md** — Agent 记忆使用说明
-  - 说明：定义 Agent 如何使用记忆系统、记忆优先级、遗忘策略
-  - 注意：与 memory 系统模块解耦，此处只定义行为规则
+- **AGENTS.md** — 代理调度规则与标准作业程序
+  - 说明：定义任务处理流程、决策规则、SOP
+  - 注意：规则可量化，避免歧义；与 IDENTITY.md 边界定义配合
 
-- **Agent 版本管理** — Agent 配置的版本控制
-  - 说明：对 agent.md 等配置文件进行版本追踪
-  - 注意：兼容性声明；变更日志；支持回滚
+- **BOOTSTRAP.md** — 初始化序列与核心系统提示词
+  - 说明：定义启动配置、系统级提示词模板、安全约束
+  - 注意：精简长度，避免浪费 Token；安全约束必须在最高优先级
 
-- **输入输出契约** — Agent 的接口约束
-  - 说明：定义 Agent 的标准输入格式和输出格式
-  - 注意：使用 Pydantic Schema 严格约束；向后兼容
+- **MEMORY.md** — 长期上下文数据与既定规则的持久化存储
+  - 说明：初始为空，运行时积累长期记忆与既定规则
+  - 注意：属于 Agent 定义域；创建时为空字符串，随运行逐步填充
+
+- **TOOLS.md** — 工具授权注册表及调用参数规范
+  - 说明：定义可用工具列表、调用权限、参数约束
+  - 注意：遵循最小权限原则；高风险工具需单独标记
+
+- **USER.md** — 用户画像数据与交互限制配置
+  - 说明：定义目标用户特征、偏好设定、交互规则
+  - 注意：保护用户隐私；偏好设定可动态调整
 
 ### 1.2 prompt builder
+> 详细设计文档：[2_prompt-builder.md](./2_prompt-builder.md)
+
 - **分层构建** — 按层次组装 Prompt
   - 说明：系统提示词、角色提示词、任务提示词分层组装
   - 注意：各层职责清晰，避免耦合；支持热插拔
@@ -39,14 +152,6 @@
   - **schema 定义** — 输出格式约束
     - 说明：定义 Agent 输出的 JSON Schema 或结构化格式
     - 注意：使用 Pydantic 定义，与领域层 DTO 对齐；严格验证输出格式
-
-  - **Prompt 版本管理** — 提示词模板版本控制
-    - 说明：对 prompt 模板进行版本管理，支持 A/B 测试
-    - 注意：模板与代码分离存储；版本号语义化；变更影响评估
-
-  - **Few-shot 管理** — 示例库维护
-    - 说明：管理和维护 few-shot 示例，按场景动态选择
-    - 注意：示例质量审核；示例去重；相关性排序
 
   - **动态组装策略** — 按需组装 Prompt
     - 说明：根据任务类型、上下文动态选择 prompt 组件

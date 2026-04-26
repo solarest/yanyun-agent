@@ -9,7 +9,7 @@
 | [1_agent-design.md](./1_agent-design.md) | ✅ 已创建 | Agent 设计 |
 | [7_llm-adaptor.md](./7_llm-adaptor.md) | ✅ 已创建 | LLM 适配器 |
 | [8_communication-protocol.md](./8_communication-protocol.md) | ✅ 已创建 | 通信协议 |
-| 2_prompt-builder.md | 📋 待创建 | Prompt 构建器 |
+| 2_prompt-builder.md | ✅ 已创建 | Prompt 构建器 |
 | 3_agent-loop.md | 📋 待创建 | Agent 循环与状态机 |
 | 4_tools-design.md | 📋 待创建 | 工具系统 |
 | 5_memory-system.md | 📋 待创建 | 记忆系统 |
