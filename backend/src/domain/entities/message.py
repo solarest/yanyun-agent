@@ -5,7 +5,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from src.domain.entities.base import BaseEntity
+from src.domain.entities.base import Entity
 
 
 class MessageRole(str, Enum):
@@ -25,7 +25,7 @@ class MessageVisibility(str, Enum):
 
 
 @dataclass
-class Message(BaseEntity):
+class Message(Entity):
     """消息实体 (对话历史)"""
 
     task_id: str = ""

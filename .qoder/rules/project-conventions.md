@@ -1,5 +1,6 @@
 ---
-trigger: always_on
+trigger: model_decision
+description: 
 ---
 # 项目规则和约定
 

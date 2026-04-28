@@ -1,5 +1,6 @@
 ---
-trigger: always_on
+trigger: model_decision
+description: 
 ---
 # DDD 架构规则
 

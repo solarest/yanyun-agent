@@ -19,6 +19,7 @@ from src.infrastructure.repositories.in_memory_repo import InMemoryRepository
 from src.infrastructure.repositories.sqlite_event_repo import SQLiteEventRepository
 from src.infrastructure.repositories.sqlite_task_repo import SQLiteTaskRepository
 from src.infrastructure.repositories.sqlite_agent_repo import SQLiteAgentRepository
+from src.infrastructure.tools.registry import ToolRegistry
 
 
 # 创建 Repository 实例(单例模式)
@@ -73,3 +74,37 @@ def get_event_service(
 def get_llm_settings() -> LLMSettings:
     """获取 LLM 配置单例"""
     return LLMSettings()
+
+
+# === Tool Registry 依赖注入 ===
+
+
+def create_tool_registry() -> ToolRegistry:
+    """创建并配置工具注册表
+
+    组装 ExecutionPipeline + 中间件 + 自动注册内置工具。
+    """
+    from src.infrastructure.tools.pipeline import ExecutionPipeline
+    from src.infrastructure.tools.middleware.security import SecurityMiddleware
+    from src.infrastructure.tools.middleware.rate_limit import RateLimitMiddleware
+    from src.infrastructure.tools.middleware.timeout import TimeoutMiddleware
+    from src.infrastructure.tools.middleware.sandbox import SandboxMiddleware
+
+    # 导入内置工具模块（触发 @tool 装饰器注册）
+    import src.infrastructure.tools.builtin.web_search  # noqa: F401
+    import src.infrastructure.tools.builtin.file_ops  # noqa: F401
+    import src.infrastructure.tools.builtin.clarify  # noqa: F401
+    import src.infrastructure.tools.builtin.plan  # noqa: F401
+
+    # 构建中间件管道
+    pipeline = ExecutionPipeline()
+    pipeline.add_middleware(SecurityMiddleware(allowed_tools=None))
+    pipeline.add_middleware(RateLimitMiddleware(global_max_per_minute=300))
+    pipeline.add_middleware(TimeoutMiddleware())
+    pipeline.add_middleware(SandboxMiddleware())
+
+    # 创建 Registry 并自动注册
+    registry = ToolRegistry(pipeline=pipeline)
+    registry.auto_register_collected()
+
+    return registry

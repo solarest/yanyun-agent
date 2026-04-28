@@ -1,6 +1,6 @@
 ---
-trigger: model_decision
-description: backend/**/*.py
+trigger: glob
+glob: backend/**/*.py
 ---
 # Python 后端代码规范
 

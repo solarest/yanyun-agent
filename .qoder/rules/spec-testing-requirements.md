@@ -1,5 +1,6 @@
 ---
-trigger: always_on
+trigger: model_decision
+description: 
 ---
 # Spec 生成测试要求规范
 

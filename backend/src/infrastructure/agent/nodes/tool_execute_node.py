@@ -7,6 +7,7 @@ LangGraph Node: tool_execute_node
 from langgraph.types import RunnableConfig
 
 from src.domain.entities.agent_state import AgentState
+from src.domain.entities.tool import ToolContext
 
 
 async def tool_execute_node(state: AgentState, config: RunnableConfig) -> dict:
@@ -21,7 +22,7 @@ async def tool_execute_node(state: AgentState, config: RunnableConfig) -> dict:
 
     Args:
         state: 当前 Agent 状态
-        config: LangGraph 配置 (包含 tool_registry, security_chain, event_service)
+        config: LangGraph 配置 (包含 tool_registry, event_service)
 
     Returns:
         状态更新字典
@@ -29,6 +30,12 @@ async def tool_execute_node(state: AgentState, config: RunnableConfig) -> dict:
     tool_registry = config["configurable"]["tool_registry"]
     event_svc = config["configurable"]["event_service"]
     task_id = state["task_id"]
+
+    # 构建工具执行上下文
+    context = ToolContext(
+        task_id=task_id,
+        workspace=state.get("workspace", ""),
+    )
 
     pending_tools = state.get("pending_tool_calls", [])
     results = {}
@@ -49,36 +56,23 @@ async def tool_execute_node(state: AgentState, config: RunnableConfig) -> dict:
             },
         )
 
-        # 安全检查
-        # TODO: 实现安全检查链调用
-        # check_result = await security_chain.execute(tc)
-        # if check_result.status == "block":
-        #     results[tool_call_id] = f"Blocked: {check_result.reason}"
-        #     continue
-
-        # 审批检查 (如果需要)
-        # if check_result.status == "require_approval":
-        #     approved = await wait_for_approval(tool_call_id, event_svc)
-        #     if not approved:
-        #         results[tool_call_id] = "User denied approval"
-        #         continue
-
         # 执行工具
         try:
-            result = await tool_registry.execute(tool_name, tool_input)
-            results[tool_call_id] = result.get("output", "")
+            result = await tool_registry.execute(tool_name, tool_input, context)
+            results[tool_call_id] = result.output
+            status = "success" if result.success else "error"
             await event_svc.emit(
                 task_id,
                 "tool-result",
                 {
                     "toolCallId": tool_call_id,
                     "toolName": tool_name,
-                    "status": "success",
-                    "output": result.get("output", ""),
+                    "status": status,
+                    "output": result.output,
                 },
             )
         except Exception as e:
-            results[tool_call_id] = f"Error: {str(e)}"
+            results[tool_call_id] = f"Error: {e}"
             await event_svc.emit(
                 task_id,
                 "tool-result",

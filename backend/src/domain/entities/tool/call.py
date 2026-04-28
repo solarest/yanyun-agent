@@ -5,7 +5,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, Optional
 
-from src.domain.entities.base import BaseEntity
+from src.domain.entities.base import Entity
 
 
 class ToolCallState(str, Enum):
@@ -20,7 +20,7 @@ class ToolCallState(str, Enum):
 
 
 @dataclass
-class ToolCall(BaseEntity):
+class ToolCall(Entity):
     """工具调用实体"""
 
     task_id: str = ""  # 关联任务 ID
