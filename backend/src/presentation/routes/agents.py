@@ -25,8 +25,10 @@ router = APIRouter(prefix="/api/agents", tags=["agents"])
 
 # === Tool 相关 DTO ===
 
+
 class ToolDefResponse(BaseModel):
     """工具定义响应 DTO"""
+
     name: str = Field(..., description="工具名称")
     description: str = Field(..., description="工具描述")
     category: str = Field(default="general", description="工具分类")
@@ -55,6 +57,7 @@ class ToolDefResponse(BaseModel):
 
 class ToolListResponse(BaseModel):
     """工具列表响应 DTO"""
+
     tools: list[ToolDefResponse] = Field(..., description="工具列表")
     total: int = Field(..., description="工具总数")
 
@@ -336,11 +339,7 @@ async def update_agent_config(
     agent_repo: IAgentRepository = Depends(get_agent_repository),
 ) -> AgentConfigResponseDTO:
     """部分更新 Agent 配置文件，自动递增版本号"""
-    config_fields = {
-        k: v
-        for k, v in dto.model_dump().items()
-        if v is not None
-    }
+    config_fields = {k: v for k, v in dto.model_dump().items() if v is not None}
 
     agent = await agent_repo.update_config(agent_id, config_fields)
     if agent is None:

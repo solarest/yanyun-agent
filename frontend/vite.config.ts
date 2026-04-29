@@ -18,6 +18,12 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:8000',
         changeOrigin: true,
+        // SSE 需要禁用缓冲
+        proxyTimeout: 0,
+        headers: {
+          'Connection': 'keep-alive',
+          'X-Accel-Buffering': 'no',
+        },
       },
     },
   },

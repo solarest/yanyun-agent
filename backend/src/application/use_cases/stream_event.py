@@ -67,6 +67,18 @@ class StreamEventService:
             if not self._subscribers[task_id]:
                 del self._subscribers[task_id]
 
+    async def get_all_events(self, task_id: str) -> List[str]:
+        """获取任务的所有事件 (SSE 首次连接回放)
+
+        Args:
+            task_id: 任务 ID
+
+        Returns:
+            事件 JSON 字符串列表
+        """
+        events = await self.event_repo.get_by_task_id(task_id)
+        return [e.model_dump_json() for e in events]
+
     async def get_events_after(self, task_id: str, last_event_id: str) -> List[str]:
         """获取指定序列号之后的事件 (断线重连补发)
 

@@ -46,6 +46,7 @@ async def stuck_detect_node(state: AgentState, config: RunnableConfig) -> dict:
         return {
             "stuck_detected": True,
             "stuck_detection_count": state.get("stuck_detection_count", 0) + 1,
+            "stuck_type": "monologue",
         }
 
-    return {"stuck_detected": False}
+    return {"stuck_detected": False, "stuck_type": None}

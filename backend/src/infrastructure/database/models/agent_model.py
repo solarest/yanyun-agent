@@ -23,6 +23,7 @@ class TaskModel(Base):
     error = Column(Text, nullable=True)
     cost = Column(JSON, default={})
     agent_id = Column(String, nullable=True)
+    session_id = Column(String, nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
@@ -79,3 +80,42 @@ class AgentModel(Base):
 
     def __repr__(self) -> str:
         return f"<AgentModel(id={self.id}, name={self.name}, version={self.config_version})>"
+
+
+class SessionModel(Base):
+    """会话数据库模型"""
+
+    __tablename__ = "sessions"
+
+    id = Column(String(36), primary_key=True)
+    agent_id = Column(String(36), nullable=False, index=True)
+    title = Column(String(200), nullable=False, default="")
+    status = Column(String(20), nullable=False, default="active")
+    message_count = Column(Integer, nullable=False, default=0)
+    last_message_preview = Column(String(200), nullable=False, default="")
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<SessionModel(id={self.id}, agent_id={self.agent_id})>"
+
+
+class SessionMessageModel(Base):
+    """会话消息数据库模型"""
+
+    __tablename__ = "session_messages"
+
+    id = Column(String(36), primary_key=True)
+    session_id = Column(String(36), nullable=False, index=True)
+    task_id = Column(String(36), nullable=True)
+    role = Column(String(20), nullable=False)
+    content = Column(Text, nullable=False, default="")
+    tool_calls = Column(JSON, default=[])
+    tool_results = Column(JSON, default=[])
+    status = Column(String(20), nullable=False, default="completed")
+    error = Column(Text, nullable=True)
+    cost = Column(JSON, default={})
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return f"<SessionMessageModel(id={self.id}, role={self.role})>"

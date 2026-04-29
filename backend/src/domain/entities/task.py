@@ -106,3 +106,4 @@ class Task(Entity):
     error: Optional[str] = None  # 错误信息
     cost: CostTracker = field(default_factory=CostTracker)
     agent_id: Optional[str] = None  # 关联的 Agent ID
+    session_id: Optional[str] = None  # 关联的 Session ID

@@ -43,8 +43,6 @@ class IAgentRepository(ABC):
         pass
 
     @abstractmethod
-    async def update_config(
-        self, agent_id: str, config_fields: dict[str, str]
-    ) -> Optional[Agent]:
+    async def update_config(self, agent_id: str, config_fields: dict[str, str]) -> Optional[Agent]:
         """部分更新配置文件，自动递增版本号"""
         pass

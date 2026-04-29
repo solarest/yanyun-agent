@@ -24,6 +24,7 @@ export class AgentEventStream {
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 10;
   private handlers = new Map<string, Set<EventCallback>>();
+  private processedEventIds = new Set<string>();
 
   constructor(
     private baseUrl: string,
@@ -46,6 +47,7 @@ export class AgentEventStream {
       'tool-call', 'tool-security-check', 'tool-approval-request', 'tool-result',
       'context-compacting',
       'cost-update',
+      'session-message-saved',
     ];
 
     for (const type of eventTypes) {
@@ -79,6 +81,11 @@ export class AgentEventStream {
 
   private handleEvent(e: MessageEvent): void {
     const data = JSON.parse(e.data) as SSEEvent;
+    // 去重：跳过已处理的事件（后端回放 + 实时可能重复）
+    if (this.processedEventIds.has(data.id)) {
+      return;
+    }
+    this.processedEventIds.add(data.id);
     // 将 SSE 事件名（连字符）转回内部格式（冒号）
     const eventType = data.event_type.replace(/-/g, ':');
     this.emit(eventType, data.data);

@@ -25,14 +25,21 @@ class AgentState(TypedDict):
     current_turn: int
     max_turns: int
     phase: str
+    should_end: bool
 
     # === 工具调用 ===
     pending_tool_calls: List[Dict[str, Any]]
     tool_results: Dict[str, str]
 
-    # === 检测器状态 ===
+    # === Loop 检测器状态 ===
     loop_detection_count: int
+    loop_detected: bool
+    loop_type: Optional[str]
+
+    # === Stuck 检测器状态 ===
     stuck_detection_count: int
+    stuck_detected: bool
+    stuck_type: Optional[str]
 
     # === 流式输出 ===
     current_llm_text: str
@@ -43,4 +50,3 @@ class AgentState(TypedDict):
     # === 结果 ===
     final_result: Optional[str]
     error: Optional[str]
-    should_end: bool

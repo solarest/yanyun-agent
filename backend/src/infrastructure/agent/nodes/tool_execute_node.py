@@ -4,6 +4,7 @@ LangGraph Node: tool_execute_node
 职责：执行工具调用并返回结果
 """
 
+from langchain_core.messages import ToolMessage
 from langgraph.types import RunnableConfig
 
 from src.domain.entities.agent_state import AgentState
@@ -84,16 +85,15 @@ async def tool_execute_node(state: AgentState, config: RunnableConfig) -> dict:
                 },
             )
 
-    # 构建工具消息 (用于添加到对话历史)
+    # 构建 ToolMessage 列表（LangChain 格式，确保与 AIMessage.tool_calls 对应）
     tool_messages = []
     for tc in pending_tools:
         tool_call_id = tc.get("id", "")
         tool_messages.append(
-            {
-                "role": "tool",
-                "tool_call_id": tool_call_id,
-                "content": results.get(tool_call_id, "No result"),
-            }
+            ToolMessage(
+                content=results.get(tool_call_id, "No result"),
+                tool_call_id=tool_call_id,
+            )
         )
 
     return {

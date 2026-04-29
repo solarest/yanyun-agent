@@ -19,9 +19,7 @@ class SQLiteAgentRepository(IAgentRepository):
 
     async def get_by_id(self, agent_id: str) -> Optional[Agent]:
         """根据 ID 获取 Agent"""
-        result = await self.session.execute(
-            select(AgentModel).where(AgentModel.id == agent_id)
-        )
+        result = await self.session.execute(select(AgentModel).where(AgentModel.id == agent_id))
         model = result.scalar_one_or_none()
         if not model:
             return None
@@ -37,9 +35,7 @@ class SQLiteAgentRepository(IAgentRepository):
 
     async def update(self, agent: Agent) -> Agent:
         """更新 Agent"""
-        result = await self.session.execute(
-            select(AgentModel).where(AgentModel.id == agent.id)
-        )
+        result = await self.session.execute(select(AgentModel).where(AgentModel.id == agent.id))
         model = result.scalar_one_or_none()
         if not model:
             raise ValueError(f"Agent {agent.id} not found")
@@ -63,9 +59,7 @@ class SQLiteAgentRepository(IAgentRepository):
 
     async def remove(self, agent_id: str) -> bool:
         """删除 Agent"""
-        result = await self.session.execute(
-            select(AgentModel).where(AgentModel.id == agent_id)
-        )
+        result = await self.session.execute(select(AgentModel).where(AgentModel.id == agent_id))
         model = result.scalar_one_or_none()
         if not model:
             return False
@@ -77,31 +71,22 @@ class SQLiteAgentRepository(IAgentRepository):
     async def list_all(self, limit: int = 100, offset: int = 0) -> list[Agent]:
         """获取 Agent 列表"""
         result = await self.session.execute(
-            select(AgentModel)
-            .order_by(AgentModel.created_at.desc())
-            .limit(limit)
-            .offset(offset)
+            select(AgentModel).order_by(AgentModel.created_at.desc()).limit(limit).offset(offset)
         )
         models = result.scalars().all()
         return [self._to_entity(m) for m in models]
 
     async def get_by_name(self, name: str) -> Optional[Agent]:
         """根据名称获取 Agent"""
-        result = await self.session.execute(
-            select(AgentModel).where(AgentModel.name == name)
-        )
+        result = await self.session.execute(select(AgentModel).where(AgentModel.name == name))
         model = result.scalar_one_or_none()
         if not model:
             return None
         return self._to_entity(model)
 
-    async def update_config(
-        self, agent_id: str, config_fields: dict[str, str]
-    ) -> Optional[Agent]:
+    async def update_config(self, agent_id: str, config_fields: dict[str, str]) -> Optional[Agent]:
         """部分更新配置文件，自动递增版本号"""
-        result = await self.session.execute(
-            select(AgentModel).where(AgentModel.id == agent_id)
-        )
+        result = await self.session.execute(select(AgentModel).where(AgentModel.id == agent_id))
         model = result.scalar_one_or_none()
         if not model:
             return None

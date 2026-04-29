@@ -130,6 +130,12 @@ export const AgentManagementPage: React.FC = () => {
               </span>
               <div className="flex gap-2">
                 <Link
+                  to={`/agents/${agent.id}/chat`}
+                  className="btn btn-primary px-3 py-1 text-xs"
+                >
+                  Chat
+                </Link>
+                <Link
                   to={`/agents/${agent.id}/edit`}
                   className="btn btn-outline px-3 py-1 text-xs"
                 >

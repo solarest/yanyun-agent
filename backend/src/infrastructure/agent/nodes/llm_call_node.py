@@ -4,7 +4,7 @@ LangGraph Node: llm_call_node
 职责：调用 LLM 并流式输出文本到前端
 """
 
-from langchain_core.messages import AIMessage, SystemMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, SystemMessage
 from langgraph.types import RunnableConfig
 
 from src.domain.entities.agent_state import AgentState
@@ -29,7 +29,7 @@ async def llm_call_node(state: AgentState, config: RunnableConfig) -> dict:
     llm = config["configurable"]["llm"]
     event_svc = config["configurable"]["event_service"]
     task_id = state["task_id"]
-    current_turn = state["current_turn"]
+    current_turn = state.get("current_turn", 0) + 1
 
     # 发射阶段变更事件
     await event_svc.emit(
@@ -47,8 +47,10 @@ async def llm_call_node(state: AgentState, config: RunnableConfig) -> dict:
     system_prompt = state.get("system_prompt", "")
     if system_prompt and (not messages or not isinstance(messages[0], SystemMessage)):
         messages = [SystemMessage(content=system_prompt)] + messages
+
     full_text = ""
-    tool_calls_list = []
+    # 使用 AIMessageChunk 聚合来正确合并流式 tool_call_chunks
+    accumulated: AIMessageChunk | None = None
 
     async for chunk in llm.astream(messages):
         if chunk.content:
@@ -64,9 +66,29 @@ async def llm_call_node(state: AgentState, config: RunnableConfig) -> dict:
                 },
             )
 
-        # 收集工具调用
-        if hasattr(chunk, "tool_calls") and chunk.tool_calls:
-            tool_calls_list.extend(chunk.tool_calls)
+        # 聚合 chunk 以正确合并 tool_call_chunks
+        if accumulated is None:
+            accumulated = chunk
+        else:
+            accumulated = accumulated + chunk
+
+    # 从聚合后的消息中提取完整的 tool_calls
+    tool_calls_list = []
+    if accumulated and hasattr(accumulated, "tool_calls") and accumulated.tool_calls:
+        # 过滤掉无效的工具调用（无名称或无 ID）
+        tool_calls_list = [
+            tc for tc in accumulated.tool_calls
+            if tc.get("name") and tc.get("id")
+        ]
+
+    # 解析 tool_calls 为 pending_tool_calls 格式
+    pending_tool_calls = []
+    for tc in tool_calls_list:
+        pending_tool_calls.append({
+            "id": tc.get("id", ""),
+            "name": tc.get("name", ""),
+            "input": tc.get("args", {}),
+        })
 
     # 发射 LLM 完成事件
     await event_svc.emit(
@@ -79,11 +101,13 @@ async def llm_call_node(state: AgentState, config: RunnableConfig) -> dict:
         },
     )
 
-    # 返回状态更新
+    # 返回状态更新（包含 pending_tool_calls 供 tool_execute_node 使用）
     return {
         "messages": [
-            AIMessage(content=full_text, tool_calls=tool_calls_list if tool_calls_list else None)
+            AIMessage(content=full_text, tool_calls=tool_calls_list or [])
         ],
+        "pending_tool_calls": pending_tool_calls,
         "current_llm_text": full_text,
         "phase": "thinking",
+        "current_turn": current_turn,
     }

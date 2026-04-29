@@ -14,11 +14,17 @@ from src.domain.repositories.base import Repository
 from src.domain.repositories.event_repository import IEventRepository
 from src.domain.repositories.task_repository import ITaskRepository
 from src.domain.repositories.agent_repository import IAgentRepository
+from src.domain.repositories.session_repository import ISessionRepository
+from src.domain.repositories.session_message_repository import ISessionMessageRepository
 from src.infrastructure.llm.config import LLMSettings
 from src.infrastructure.repositories.in_memory_repo import InMemoryRepository
 from src.infrastructure.repositories.sqlite_event_repo import SQLiteEventRepository
 from src.infrastructure.repositories.sqlite_task_repo import SQLiteTaskRepository
 from src.infrastructure.repositories.sqlite_agent_repo import SQLiteAgentRepository
+from src.infrastructure.repositories.sqlite_session_repo import SQLiteSessionRepository
+from src.infrastructure.repositories.sqlite_session_message_repo import (
+    SQLiteSessionMessageRepository,
+)
 from src.infrastructure.tools.registry import ToolRegistry
 
 
@@ -67,6 +73,20 @@ def get_event_service(
 ) -> StreamEventService:
     """获取事件服务实例"""
     return StreamEventService(event_repo)
+
+
+def get_session_repository(
+    db: AsyncSession = Depends(get_async_db),
+) -> ISessionRepository:
+    """获取会话仓储实例"""
+    return SQLiteSessionRepository(db)
+
+
+def get_session_message_repository(
+    db: AsyncSession = Depends(get_async_db),
+) -> ISessionMessageRepository:
+    """获取会话消息仓储实例"""
+    return SQLiteSessionMessageRepository(db)
 
 
 # LLM 依赖注入

@@ -97,9 +97,7 @@ class Agent(Entity):
             if field_name not in CONFIG_FILES or value is None:
                 continue
             if len(value) > MAX_CONFIG_LENGTH:
-                raise ValueError(
-                    f"{field_name} 内容超过 {MAX_CONFIG_LENGTH} 字符限制"
-                )
+                raise ValueError(f"{field_name} 内容超过 {MAX_CONFIG_LENGTH} 字符限制")
             setattr(self, field_name, value)
         self.config_version += 1
         self.updated_at = datetime.now()

@@ -56,6 +56,12 @@ async def get_async_db():
 def init_db():
     """初始化数据库(创建所有表)"""
     # 导入所有模型以注册
-    from src.infrastructure.database.models.agent_model import TaskModel, EventModel, AgentModel  # noqa: F401
+    from src.infrastructure.database.models.agent_model import (  # noqa: F401
+        TaskModel,
+        EventModel,
+        AgentModel,
+        SessionModel,
+        SessionMessageModel,
+    )
 
     Base.metadata.create_all(bind=sync_engine)

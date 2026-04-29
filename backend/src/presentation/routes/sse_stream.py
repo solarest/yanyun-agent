@@ -1,6 +1,7 @@
 """表现层 - SSE 流式路由"""
 
 import asyncio
+import json
 
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
@@ -13,16 +14,15 @@ async def stream_events(task_id: str, request: Request):
     """SSE 事件流端点
 
     客户端连接后：
-    1. 如果有 Last-Event-ID，补发缺失事件
-    2. 订阅实时事件流
-    3. 客户端断开时自动取消订阅
+    1. 先订阅实时队列（防止回放期间丢失新事件）
+    2. 回放已有事件（处理晚于任务启动的连接）
+    3. 从队列读取新事件（跳过已回放的）
+    4. 客户端断开时自动取消订阅
     """
     event_service = request.app.state.event_service
 
     def format_sse(event_json: str) -> str:
         """将 JSON 格式的事件转换为 SSE 协议字符串"""
-        import json
-
         event = json.loads(event_json)
         return (
             f"id: {event['id']}\n"
@@ -31,25 +31,41 @@ async def stream_events(task_id: str, request: Request):
         )
 
     async def event_generator():
-        # === 1. 补发缺失事件 ===
-        last_event_id = request.headers.get("last-event-id")
-        if last_event_id:
-            missed_events = await event_service.get_events_after(task_id, last_event_id)
-            for event_json in missed_events:
+        # === 1. 先订阅队列，确保回放期间的新事件不丢失 ===
+        queue = await event_service.subscribe(task_id)
+        max_replayed_seq = 0
+
+        try:
+            # === 2. 回放已有事件 ===
+            last_event_id = request.headers.get("last-event-id")
+            if last_event_id:
+                # 断线重连：只回放缺失的
+                existing_events = await event_service.get_events_after(
+                    task_id, last_event_id
+                )
+            else:
+                # 首次连接：回放全部已有事件
+                existing_events = await event_service.get_all_events(task_id)
+
+            for event_json in existing_events:
+                event_data = json.loads(event_json)
+                seq = int(event_data.get("id", "0"))
+                if seq > max_replayed_seq:
+                    max_replayed_seq = seq
                 yield format_sse(event_json)
 
-        # === 2. 实时事件流 ===
-        queue = await event_service.subscribe(task_id)
-        try:
+            # === 3. 实时事件流（跳过已回放的） ===
             while True:
-                # 检查客户端是否断开连接
                 if await request.is_disconnected():
                     break
 
                 try:
-                    # 15 秒超时 → 发送心跳
                     event_json = await asyncio.wait_for(queue.get(), timeout=15.0)
-                    yield format_sse(event_json)
+                    event_data = json.loads(event_json)
+                    seq = int(event_data.get("id", "0"))
+                    # 跳过已回放的事件
+                    if seq > max_replayed_seq:
+                        yield format_sse(event_json)
                 except asyncio.TimeoutError:
                     yield ": heartbeat\n\n"
         finally:

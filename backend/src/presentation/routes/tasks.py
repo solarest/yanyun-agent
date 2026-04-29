@@ -1,6 +1,6 @@
 """表现层 - 任务 CRUD 路由"""
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from src.application.dtos.task_dto import CreateTaskDTO, TaskListResponseDTO, TaskResponseDTO
 from src.domain.entities.task import Task, TaskConfig, TaskStatus
@@ -143,3 +143,41 @@ async def get_task(
         started_at=task.started_at.isoformat() if task.started_at else None,
         completed_at=task.completed_at.isoformat() if task.completed_at else None,
     )
+
+
+@router.post(
+    "/{task_id}/cancel",
+    status_code=status.HTTP_200_OK,
+    summary="取消任务",
+    description="取消正在运行的 Agent Loop 任务",
+    responses={
+        404: {"description": "任务不存在"},
+        409: {"description": "任务不在运行状态"},
+    },
+)
+async def cancel_task(
+    task_id: str,
+    request: Request,
+    task_repo: ITaskRepository = Depends(get_task_repository),
+):
+    """取消运行中的任务"""
+    task = await task_repo.get_by_id(task_id)
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": {"code": "TASK_NOT_FOUND", "message": "任务不存在"}},
+        )
+
+    if task.status != TaskStatus.RUNNING:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"error": {"code": "TASK_NOT_RUNNING", "message": "任务不在运行状态"}},
+        )
+
+    # 从 running_tasks 中取出 asyncio.Task 并取消
+    running_tasks: dict = request.app.state.running_tasks
+    asyncio_task = running_tasks.get(task_id)
+    if asyncio_task is not None:
+        asyncio_task.cancel()
+
+    return {"message": "cancel requested", "task_id": task_id}
