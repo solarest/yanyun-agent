@@ -47,16 +47,35 @@ class EventModel(Base):
 
 
 class AgentModel(Base):
-    """Agent 数据库模型"""
+    """Agent 数据库模型 - 单表设计（OpenClaw 七文件模式）"""
 
     __tablename__ = "agents"
 
-    id = Column(String, primary_key=True)
-    name = Column(String, nullable=False, unique=True, index=True)
-    role = Column(Text, nullable=False)
-    system_prompt_template = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    # 主键
+    id = Column(String(36), primary_key=True)
+
+    # 基本信息
+    name = Column(String(100), nullable=False, unique=True, index=True)
+    description = Column(Text, nullable=False, default="")
+
+    # 简化表单创建器字段
+    vibes = Column(Text, nullable=False, default="[]")  # JSON 数组
+
+    # 配置文件内容（OpenClaw 七文件模式）
+    identity_md = Column(Text, nullable=False, default="")  # IDENTITY.md
+    soul_md = Column(Text, nullable=False, default="")  # SOUL.md
+    agents_md = Column(Text, nullable=False, default="")  # AGENTS.md
+    bootstrap_md = Column(Text, nullable=False, default="")  # BOOTSTRAP.md
+    memory_md = Column(Text, nullable=False, default="")  # MEMORY.md
+    tools_md = Column(Text, nullable=False, default="")  # TOOLS.md
+    user_md = Column(Text, nullable=False, default="")  # USER.md
+
+    # 版本管理
+    config_version = Column(Integer, nullable=False, default=1)
+
+    # 时间戳
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=True)
 
     def __repr__(self) -> str:
-        return f"<AgentModel(id={self.id}, name={self.name})>"
+        return f"<AgentModel(id={self.id}, name={self.name}, version={self.config_version})>"

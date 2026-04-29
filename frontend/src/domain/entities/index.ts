@@ -7,3 +7,4 @@ export interface Entity {
 }
 
 export * from './task';
+export * from './agent';

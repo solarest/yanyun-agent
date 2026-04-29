@@ -1,7 +1,7 @@
 """领域层 - Agent Repository 接口"""
 
 from abc import ABC, abstractmethod
-from typing import List, Optional
+from typing import Optional
 
 from src.domain.entities.agent import Agent
 
@@ -33,11 +33,18 @@ class IAgentRepository(ABC):
         pass
 
     @abstractmethod
-    async def list_all(self, limit: int = 100, offset: int = 0) -> List[Agent]:
+    async def list_all(self, limit: int = 100, offset: int = 0) -> list[Agent]:
         """获取 Agent 列表"""
         pass
 
     @abstractmethod
     async def get_by_name(self, name: str) -> Optional[Agent]:
         """根据名称获取 Agent（用于唯一性校验）"""
+        pass
+
+    @abstractmethod
+    async def update_config(
+        self, agent_id: str, config_fields: dict[str, str]
+    ) -> Optional[Agent]:
+        """部分更新配置文件，自动递增版本号"""
         pass

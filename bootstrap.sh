@@ -13,6 +13,11 @@ BACKEND_PID_FILE="$PROJECT_ROOT/.backend.pid"
 FRONTEND_PID_FILE="$PROJECT_ROOT/.frontend.pid"
 LOG_DIR="$PROJECT_ROOT/logs"
 
+# 添加 uv 到 PATH（如果已安装）
+if [ -d "$HOME/.local/bin" ]; then
+    export PATH="$HOME/.local/bin:$PATH"
+fi
+
 # 颜色输出
 RED='\033[0;31m'
 GREEN='\033[0;32m'

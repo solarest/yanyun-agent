@@ -1,6 +1,6 @@
 ---
 trigger: model_decision
-description: 
+description: 生成与运行测试时生效
 ---
 # Spec 生成测试要求规范
 

@@ -1,63 +1,131 @@
-"""领域层 - Agent 实体"""
+"""领域层 - Agent 实体（OpenClaw 七文件模式）"""
 
-import string
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, Optional, Tuple, Union
 
 from src.domain.entities.base import Entity
 
+# OpenClaw 配置文件名称常量
+CONFIG_FILES = [
+    "identity_md",
+    "soul_md",
+    "agents_md",
+    "bootstrap_md",
+    "memory_md",
+    "tools_md",
+    "user_md",
+]
 
-DEFAULT_SYSTEM_PROMPT_TEMPLATE = (
-    "你是 {name}，角色定位：{role}。\n"
-    "当前工作目录：{workspace}\n"
-    "请根据你的角色定位，认真完成用户交给你的任务。"
-)
-
-
-class SafeFormatter(string.Formatter):
-    """安全的字符串格式化器
-
-    遇到缺失的 key 时保留 {key} 原文，而非抛出 KeyError。
-    """
-
-    def get_value(self, key: Union[str, int], args: Tuple, kwargs: Dict[str, Any]) -> str:  # type: ignore[override]
-        if isinstance(key, str):
-            return kwargs.get(key, "{" + key + "}")
-        return super().get_value(key, args, kwargs)
-
-
-_safe_formatter = SafeFormatter()
+MAX_CONFIG_LENGTH = 50000
+MAX_VIBES_COUNT = 3
 
 
 @dataclass
 class Agent(Entity):
-    """Agent 实体
+    """Agent 领域实体（OpenClaw 七文件模式）
 
-    定义一个 AI Agent 的基本属性，包括名称、角色和系统提示词模板。
-    通过 render_system_prompt 将模板变量替换为实际值。
+    定义一个 AI Agent 的完整配置，包括基本信息、简化表单字段和七个配置文件。
+    通过 build_full_system_prompt 组装完整的系统提示词。
 
     Attributes:
         name: Agent 名称（唯一）
-        role: Agent 角色描述
-        system_prompt_template: 系统提示词模板，支持 {name}、{role}、{workspace} 等变量
+        description: Agent 功能描述
+        vibes: JSON 数组字符串，存储选中的 vibe 标签
+        identity_md ~ user_md: OpenClaw 七个配置文件内容
+        config_version: 配置版本号，每次更新配置文件时递增
         created_at: 创建时间
         updated_at: 更新时间
     """
 
     name: str = ""
-    role: str = ""
-    system_prompt_template: str = DEFAULT_SYSTEM_PROMPT_TEMPLATE
-    created_at: datetime = field(default_factory=datetime.now)
-    updated_at: Optional[datetime] = None
+    description: str = ""
 
-    def render_system_prompt(self, context: Dict[str, str]) -> str:
-        """使用上下文变量渲染系统提示词模板
+    # 简化表单字段
+    vibes: str = "[]"  # JSON 数组字符串，ORM 直接映射 Text
+
+    # 配置文件内容（OpenClaw 七文件）
+    identity_md: str = ""  # IDENTITY.md: 身份定义与系统边界约束
+    soul_md: str = ""  # SOUL.md: 响应语气、行为特征及输出格式
+    agents_md: str = ""  # AGENTS.md: 调度规则与标准作业程序
+    bootstrap_md: str = ""  # BOOTSTRAP.md: 初始化序列与核心系统提示词
+    memory_md: str = ""  # MEMORY.md: 长期上下文数据与既定规则（初始为空）
+    tools_md: str = ""  # TOOLS.md: 工具授权注册表及调用参数
+    user_md: str = ""  # USER.md: 用户画像数据与交互限制
+
+    # 版本管理
+    config_version: int = 1
+
+    # 时间戳
+    created_at: datetime = field(default_factory=datetime.now)
+    updated_at: datetime | None = None
+
+    def set_vibes(self, vibes: list[str]) -> None:
+        """设置 vibe 标签（最多 3 个）
 
         Args:
-            context: 变量字典，如 {"name": "...", "role": "...", "workspace": "..."}
+            vibes: vibe 标签列表
+
+        Raises:
+            ValueError: 当 vibes 超过 3 个时
+        """
+        if len(vibes) > MAX_VIBES_COUNT:
+            raise ValueError(f"vibes 最多只能选择 {MAX_VIBES_COUNT} 个")
+        self.vibes = json.dumps(vibes, ensure_ascii=False)
+
+    def get_vibes(self) -> list[str]:
+        """获取 vibe 标签列表
 
         Returns:
-            渲染后的系统提示词字符串。缺失变量保持 {var} 原文。
+            vibe 标签字符串列表
         """
-        return _safe_formatter.format(self.system_prompt_template, **context)
+        if isinstance(self.vibes, list):
+            return self.vibes
+        return json.loads(self.vibes)
+
+    def update_config(self, **config_fields: str) -> None:
+        """更新配置文件，自动递增版本号
+
+        Args:
+            **config_fields: 配置文件字段，键名为 identity_md/soul_md/agents_md/
+                             bootstrap_md/memory_md/tools_md/user_md
+
+        Raises:
+            ValueError: 当单个配置文件内容超过 50000 字符时
+        """
+        for field_name, value in config_fields.items():
+            if field_name not in CONFIG_FILES or value is None:
+                continue
+            if len(value) > MAX_CONFIG_LENGTH:
+                raise ValueError(
+                    f"{field_name} 内容超过 {MAX_CONFIG_LENGTH} 字符限制"
+                )
+            setattr(self, field_name, value)
+        self.config_version += 1
+        self.updated_at = datetime.now()
+
+    def build_full_system_prompt(self) -> str:
+        """组装完整的系统提示词（定义域内容）
+
+        组装顺序：BOOTSTRAP -> IDENTITY -> AGENTS -> SOUL -> MEMORY -> TOOLS -> USER
+        此顺序确保：系统基础设定在前，身份和规则居中，记忆和工具在后，用户适配最末。
+
+        Returns:
+            组装后的完整系统提示词字符串，空配置文件跳过
+        """
+        sections = [
+            ("Bootstrap", self.bootstrap_md),
+            ("Identity", self.identity_md),
+            ("Agents", self.agents_md),
+            ("Soul", self.soul_md),
+            ("Memory", self.memory_md),
+            ("Tools", self.tools_md),
+            ("User", self.user_md),
+        ]
+
+        parts: list[str] = []
+        for title, content in sections:
+            if content:
+                parts.append(f"# {title}\n{content}")
+
+        return "\n\n".join(parts) if parts else ""

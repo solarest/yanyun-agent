@@ -1,6 +1,6 @@
 ---
 trigger: model_decision
-description: 
+description: 编写api层时生效
 ---
 # 安全和错误处理规范
 

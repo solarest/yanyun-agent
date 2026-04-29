@@ -1,10 +1,9 @@
 /**
- * 表现层 - Agent 主页面
+ * 表现层 - Agent 聊天页面（运行域）
  */
 import React, { useState, useEffect } from 'react';
 import { useTaskService } from '@application/services/useTaskService';
 import { useAgentService } from '@application/services/useAgentService';
-import { CreateAgentDialog } from '@presentation/components/CreateAgentDialog';
 import { TaskList } from '@presentation/components/TaskList';
 import { ChatInterface } from '@presentation/components/ChatInterface';
 import type { Task } from '../../domain/entities/task';
@@ -13,17 +12,15 @@ import { llmConfigApi, type LLMProviderInfo } from '../../infrastructure/api/llm
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
 export const AgentPage: React.FC = () => {
-  const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [llmProviders, setLlmProviders] = useState<LLMProviderInfo[]>([]);
+  const [_llmProviders, setLlmProviders] = useState<LLMProviderInfo[]>([]);
 
   const {
     isLoading,
     error,
     tasks,
     currentTask,
-    createTask,
     fetchTasks,
     setCurrentTask,
   } = useTaskService();
@@ -50,7 +47,6 @@ export const AgentPage: React.FC = () => {
         setLlmProviders(providers);
       } catch (err) {
         console.error('加载 LLM 配置失败:', err);
-        // 使用默认配置作为降级方案
         setLlmProviders([
           { name: 'openai', availableModels: ['gpt-4', 'gpt-3.5-turbo'] },
           { name: 'anthropic', availableModels: ['claude-3-opus', 'claude-3-sonnet'] },
@@ -79,30 +75,6 @@ export const AgentPage: React.FC = () => {
     }
   };
 
-  // 创建 Agent
-  const handleCreateAgent = async (data: {
-    agentName: string;
-    userInput: string;
-    systemPrompt: string;
-    provider: string;
-    model: string;
-  }) => {
-    try {
-      await createTask({
-        agentName: data.agentName,
-        userInput: data.userInput,
-        config: {
-          systemPrompt: data.systemPrompt,
-          provider: data.provider,
-          model: data.model,
-        },
-      });
-      setShowCreateDialog(false);
-    } catch (err) {
-      console.error('创建任务失败:', err);
-    }
-  };
-
   return (
     <div className="flex h-screen bg-background">
       {/* 侧边栏 */}
@@ -115,13 +87,6 @@ export const AgentPage: React.FC = () => {
           {/* 侧边栏头部 */}
           <div className="border-b p-4">
             <h1 className="mb-3 text-lg font-semibold">Agent 任务</h1>
-            <button
-              className="btn btn-primary w-full"
-              onClick={() => setShowCreateDialog(true)}
-              disabled={isLoading}
-            >
-              创建 Agent
-            </button>
           </div>
 
           {/* 任务列表 */}
@@ -173,7 +138,7 @@ export const AgentPage: React.FC = () => {
                   欢迎使用 Agent
                 </div>
                 <div className="mt-2 text-sm text-muted-foreground">
-                  点击左侧"创建 Agent"开始对话
+                  选择一个任务查看对话
                 </div>
               </div>
             </div>
@@ -187,15 +152,6 @@ export const AgentPage: React.FC = () => {
           {error}
         </div>
       )}
-
-      {/* 创建 Agent 对话框 */}
-      <CreateAgentDialog
-        isOpen={showCreateDialog}
-        onClose={() => setShowCreateDialog(false)}
-        onSubmit={handleCreateAgent}
-        isLoading={isLoading}
-        llmProviders={llmProviders}
-      />
     </div>
   );
 };
