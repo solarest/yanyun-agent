@@ -8,11 +8,14 @@ import type { AgentPhase } from '@domain/entities/task';
 
 const PHASE_LABELS: Record<string, string> = {
   idle: 'Idle',
-  llm_call: 'Thinking...',
-  tool_execute: 'Using tools...',
-  loop_detect: 'Checking...',
-  context_compact: 'Compacting...',
+  thinking: 'Thinking...',
+  tool_executing: 'Using tools...',
+  loop_correcting: 'Correcting loop...',
+  stuck_recovering: 'Recovering...',
+  context_compacting: 'Compacting...',
   complete: 'Done',
+  failed: 'Failed',
+  cancelled: 'Cancelled',
 };
 
 interface ChatHeaderProps {

@@ -18,6 +18,13 @@ async_engine = create_async_engine(
 
 # Session 工厂 (同步)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=sync_engine)
+AsyncSessionLocal = sessionmaker(
+    bind=async_engine,
+    class_=AsyncSession,
+    autocommit=False,
+    autoflush=False,
+    expire_on_commit=False,
+)
 
 # Base 类用于声明 ORM 模型
 Base = declarative_base()
@@ -46,7 +53,7 @@ async def get_async_db():
         async def example(db: AsyncSession = Depends(get_async_db)):
             ...
     """
-    async with AsyncSession(async_engine) as session:
+    async with AsyncSessionLocal() as session:
         try:
             yield session
         finally:

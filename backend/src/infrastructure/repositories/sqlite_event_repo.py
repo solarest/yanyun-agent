@@ -5,7 +5,7 @@ from typing import List
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.application.dtos.event_dto import SSEEventDTO
+from src.application.dtos.event_dto import SSEEventDTO, normalize_event_type
 from src.domain.repositories.event_repository import IEventRepository
 from src.infrastructure.database.models.agent_model import EventModel
 
@@ -30,10 +30,33 @@ class SQLiteEventRepository(IEventRepository):
         model = EventModel(
             task_id=task_id,
             task_seq=seq,
-            event_type=event.event_type,
+            event_type=normalize_event_type(event.event_type),
             event_data=event.data,
         )
         self.session.add(model)
+        await self.session.commit()
+
+    async def save_batch(self, task_id: str, events: List[SSEEventDTO]) -> None:
+        """批量保存事件。"""
+        if not events:
+            return
+
+        models: list[EventModel] = []
+        for event in events:
+            try:
+                seq = int(event.id)
+            except (TypeError, ValueError):
+                seq = 0
+            models.append(
+                EventModel(
+                    task_id=task_id,
+                    task_seq=seq,
+                    event_type=normalize_event_type(event.event_type),
+                    event_data=event.data,
+                )
+            )
+
+        self.session.add_all(models)
         await self.session.commit()
 
     async def get_after(self, task_id: str, last_event_id: str) -> List[SSEEventDTO]:
@@ -65,7 +88,7 @@ class SQLiteEventRepository(IEventRepository):
         """数据库模型转 DTO（id 取 task_seq，与实时事件保持同一体系）"""
         return SSEEventDTO(
             id=str(model.task_seq),
-            event_type=model.event_type,
+            event_type=normalize_event_type(model.event_type),
             data=model.event_data,
             timestamp=model.created_at.isoformat(),
         )

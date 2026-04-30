@@ -178,12 +178,30 @@ export const useChat = ({
           disconnectStream();
         });
 
+        // —— 任务取消 ——
+        stream.on('task:cancelled', () => {
+          const errorMsg = '任务已取消';
+          setState((prev) => ({
+            ...prev,
+            isStreaming: false,
+            currentPhase: 'cancelled',
+            currentTaskId: null,
+          }));
+          onUpdateLastAssistant?.((msg) => ({
+            ...msg,
+            status: 'error',
+            error: errorMsg,
+          }));
+          disconnectStream();
+        });
+
         // —— 任务失败 ——
         stream.on('task:failed', (data) => {
           const errorMsg = data.error || '任务执行失败';
           setState((prev) => ({
             ...prev,
             isStreaming: false,
+            currentPhase: 'failed',
             error: errorMsg,
             currentTaskId: null,
           }));
@@ -218,17 +236,10 @@ export const useChat = ({
     if (!state.currentTaskId) return;
     try {
       await taskApi.cancelTask(state.currentTaskId);
-      disconnectStream();
-      setState((prev) => ({
-        ...prev,
-        isStreaming: false,
-        currentTaskId: null,
-        currentPhase: 'idle',
-      }));
     } catch (err: unknown) {
       console.error('Cancel failed:', err);
     }
-  }, [state.currentTaskId, disconnectStream]);
+  }, [state.currentTaskId]);
 
   // 组件卸载时断开连接
   useEffect(() => {

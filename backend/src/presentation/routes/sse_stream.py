@@ -6,6 +6,8 @@ import json
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
+from src.application.dtos.event_dto import normalize_event_type, to_sse_event_name
+
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
 
@@ -24,10 +26,12 @@ async def stream_events(task_id: str, request: Request):
     def format_sse(event_json: str) -> str:
         """将 JSON 格式的事件转换为 SSE 协议字符串"""
         event = json.loads(event_json)
+        event["event_type"] = normalize_event_type(str(event.get("event_type", "message")))
+        normalized_json = json.dumps(event, ensure_ascii=False)
         return (
             f"id: {event['id']}\n"
-            f"event: {event['event_type'].replace(':', '-')}\n"
-            f"data: {event_json}\n\n"
+            f"event: {to_sse_event_name(event['event_type'])}\n"
+            f"data: {normalized_json}\n\n"
         )
 
     async def event_generator():

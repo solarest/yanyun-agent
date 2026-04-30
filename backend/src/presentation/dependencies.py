@@ -3,6 +3,7 @@
 组合根(Composition Root): 在这里将所有依赖组装在一起
 """
 
+from contextlib import asynccontextmanager
 from functools import lru_cache
 
 from fastapi import Depends
@@ -37,10 +38,9 @@ def get_repository() -> Repository[Entity]:
 # 异步数据库依赖
 async def get_async_db() -> AsyncSession:
     """获取异步数据库 Session"""
-    from src.infrastructure.database.session import async_engine
-    from sqlalchemy.ext.asyncio import AsyncSession as SAAsyncSession
+    from src.infrastructure.database.session import AsyncSessionLocal
 
-    async with SAAsyncSession(async_engine) as session:
+    async with AsyncSessionLocal() as session:
         try:
             yield session
         finally:
@@ -69,10 +69,21 @@ def get_agent_repository(
 
 
 def get_event_service(
-    event_repo: IEventRepository = Depends(get_event_repository),
 ) -> StreamEventService:
     """获取事件服务实例"""
-    return StreamEventService(event_repo)
+    return StreamEventService(create_event_repo_factory())
+
+
+def create_event_repo_factory():
+    """创建供 StreamEventService 使用的短生命周期事件仓储工厂。"""
+    from src.infrastructure.database.session import AsyncSessionLocal
+
+    @asynccontextmanager
+    async def _factory():
+        async with AsyncSessionLocal() as session:
+            yield SQLiteEventRepository(session)
+
+    return _factory
 
 
 def get_session_repository(

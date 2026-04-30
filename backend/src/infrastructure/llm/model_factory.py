@@ -6,7 +6,7 @@ from langchain_core.language_models import BaseChatModel
 
 from src.domain.entities.llm import LLMConfig, LLMProvider
 from src.infrastructure.llm.providers.registry import ProviderRegistry
-from src.infrastructure.llm.callback import LLMUsageCallbackHandler
+from src.infrastructure.llm.callback import LLMCallLogger, LLMUsageCallbackHandler
 
 
 def _infer_provider(model: str) -> str:
@@ -78,7 +78,9 @@ def _build_model_with_middleware(config: LLMConfig) -> BaseChatModel:
     """构建带中间件的 ChatModel
 
     1. 通过 ProviderRegistry 创建原始模型
-    2. 添加 CallbackHandler 用于 Token 计数和成本追踪
+    2. 挂载 CallbackHandler：
+       - LLMUsageCallbackHandler: Token 计数与成本追踪
+       - LLMCallLogger: 在真正调用 LLM 前/后记录完整入参与出参（含 tools）
     3. 返回
 
     Args:
@@ -91,8 +93,9 @@ def _build_model_with_middleware(config: LLMConfig) -> BaseChatModel:
     adapter = registry.get_adapter(config)
     model = adapter.create_model(config)
 
-    # 添加回调处理器
-    callback = LLMUsageCallbackHandler(model_name=config.model)
-    model.callbacks = [callback]
+    # 挂载回调处理器
+    usage_callback = LLMUsageCallbackHandler(model_name=config.model)
+    call_logger = LLMCallLogger()
+    model.callbacks = [usage_callback, call_logger]
 
     return model

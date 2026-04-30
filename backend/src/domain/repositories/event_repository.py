@@ -15,6 +15,11 @@ class IEventRepository(ABC):
         pass
 
     @abstractmethod
+    async def save_batch(self, task_id: str, events: List[SSEEventDTO]) -> None:
+        """批量保存事件"""
+        pass
+
+    @abstractmethod
     async def get_after(self, task_id: str, last_event_id: str) -> List[SSEEventDTO]:
         """获取指定序列号之后的事件 (断线重连补发)"""
         pass

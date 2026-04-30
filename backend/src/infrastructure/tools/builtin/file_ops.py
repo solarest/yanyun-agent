@@ -33,7 +33,10 @@ async def file_read(
         limit: 读取的最大行数
     """
     workspace = context.workspace if context else ""
-    full_path = _resolve_path(path, workspace)
+    try:
+        full_path = _resolve_path(path, workspace)
+    except ValueError as e:
+        return ToolResult(output=f"Access denied: {e}", success=False, error="path_not_allowed")
 
     if not os.path.isfile(full_path):
         return ToolResult(
@@ -84,7 +87,10 @@ async def file_write(
         content: 要写入的文件内容
     """
     workspace = context.workspace if context else ""
-    full_path = _resolve_path(path, workspace)
+    try:
+        full_path = _resolve_path(path, workspace)
+    except ValueError as e:
+        return ToolResult(output=f"Access denied: {e}", success=False, error="path_not_allowed")
 
     try:
         dir_name = os.path.dirname(full_path)
@@ -125,7 +131,7 @@ async def file_search(
     workspace = context.workspace if context else os.getcwd()
 
     try:
-        search_path = os.path.join(workspace, pattern)
+        search_path = _resolve_search_pattern(pattern, workspace)
         matches = glob_module.glob(search_path, recursive=True)
         matches = matches[:max_results]
 
@@ -155,5 +161,25 @@ async def file_search(
 def _resolve_path(path: str, workspace: str) -> str:
     """解析文件路径"""
     if os.path.isabs(path):
-        return path
-    return os.path.join(workspace, path) if workspace else os.path.abspath(path)
+        resolved = os.path.abspath(path)
+    else:
+        resolved = os.path.abspath(os.path.join(workspace, path)) if workspace else os.path.abspath(path)
+
+    if workspace:
+        workspace_root = os.path.abspath(workspace)
+        if os.path.commonpath([resolved, workspace_root]) != workspace_root:
+            raise ValueError(f"path '{path}' is outside workspace '{workspace}'")
+
+    return resolved
+
+
+def _resolve_search_pattern(pattern: str, workspace: str) -> str:
+    """解析并校验 glob 搜索模式。"""
+    if workspace:
+        if os.path.isabs(pattern):
+            raise ValueError("absolute patterns are not allowed when workspace is set")
+        normalized = os.path.normpath(pattern)
+        if normalized.startswith(".."):
+            raise ValueError(f"pattern '{pattern}' is outside workspace '{workspace}'")
+        return os.path.join(workspace, normalized)
+    return os.path.abspath(pattern)

@@ -47,6 +47,35 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
           </div>
         )}
 
+        {!isUser && message.tool_results.length > 0 && (
+          <div className="mt-2 space-y-2 border-t border-border/50 pt-2">
+            {message.tool_results.map((result, i) => (
+              <div
+                key={`${result.tool_name}-${i}`}
+                className="rounded-lg bg-background/60 px-2 py-2"
+              >
+                <div className="flex items-center justify-between gap-2 text-xs">
+                  <span className="font-medium">{result.tool_name}</span>
+                  <span
+                    className={
+                      result.status === 'error'
+                        ? 'text-destructive'
+                        : 'text-muted-foreground'
+                    }
+                  >
+                    {result.status}
+                  </span>
+                </div>
+                {result.result && (
+                  <div className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">
+                    {result.result}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* 错误信息 */}
         {isError && message.error && (
           <div className="mt-2 border-t border-destructive/30 pt-2 text-xs text-destructive">

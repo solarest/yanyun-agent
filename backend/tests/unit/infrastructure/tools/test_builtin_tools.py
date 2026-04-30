@@ -128,6 +128,18 @@ class TestFileRead:
         assert result.success is True
         assert result.metadata["read_lines"] == 3
 
+    @pytest.mark.asyncio
+    async def test_blocks_workspace_escape(self, tmp_path) -> None:
+        outside = tmp_path / "outside.txt"
+        outside.write_text("secret")
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        ctx = ToolContext(task_id="t", workspace=str(workspace))
+        rt = file_read._registered_tool  # type: ignore[attr-defined]
+        result = await rt.func({"path": "../outside.txt"}, ctx)
+        assert result.success is False
+        assert result.error == "path_not_allowed"
+
 
 class TestFileWrite:
     @pytest.mark.asyncio
@@ -168,6 +180,18 @@ class TestFileSearch:
         )
         assert result.success is True
         assert "hello" in result.output
+
+    @pytest.mark.asyncio
+    async def test_blocks_pattern_escape(self, tmp_path) -> None:
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        rt = file_search._registered_tool  # type: ignore[attr-defined]
+        result = await rt.func(
+            {"pattern": "../*.py"},
+            ToolContext(task_id="t", workspace=str(workspace)),
+        )
+        assert result.success is False
+        assert "outside workspace" in result.output
 
 
 # === clarify 测试 ===

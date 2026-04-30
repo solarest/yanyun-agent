@@ -6,6 +6,16 @@ from typing import Any, Dict
 from pydantic import BaseModel, Field
 
 
+def normalize_event_type(event_type: str) -> str:
+    """规范化事件类型为内部冒号风格。"""
+    return event_type.replace("-", ":")
+
+
+def to_sse_event_name(event_type: str) -> str:
+    """将内部事件名转换为 SSE 协议层事件名。"""
+    return normalize_event_type(event_type).replace(":", "-")
+
+
 class SSEEventDTO(BaseModel):
     """SSE 事件数据传输对象"""
 
@@ -23,9 +33,10 @@ class SSEEventDTO(BaseModel):
         cls, task_id: str, seq: int, event_type: str, payload: Dict[str, Any]
     ) -> "SSEEventDTO":
         """创建事件 DTO"""
+        normalized_type = normalize_event_type(event_type)
         return cls(
             id=str(seq),
-            event_type=event_type,
+            event_type=normalized_type,
             data={**payload, "taskId": task_id},
             timestamp=datetime.now().isoformat(),
         )

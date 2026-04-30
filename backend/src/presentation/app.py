@@ -85,14 +85,10 @@ def create_app() -> FastAPI:
     init_db()
 
     # 全局共享的 StreamEventService（SSE 事件需要单例以共享订阅）
-    from src.infrastructure.database.session import async_engine
-    from sqlalchemy.ext.asyncio import AsyncSession as SAAsyncSession
-    from src.infrastructure.repositories.sqlite_event_repo import SQLiteEventRepository
     from src.application.use_cases.stream_event import StreamEventService
+    from src.presentation.dependencies import create_event_repo_factory
 
-    _event_db = SAAsyncSession(async_engine)
-    _event_repo = SQLiteEventRepository(_event_db)
-    app.state.event_service = StreamEventService(_event_repo)
+    app.state.event_service = StreamEventService(create_event_repo_factory())
 
     # 全局状态
     app.state.running_tasks = {}  # task_id -> asyncio.Task

@@ -236,7 +236,7 @@ async def send_message(
     bg_session_repo = SQLiteSessionRepository(bg_db)
     bg_message_repo = SQLiteSessionMessageRepository(bg_db)
     # 使用全局共享的 event_service（SSE 订阅需要同一实例）
-    bg_event_service = request.app.state.event_service
+    bg_event_emitter = request.app.state.event_service
     bg_tool_registry = create_tool_registry()
 
     use_case = SendMessageUseCase(
@@ -244,7 +244,7 @@ async def send_message(
         session_repo=bg_session_repo,
         message_repo=bg_message_repo,
         task_repo=bg_task_repo,
-        event_service=bg_event_service,
+        event_emitter=bg_event_emitter,
         tool_registry=bg_tool_registry,
     )
 

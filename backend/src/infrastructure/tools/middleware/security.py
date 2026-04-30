@@ -34,9 +34,12 @@ class SecurityMiddleware:
             )
 
         # 文件路径安全检查（file 类工具）
-        if tool.category == "file" and tool.policy.allowed_paths:
+        if tool.category == "file":
+            allowed_paths = list(tool.policy.allowed_paths)
+            if not allowed_paths and context and context.workspace:
+                allowed_paths = [context.workspace]
             path = input.get("path", "") or input.get("file_path", "")
-            if path and not self._is_path_allowed(path, list(tool.policy.allowed_paths)):
+            if path and allowed_paths and not self._is_path_allowed(path, allowed_paths, context):
                 return ToolResult(
                     output=f"Access denied: path '{path}' is outside allowed directories",
                     success=False,
@@ -45,13 +48,32 @@ class SecurityMiddleware:
 
         # 审批检查（需要 HITL 支持）
         if tool.policy.requires_approval:
-            # TODO: 集成 HITL 审批流程
-            pass
+            return ToolResult(
+                output=(
+                    f"Tool '{tool.name}' requires user approval, "
+                    "but approval flow is not implemented yet."
+                ),
+                success=False,
+                error="approval_required",
+            )
 
         return await next_handler(tool, input, context)
 
     @staticmethod
-    def _is_path_allowed(path: str, allowed_paths: list[str]) -> bool:
+    def _is_path_allowed(
+        path: str,
+        allowed_paths: list[str],
+        context: Optional[ToolContext] = None,
+    ) -> bool:
         """检查路径是否在允许的目录下"""
-        abs_path = os.path.abspath(path)
-        return any(abs_path.startswith(os.path.abspath(p)) for p in allowed_paths)
+        if os.path.isabs(path):
+            abs_path = os.path.abspath(path)
+        elif context and context.workspace:
+            abs_path = os.path.abspath(os.path.join(context.workspace, path))
+        else:
+            abs_path = os.path.abspath(path)
+        return any(
+            os.path.commonpath([abs_path, os.path.abspath(allowed_path)])
+            == os.path.abspath(allowed_path)
+            for allowed_path in allowed_paths
+        )

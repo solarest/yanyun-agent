@@ -2,16 +2,18 @@
  * 领域层 - 任务实体定义
  */
 
-export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type TaskStatus = 'idle' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
 
 export type AgentPhase =
   | 'idle'
   | 'thinking'
-  | 'llm_call'
-  | 'tool_execute'
-  | 'loop_detect'
-  | 'context_compact'
-  | 'complete';
+  | 'tool_executing'
+  | 'loop_correcting'
+  | 'stuck_recovering'
+  | 'context_compacting'
+  | 'complete'
+  | 'failed'
+  | 'cancelled';
 
 export interface AgentConfig {
   name: string;

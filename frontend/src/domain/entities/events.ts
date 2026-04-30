@@ -76,6 +76,20 @@ export interface ContextCompactingPayload extends BaseEventPayload {
   afterTokens: number;
 }
 
+/** loop-detected 事件 */
+export interface LoopDetectedPayload extends BaseEventPayload {
+  loopType: string;
+  count: number;
+  action: string;
+}
+
+/** stuck-detected 事件 */
+export interface StuckDetectedPayload extends BaseEventPayload {
+  stuckType: string;
+  count: number;
+  action: string;
+}
+
 /** session-message-saved 事件（最终落库消息） */
 export interface SessionMessageSavedPayload extends BaseEventPayload {
   message: SessionMessage;
@@ -96,6 +110,8 @@ export interface AgentEventMap {
   'tool:call': ToolCallPayload;
   'tool:result': ToolResultPayload;
   'context:compacting': ContextCompactingPayload;
+  'loop:detected': LoopDetectedPayload;
+  'stuck:detected': StuckDetectedPayload;
   'session:message:saved': SessionMessageSavedPayload;
 }
 
@@ -118,5 +134,7 @@ export const SSE_EVENT_TYPES: readonly string[] = [
   'tool-call',
   'tool-result',
   'context-compacting',
+  'loop-detected',
+  'stuck-detected',
   'session-message-saved',
 ] as const;

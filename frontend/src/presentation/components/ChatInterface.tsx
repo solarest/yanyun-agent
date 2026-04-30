@@ -14,11 +14,14 @@ interface ChatInterfaceProps {
 
 const phaseLabels: Record<string, string> = {
   idle: '空闲',
-  llm_call: 'LLM 调用中',
-  tool_execute: '工具执行中',
-  loop_detect: '循环检测中',
-  context_compact: '上下文压缩中',
+  thinking: '思考中',
+  tool_executing: '工具执行中',
+  loop_correcting: '循环纠正中',
+  stuck_recovering: '恢复中',
+  context_compacting: '上下文压缩中',
   complete: '完成',
+  failed: '失败',
+  cancelled: '已取消',
 };
 
 export const ChatInterface: React.FC<ChatInterfaceProps> = ({
@@ -57,6 +60,12 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
           <div className="flex items-center gap-2">
             <div className="h-2 w-2 rounded-full bg-destructive" />
             <span className="text-xs text-destructive-foreground">失败</span>
+          </div>
+        )}
+        {taskStatus === 'cancelled' && (
+          <div className="flex items-center gap-2">
+            <div className="h-2 w-2 rounded-full bg-muted-foreground" />
+            <span className="text-xs text-muted-foreground">已取消</span>
           </div>
         )}
       </div>

@@ -164,6 +164,28 @@ class TestSecurityMiddleware:
         assert result.success is False
         assert result.error == "path_not_allowed"
 
+    @pytest.mark.asyncio
+    async def test_blocks_path_outside_workspace_by_default(self, tmp_path) -> None:
+        t = _make_tool(name="file_read", category="file")
+        mw = SecurityMiddleware()
+        pipeline = ExecutionPipeline(middlewares=[mw])
+        result = await pipeline.execute(
+            t,
+            {"path": "../outside.txt"},
+            ToolContext(task_id="t1", workspace=str(tmp_path / "workspace")),
+        )
+        assert result.success is False
+        assert result.error == "path_not_allowed"
+
+    @pytest.mark.asyncio
+    async def test_blocks_tools_requiring_approval_until_hitl_exists(self) -> None:
+        t = _make_tool(name="file_write", policy=ToolPolicy(requires_approval=True))
+        mw = SecurityMiddleware()
+        pipeline = ExecutionPipeline(middlewares=[mw])
+        result = await pipeline.execute(t, {"msg": "ok"})
+        assert result.success is False
+        assert result.error == "approval_required"
+
 
 class TestSandboxMiddleware:
     @pytest.mark.asyncio

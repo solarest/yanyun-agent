@@ -42,6 +42,7 @@ export class AgentEventStream {
    * 连接到 SSE 事件流
    */
   connect(): void {
+    this.es?.close();
     const url = `${this.baseUrl}/api/tasks/${this.taskId}/stream`;
     this.es = new EventSource(url);
 
@@ -88,11 +89,20 @@ export class AgentEventStream {
     // 去重
     if (this.processedEventIds.has(evt.id)) return;
     this.processedEventIds.add(evt.id);
+    this.reconnectAttempts = 0;
 
-    // 将 SSE 协议层事件名（连字符）转换为内部格式（冒号）
-    const eventType = evt.event_type.replace(/-/g, ':');
+    const rawEventType =
+      (typeof evt.event_type === 'string' && evt.event_type) || e.type;
+    const eventType = this.normalizeEventType(rawEventType);
     this.dispatch(eventType, evt.data);
   };
+
+  private normalizeEventType(eventType: string): string {
+    if (eventType.includes(':')) {
+      return eventType;
+    }
+    return eventType.replace(/-/g, ':');
+  }
 
   private dispatch(eventType: string, payload: unknown): void {
     this.handlers.get(eventType)?.forEach((h) => {
@@ -111,6 +121,8 @@ export class AgentEventStream {
       if (this.reconnectAttempts < this.maxReconnectAttempts) {
         const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
         console.warn(`[EventStream] Reconnecting in ${delay}ms...`);
+        this.es.close();
+        this.es = null;
         setTimeout(() => this.connect(), delay);
       } else {
         console.error('[EventStream] Max reconnect attempts reached');

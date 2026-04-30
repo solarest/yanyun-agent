@@ -91,8 +91,14 @@ export const useAgentService = (baseUrl: string) => {
       setIsConnected(false);
     });
 
+    stream.on('task:cancelled', () => {
+      setCurrentPhase('cancelled');
+      setIsConnected(false);
+    });
+
     // 监听任务失败
     stream.on('task:failed', (data) => {
+      setCurrentPhase('failed');
       setIsConnected(false);
       console.error('Task failed:', data);
     });

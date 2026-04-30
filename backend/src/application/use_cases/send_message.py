@@ -11,7 +11,6 @@ from typing import Any, Dict, Optional
 from langchain_core.messages import AIMessage, HumanMessage
 
 from src.application.use_cases.agent_workflow import AgentWorkflowBuilder
-from src.application.use_cases.stream_event import StreamEventService
 from src.domain.entities.session_message import (
     MessageStatus,
     SessionMessage,
@@ -24,6 +23,7 @@ from src.domain.repositories.session_message_repository import (
 )
 from src.domain.repositories.session_repository import ISessionRepository
 from src.domain.repositories.task_repository import ITaskRepository
+from src.domain.services import IEventEmitter
 from src.domain.services.prompt_builder import PromptBuilder
 from src.infrastructure.llm.model_factory import create_chat_model
 from src.infrastructure.tools.registry import ToolRegistry
@@ -32,10 +32,13 @@ logger = logging.getLogger(__name__)
 
 
 def _tool_defs_to_openai_functions(tool_registry: ToolRegistry) -> list:
-    """将 ToolDef 列表转换为 OpenAI function schema 格式（供 bind_tools 使用）"""
-    tool_defs = tool_registry.get_tool_defs()
+    """将可直接执行的工具转换为 OpenAI function schema 格式（供 bind_tools 使用）"""
     schemas = []
-    for td in tool_defs:
+    for tool in tool_registry.list_tools():
+        if tool.policy.requires_approval:
+            continue
+
+        td = tool.to_tool_def()
         properties = {}
         required = []
         for p in td.parameters:
@@ -66,6 +69,25 @@ def _tool_defs_to_openai_functions(tool_registry: ToolRegistry) -> list:
     return schemas
 
 
+def _build_message_event_payload(message: SessionMessage) -> Dict[str, Any]:
+    """构建 session:message:saved 事件载荷。"""
+    return {
+        "message": {
+            "id": message.id,
+            "session_id": message.session_id,
+            "task_id": message.task_id,
+            "role": message.role.value,
+            "content": message.content,
+            "tool_calls": message.tool_calls,
+            "tool_results": message.tool_results,
+            "status": message.status.value,
+            "error": message.error,
+            "cost": message.cost,
+            "created_at": message.created_at.isoformat(),
+        }
+    }
+
+
 class SendMessageUseCase:
     """发送消息用例 — 编排 Session 操作 + Agent Loop 启动"""
 
@@ -75,14 +97,14 @@ class SendMessageUseCase:
         session_repo: ISessionRepository,
         message_repo: ISessionMessageRepository,
         task_repo: Optional[ITaskRepository] = None,
-        event_service: Optional[StreamEventService] = None,
+        event_emitter: Optional[IEventEmitter] = None,
         tool_registry: Optional[ToolRegistry] = None,
     ):
         self.agent_repo = agent_repo
         self.session_repo = session_repo
         self.message_repo = message_repo
         self.task_repo = task_repo
-        self.event_service = event_service
+        self.event_emitter = event_emitter
         self.tool_registry = tool_registry
 
     async def execute(
@@ -151,7 +173,8 @@ class SendMessageUseCase:
             task = await self.task_repo.add(task)
 
         # 4. 启动后台 runner
-        if self.event_service and self.tool_registry:
+        asyncio_task: asyncio.Task | None = None
+        if self.event_emitter and self.tool_registry:
             asyncio_task = asyncio.create_task(
                 self._run_agent_loop(
                     agent_id=agent_id,
@@ -170,7 +193,7 @@ class SendMessageUseCase:
         return {
             "user_message": user_msg,
             "task_id": task.id,
-            "asyncio_task": asyncio_task if (self.event_service and self.tool_registry) else None,
+            "asyncio_task": asyncio_task if (self.event_emitter and self.tool_registry) else None,
         }
 
     async def _run_agent_loop(
@@ -220,12 +243,15 @@ class SendMessageUseCase:
                 "task_id": task.id,
                 "workspace": workspace,
                 "user_message": content,
+                "task_start_message_count": len(messages),
                 "current_turn": 0,
                 "max_turns": max_turns,
                 "phase": "idle",
                 "should_end": False,
+                "is_complete": False,
                 "pending_tool_calls": [],
                 "tool_results": {},
+                "awaiting_user_input": False,
                 "loop_detection_count": 0,
                 "loop_detected": False,
                 "loop_type": None,
@@ -233,28 +259,34 @@ class SendMessageUseCase:
                 "stuck_detected": False,
                 "stuck_type": None,
                 "current_llm_text": "",
+                "empty_retry_count": 0,
+                "planning_retry_count": 0,
                 "system_prompt": system_prompt,
                 "final_result": None,
                 "error": None,
             }
 
             # 步骤 E: 编译并执行 LangGraph
-            graph = AgentWorkflowBuilder().build()
+            graph = AgentWorkflowBuilder.build()
             graph_config = {
                 "configurable": {
                     "llm": llm,
-                    "event_service": self.event_service,
+                    "event_emitter": self.event_emitter,
+                    "event_service": self.event_emitter,
                     "tool_registry": self.tool_registry,
+                    "agent_id": agent_id,
                 }
             }
 
-            await self.event_service.emit(task.id, "task-started", {"taskId": task.id})
+            await self.event_emitter.emit(task.id, "task:started", {})
 
             result = await graph.ainvoke(initial_state, graph_config)
 
             # 步骤 F: 执行完成后处理
             final_result = result.get("final_result")
             error = result.get("error")
+            final_turn = result.get("current_turn", task.current_turn)
+            previous_phase = result.get("phase", "thinking")
 
             # 收集工具调用信息（带 args，保证历史完整性）
             all_tool_calls = []
@@ -279,6 +311,17 @@ class SendMessageUseCase:
                                 "args": getattr(t, "args", {}) or {},
                                 "id": getattr(t, "id", ""),
                             })
+
+            for tool_result in (result.get("tool_results") or {}).values():
+                all_tool_results.append(
+                    {
+                        "tool_name": tool_result.get("tool_name", ""),
+                        "status": tool_result.get("status", "success"),
+                        "result": tool_result.get("output")
+                        or tool_result.get("error")
+                        or "",
+                    }
+                )
 
             # 保存 assistant 消息
             assistant_content = final_result or error or ""
@@ -309,6 +352,7 @@ class SendMessageUseCase:
             # 更新 Task 状态
             if self.task_repo:
                 task.status = TaskStatus.FAILED if error else TaskStatus.COMPLETED
+                task.current_turn = final_turn
                 task.completed_at = datetime.now()
                 task.result = final_result
                 task.error = error
@@ -320,36 +364,28 @@ class SendMessageUseCase:
                 session.update_metadata(assistant_content)
                 await self.session_repo.update(session)
 
-            # 发射 session-message-saved 事件（必须在 task-completed 之前，
-            # 因为前端收到 task-completed 后会断开 SSE 连接）
-            await self.event_service.emit(
+            await self.event_emitter.emit_phase_changed(
                 task.id,
-                "session-message-saved",
-                {
-                    "message": {
-                        "id": assistant_msg.id,
-                        "session_id": assistant_msg.session_id,
-                        "task_id": assistant_msg.task_id,
-                        "role": assistant_msg.role.value,
-                        "content": assistant_msg.content,
-                        "tool_calls": assistant_msg.tool_calls,
-                        "tool_results": assistant_msg.tool_results,
-                        "status": assistant_msg.status.value,
-                        "error": assistant_msg.error,
-                        "cost": assistant_msg.cost,
-                        "created_at": assistant_msg.created_at.isoformat(),
-                    }
-                },
+                "failed" if error else "complete",
+                previous_phase,
+                final_turn,
+            )
+            # 发射 session:message:saved 事件（必须在 task:completed / task:failed 之前，
+            # 因为前端收到终态事件后会断开 SSE 连接）
+            await self.event_emitter.emit(
+                task.id,
+                "session:message:saved",
+                _build_message_event_payload(assistant_msg),
             )
 
             # 发射完成事件（最后发送，前端收到后断开连接）
             if error:
-                await self.event_service.emit(
-                    task.id, "task-failed", {"taskId": task.id, "error": error}
+                await self.event_emitter.emit(
+                    task.id, "task:failed", {"error": error}
                 )
             else:
-                await self.event_service.emit(
-                    task.id, "task-completed", {"taskId": task.id, "result": final_result}
+                await self.event_emitter.emit(
+                    task.id, "task:completed", {"result": final_result}
                 )
 
         except asyncio.CancelledError:
@@ -359,9 +395,15 @@ class SendMessageUseCase:
                 task.completed_at = datetime.now()
                 task.error = "cancelled"
                 await self.task_repo.update(task)
-            if self.event_service:
-                await self.event_service.emit(
-                    task.id, "task-failed", {"taskId": task.id, "error": "cancelled"}
+            if self.event_emitter:
+                await self.event_emitter.emit_phase_changed(
+                    task.id,
+                    "cancelled",
+                    "thinking",
+                    task.current_turn,
+                )
+                await self.event_emitter.emit(
+                    task.id, "task:cancelled", {}
                 )
         except Exception as e:
             logger.exception("Agent loop failed for task %s: %s", task.id, e)
@@ -370,7 +412,13 @@ class SendMessageUseCase:
                 task.completed_at = datetime.now()
                 task.error = str(e)
                 await self.task_repo.update(task)
-            if self.event_service:
-                await self.event_service.emit(
-                    task.id, "task-failed", {"taskId": task.id, "error": str(e)}
+            if self.event_emitter:
+                await self.event_emitter.emit_phase_changed(
+                    task.id,
+                    "failed",
+                    "thinking",
+                    task.current_turn,
+                )
+                await self.event_emitter.emit(
+                    task.id, "task:failed", {"error": str(e)}
                 )

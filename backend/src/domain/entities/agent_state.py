@@ -20,16 +20,19 @@ class AgentState(TypedDict):
     task_id: str
     workspace: str
     user_message: str
+    task_start_message_count: int
 
     # === 控制流 ===
     current_turn: int
     max_turns: int
     phase: str
     should_end: bool
+    is_complete: bool
 
     # === 工具调用 ===
     pending_tool_calls: List[Dict[str, Any]]
-    tool_results: Dict[str, str]
+    tool_results: Dict[str, Dict[str, Any]]
+    awaiting_user_input: bool
 
     # === Loop 检测器状态 ===
     loop_detection_count: int
@@ -43,6 +46,8 @@ class AgentState(TypedDict):
 
     # === 流式输出 ===
     current_llm_text: str
+    empty_retry_count: int
+    planning_retry_count: int
 
     # === 系统提示词 ===
     system_prompt: str
