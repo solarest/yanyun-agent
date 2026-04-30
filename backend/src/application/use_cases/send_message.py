@@ -193,6 +193,10 @@ class SendMessageUseCase:
             system_prompt = PromptBuilder.build_system_prompt(agent)
 
             # 步骤 B: 加载会话历史 → LangChain 消息格式
+            # 注意：历史 AIMessage 不传 tool_calls，因为对应的 ToolMessage
+            # 没有一并回放，传入会触发 LLM provider 报错（tool_call 无对应结果），
+            # 同时也避免旧数据中 tool_calls 缺少 keyword-only 参数 `args` 时
+            # AIMessage 构造抛出 `tool_call() missing 1 required keyword-only argument: 'args'`。
             history_messages = await self.message_repo.list_by_session(session_id, limit=20)
             messages = []
             for msg in history_messages:
@@ -200,12 +204,7 @@ class SendMessageUseCase:
                 if msg.role == SessionMessageRole.USER:
                     messages.append(HumanMessage(content=msg.content))
                 elif msg.role == SessionMessageRole.ASSISTANT:
-                    messages.append(
-                        AIMessage(
-                            content=msg.content,
-                            tool_calls=msg.tool_calls or [],
-                        )
-                    )
+                    messages.append(AIMessage(content=msg.content or ""))
                 elif msg.role == SessionMessageRole.TOOL_SUMMARY:
                     messages.append(HumanMessage(content=f"[Tool Results] {msg.content}"))
 
@@ -257,7 +256,7 @@ class SendMessageUseCase:
             final_result = result.get("final_result")
             error = result.get("error")
 
-            # 收集工具调用信息
+            # 收集工具调用信息（带 args，保证历史完整性）
             all_tool_calls = []
             all_tool_results = []
             for msg in result.get("messages", []):
@@ -267,14 +266,19 @@ class SendMessageUseCase:
                 elif hasattr(msg, "tool_calls"):
                     tc = msg.tool_calls
                 if tc:
-                    all_tool_calls.extend(
-                        [
-                            {"name": t.get("name", ""), "id": t.get("id", "")}
-                            if isinstance(t, dict)
-                            else {"name": getattr(t, "name", ""), "id": getattr(t, "id", "")}
-                            for t in tc
-                        ]
-                    )
+                    for t in tc:
+                        if isinstance(t, dict):
+                            all_tool_calls.append({
+                                "name": t.get("name", ""),
+                                "args": t.get("args", {}),
+                                "id": t.get("id", ""),
+                            })
+                        else:
+                            all_tool_calls.append({
+                                "name": getattr(t, "name", ""),
+                                "args": getattr(t, "args", {}) or {},
+                                "id": getattr(t, "id", ""),
+                            })
 
             # 保存 assistant 消息
             assistant_content = final_result or error or ""

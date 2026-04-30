@@ -11,10 +11,6 @@ export interface AgentEvent {
   timestamp: string;
 }
 
-export interface LLMChunk {
-  content: string;
-}
-
 export interface ToolCallData {
   tool_name: string;
   tool_input: Record<string, unknown>;
@@ -51,10 +47,9 @@ export const useAgentService = (baseUrl: string) => {
       setIsConnected(true);
     });
 
-    // 监听 LLM 流式输出
+    // 监听 LLM 流式输出（后端字段为 `text`）
     stream.on('llm:chunk', (data) => {
-      const chunk = data as unknown as LLMChunk;
-      setLlmOutput(prev => prev + chunk.content);
+      setLlmOutput((prev) => prev + (data.text || ''));
     });
 
     // 监听 LLM 完成
@@ -62,25 +57,30 @@ export const useAgentService = (baseUrl: string) => {
       // LLM 调用完成
     });
 
-    // 监听阶段变化
+    // 监听阶段变化（后端字段为 `phase`）
     stream.on('phase:changed', (data) => {
-      setCurrentPhase(data.new_phase as string);
+      setCurrentPhase(String(data.phase));
     });
 
-    // 监听工具调用
+    // 监听工具调用（后端字段为 toolName/input）
     stream.on('tool:call', (data) => {
-      const toolCall = data as unknown as ToolCallData;
-      setToolCalls(prev => [...prev, toolCall]);
+      setToolCalls((prev) => [
+        ...prev,
+        { tool_name: data.toolName, tool_input: data.input },
+      ]);
     });
 
-    // 监听工具结果
+    // 监听工具结果（合并到最后一条同名 toolCall）
     stream.on('tool:result', (data) => {
-      const toolResult = data as unknown as ToolCallData;
-      setToolCalls(prev => {
+      setToolCalls((prev) => {
         const updated = [...prev];
         const lastIndex = updated.length - 1;
-        if (lastIndex >= 0 && updated[lastIndex].tool_name === toolResult.tool_name) {
-          updated[lastIndex] = { ...updated[lastIndex], ...toolResult };
+        if (lastIndex >= 0 && updated[lastIndex].tool_name === data.toolName) {
+          updated[lastIndex] = {
+            ...updated[lastIndex],
+            status: data.status,
+            result: data.output ?? data.error ?? '',
+          };
         }
         return updated;
       });

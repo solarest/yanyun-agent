@@ -54,7 +54,7 @@ async def get_async_db():
 
 
 def init_db():
-    """初始化数据库(创建所有表)"""
+    """初始化数据库(创建所有表 + 轻量列迁移)"""
     # 导入所有模型以注册
     from src.infrastructure.database.models.agent_model import (  # noqa: F401
         TaskModel,
@@ -65,3 +65,25 @@ def init_db():
     )
 
     Base.metadata.create_all(bind=sync_engine)
+
+    # 轻量列迁移：兼容旧库（避免重建数据库）
+    _ensure_column(
+        table="sse_events",
+        column="task_seq",
+        column_def="INTEGER NOT NULL DEFAULT 0",
+    )
+
+
+def _ensure_column(table: str, column: str, column_def: str) -> None:
+    """若表已存在但缺少指定列，则 ALTER TABLE 追加（SQLite 兼容）。"""
+    from sqlalchemy import text
+
+    with sync_engine.connect() as conn:
+        rows = conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
+        existing_cols = {row[1] for row in rows}
+        if not existing_cols:
+            # 表不存在（理论上 create_all 已建好；这里防御性退出）
+            return
+        if column not in existing_cols:
+            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {column_def}"))
+            conn.commit()

@@ -4,7 +4,14 @@
 
 export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 
-export type AgentPhase = 'idle' | 'llm_call' | 'tool_execute' | 'loop_detect' | 'context_compact' | 'complete';
+export type AgentPhase =
+  | 'idle'
+  | 'thinking'
+  | 'llm_call'
+  | 'tool_execute'
+  | 'loop_detect'
+  | 'context_compact'
+  | 'complete';
 
 export interface AgentConfig {
   name: string;

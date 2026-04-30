@@ -7,6 +7,9 @@
 import asyncio
 import functools
 import inspect
+import json
+import logging
+import time
 from typing import Any, Callable, Optional, get_type_hints
 
 from src.domain.entities.tool import (
@@ -16,6 +19,9 @@ from src.domain.entities.tool import (
     ToolPolicy,
     ToolResult,
 )
+
+# 独立的工具调用日志记录器（每个工具在其具体实现点自动产出日志）
+tool_logger = logging.getLogger("tool.call")
 
 
 # 全局工具收集器（模块加载时收集，后由 Registry 统一注册）
@@ -197,35 +203,87 @@ def _wrap_tool_function(func: Callable) -> Callable:
     """包装工具函数为统一的异步调用接口
 
     统一签名：async def(input: dict, context: ToolContext | None) -> ToolResult
+
+    同时在此处产出独立的工具调用日志（tool.call），记录：
+    - 工具名、task_id、完整输入
+    - 执行过程（start / end / exception）与耗时
+    - 完整输出（含 success / error / metadata）
     """
     sig = inspect.signature(func)
     is_async = inspect.iscoroutinefunction(func)
+    tool_name = getattr(func, "__name__", "<anonymous>")
 
     accepts_context = "context" in sig.parameters or "ctx" in sig.parameters
 
     async def wrapped(input: dict[str, Any], context: Optional[ToolContext] = None) -> ToolResult:
+        task_id = getattr(context, "task_id", None) if context else None
+
+        # === 工具日志：开始 ===
+        tool_logger.info(
+            "[TOOL-CALL] task_id=%s tool=%s phase=start input=%s",
+            task_id,
+            tool_name,
+            json.dumps(input, ensure_ascii=False, default=str),
+        )
+
         kwargs = dict(input)
         if accepts_context and context:
             ctx_name = "context" if "context" in sig.parameters else "ctx"
             kwargs[ctx_name] = context
 
-        if is_async:
-            result = await func(**kwargs)
-        else:
-            result = await asyncio.to_thread(func, **kwargs)
+        start_time = time.time()
+        try:
+            if is_async:
+                result = await func(**kwargs)
+            else:
+                result = await asyncio.to_thread(func, **kwargs)
+        except Exception as e:
+            duration_ms = int((time.time() - start_time) * 1000)
+            # === 工具日志：异常 ===
+            tool_logger.exception(
+                "[TOOL-CALL] task_id=%s tool=%s phase=exception duration_ms=%s error=%s",
+                task_id,
+                tool_name,
+                duration_ms,
+                str(e),
+            )
+            raise
+
+        duration_ms = int((time.time() - start_time) * 1000)
 
         # 规范化返回值
         if isinstance(result, ToolResult):
-            return result
+            normalized = result
         elif isinstance(result, str):
-            return ToolResult(output=result)
+            normalized = ToolResult(output=result)
         elif isinstance(result, dict):
-            return ToolResult(
+            normalized = ToolResult(
                 output=result.get("output", str(result)),
                 success=result.get("success", True),
                 metadata=result.get("metadata", {}),
             )
         else:
-            return ToolResult(output=str(result))
+            normalized = ToolResult(output=str(result))
+
+        # === 工具日志：完成 ===
+        tool_logger.info(
+            "[TOOL-CALL] task_id=%s tool=%s phase=end status=%s duration_ms=%s output=%s",
+            task_id,
+            tool_name,
+            "success" if normalized.success else "error",
+            duration_ms,
+            json.dumps(
+                {
+                    "output": normalized.output,
+                    "success": normalized.success,
+                    "error": normalized.error,
+                    "metadata": normalized.metadata,
+                },
+                ensure_ascii=False,
+                default=str,
+            ),
+        )
+
+        return normalized
 
     return wrapped

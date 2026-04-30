@@ -1,5 +1,9 @@
 """表现层 - FastAPI 应用工厂"""
 
+import logging
+import os
+from pathlib import Path
+
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,8 +19,47 @@ from src.presentation.routes.sessions import router as sessions_router
 load_dotenv()
 
 
+def _setup_logging() -> None:
+    """初始化全局日志配置
+
+    - 根 logger 设置为 INFO，输出到 stdout（被 uvicorn/bootstrap 重定向到 backend.log）
+    - `llm.call` logger 额外写入独立文件 logs/llm-call.log
+    - `tool.call` logger 额外写入独立文件 logs/tool-call.log
+    """
+    root_logger = logging.getLogger()
+    if not any(isinstance(h, logging.StreamHandler) for h in root_logger.handlers):
+        root_logger.setLevel(logging.INFO)
+        stream_handler = logging.StreamHandler()
+        stream_handler.setFormatter(
+            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+        )
+        root_logger.addHandler(stream_handler)
+
+    log_dir = Path(os.getenv("LLM_LOG_DIR", Path(__file__).resolve().parents[3] / "logs"))
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    _attach_file_handler(logging.getLogger("llm.call"), log_dir / "llm-call.log", tag="_llm_call_tag")
+    _attach_file_handler(logging.getLogger("tool.call"), log_dir / "tool-call.log", tag="_tool_call_tag")
+
+
+def _attach_file_handler(target_logger: logging.Logger, file_path: Path, tag: str) -> None:
+    """为指定 logger 挂载独立的 FileHandler（通过 tag 属性防止 reload 时重复注册）"""
+    target_logger.setLevel(logging.INFO)
+    if any(getattr(h, tag, False) for h in target_logger.handlers):
+        return
+    file_handler = logging.FileHandler(file_path, encoding="utf-8")
+    file_handler.setFormatter(
+        logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+    )
+    setattr(file_handler, tag, True)
+    target_logger.addHandler(file_handler)
+
+
 def create_app() -> FastAPI:
     """创建并配置 FastAPI 应用"""
+    # 初始化日志（务必在创建路由/业务对象之前）
+    _setup_logging()
+
     app = FastAPI(
         title="DDD Python Backend", description="DDD 架构的 Python 后端脚手架", version="0.1.0"
     )

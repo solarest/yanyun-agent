@@ -4,10 +4,56 @@ LangGraph Node: llm_call_node
 职责：调用 LLM 并流式输出文本到前端
 """
 
-from langchain_core.messages import AIMessage, AIMessageChunk, SystemMessage
+import json
+import logging
+
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, SystemMessage
 from langgraph.types import RunnableConfig
 
 from src.domain.entities.agent_state import AgentState
+
+# 独立的 LLM 调用日志记录器（记录模型信息、完整输入与完整输出）
+llm_logger = logging.getLogger("llm.call")
+
+
+def _get_model_info(llm) -> dict:
+    """提取 LLM 模型信息（provider/model/temperature 等）"""
+    info: dict = {}
+    for attr in ("model_name", "model", "model_id"):
+        value = getattr(llm, attr, None)
+        if value:
+            info["model"] = value
+            break
+    for attr in ("temperature", "max_tokens", "top_p"):
+        value = getattr(llm, attr, None)
+        if value is not None:
+            info[attr] = value
+    # 尝试提取 provider 类名
+    info["class"] = type(llm).__name__
+    return info
+
+
+def _serialize_messages(messages: list[BaseMessage]) -> list[dict]:
+    """将消息列表序列化为可读的 dict 列表（保留完整内容）"""
+    result = []
+    for msg in messages:
+        item: dict = {
+            "role": getattr(msg, "type", msg.__class__.__name__),
+            "content": msg.content,
+        }
+        # 工具调用请求（AIMessage.tool_calls）
+        tool_calls = getattr(msg, "tool_calls", None)
+        if tool_calls:
+            item["tool_calls"] = tool_calls
+        # 工具返回结果（ToolMessage）
+        tool_call_id = getattr(msg, "tool_call_id", None)
+        if tool_call_id:
+            item["tool_call_id"] = tool_call_id
+        name = getattr(msg, "name", None)
+        if name:
+            item["name"] = name
+        result.append(item)
+    return result
 
 
 async def llm_call_node(state: AgentState, config: RunnableConfig) -> dict:
@@ -47,6 +93,16 @@ async def llm_call_node(state: AgentState, config: RunnableConfig) -> dict:
     system_prompt = state.get("system_prompt", "")
     if system_prompt and (not messages or not isinstance(messages[0], SystemMessage)):
         messages = [SystemMessage(content=system_prompt)] + messages
+
+    # === LLM 调用日志：记录模型信息与完整输入 ===
+    model_info = _get_model_info(llm)
+    llm_logger.info(
+        "[LLM-CALL] task_id=%s turn=%s model_info=%s input=%s",
+        task_id,
+        current_turn,
+        json.dumps(model_info, ensure_ascii=False, default=str),
+        json.dumps(_serialize_messages(messages), ensure_ascii=False, default=str),
+    )
 
     full_text = ""
     # 使用 AIMessageChunk 聚合来正确合并流式 tool_call_chunks
@@ -89,6 +145,26 @@ async def llm_call_node(state: AgentState, config: RunnableConfig) -> dict:
             "name": tc.get("name", ""),
             "input": tc.get("args", {}),
         })
+
+    # === LLM 调用日志：记录完整输出 ===
+    usage_metadata = getattr(accumulated, "usage_metadata", None) if accumulated else None
+    response_metadata = getattr(accumulated, "response_metadata", None) if accumulated else None
+    llm_logger.info(
+        "[LLM-CALL] task_id=%s turn=%s model=%s output=%s",
+        task_id,
+        current_turn,
+        model_info.get("model"),
+        json.dumps(
+            {
+                "content": full_text,
+                "tool_calls": tool_calls_list,
+                "usage": usage_metadata,
+                "response_metadata": response_metadata,
+            },
+            ensure_ascii=False,
+            default=str,
+        ),
+    )
 
     # 发射 LLM 完成事件
     await event_svc.emit(

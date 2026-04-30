@@ -37,14 +37,17 @@ class EventModel(Base):
 
     __tablename__ = "sse_events"
 
+    # 数据库自增主键（用于排序与索引，不对外暴露）
     id = Column(Integer, primary_key=True, autoincrement=True)
     task_id = Column(String, nullable=False, index=True)
+    # 任务级别的事件序号（每个 task 从 1 开始递增），与 SSEEventDTO.id 对应
+    task_seq = Column(Integer, nullable=False, default=0)
     event_type = Column(String, nullable=False)
     event_data = Column(JSON, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     def __repr__(self) -> str:
-        return f"<EventModel(id={self.id}, task_id={self.task_id}, type={self.event_type})>"
+        return f"<EventModel(id={self.id}, task_id={self.task_id}, seq={self.task_seq}, type={self.event_type})>"
 
 
 class AgentModel(Base):
