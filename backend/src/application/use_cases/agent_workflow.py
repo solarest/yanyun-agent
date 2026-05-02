@@ -6,6 +6,7 @@
 3. 定义路由函数（纯判定，不修改 state）
 4. 定义反馈注入节点（通过返回 dict 更新 state）
 """
+import logging
 
 from langchain_core.messages import HumanMessage
 from langgraph.graph import END, StateGraph
@@ -15,17 +16,20 @@ from langgraph.types import RunnableConfig
 from src.domain.entities.agent_state import AgentState
 from src.infrastructure.agent.nodes.complete_check_node import (
     complete_check_node,
-    is_claiming_complete,
+    rule_based_completion_check,
 )
 from src.infrastructure.agent.nodes.context_compact_node import (
     context_compact_node,
 )
 from src.infrastructure.agent.nodes.llm_call_node import llm_call_node
 from src.infrastructure.agent.nodes.loop_detect_node import loop_detect_node
+from src.infrastructure.agent.nodes.observe_node import observe_node
 from src.infrastructure.agent.nodes.plan_execute_node import plan_execute_node
 from src.infrastructure.agent.nodes.plan_prepare_node import plan_prepare_node
 from src.infrastructure.agent.nodes.stuck_detect_node import stuck_detect_node
 from src.infrastructure.agent.nodes.tool_execute_node import tool_execute_node
+
+logger = logging.getLogger(__name__)
 
 
 # === 检测关键词（中英文） ===
@@ -59,20 +63,28 @@ _PLANNING_MAX_RETRY = 2
 
 def _extract_tool_calls(msg) -> list:
     """从消息中提取 tool_calls 列表"""
-    if isinstance(msg, dict):
-        return msg.get("tool_calls") or []
-    elif hasattr(msg, "tool_calls"):
-        return msg.tool_calls or []
-    return []
+    try:
+        if isinstance(msg, dict):
+            return msg.get("tool_calls") or []
+        elif hasattr(msg, "tool_calls"):
+            return msg.tool_calls or []
+        return []
+    except Exception as e:
+        logger.warning("Failed to extract tool_calls from message: %s", e)
+        return []
 
 
 def _extract_text(msg) -> str:
     """从消息中提取文本内容"""
-    if isinstance(msg, dict):
-        return msg.get("content", "") or ""
-    elif hasattr(msg, "content"):
-        return msg.content or ""
-    return ""
+    try:
+        if isinstance(msg, dict):
+            return msg.get("content", "") or ""
+        elif hasattr(msg, "content"):
+            return msg.content or ""
+        return ""
+    except Exception as e:
+        logger.warning("Failed to extract text from message: %s", e)
+        return ""
 
 
 def _exhausted_turn_budget(state: AgentState) -> bool:
@@ -88,13 +100,31 @@ def _is_planning_only(text_lower: str) -> bool:
 def _is_user_question(text: str) -> bool:
     """检测 LLM 是否在向用户提问并等待输入。
 
-    仅检查最后一行是否以问号结尾，避免中间反问句误判终止。
+    检测逻辑：
+    1. 最后一行以问号或感叹号结尾
+    2. 包含典型的询问/邀请用语
     """
     stripped = text.strip()
     if not stripped:
         return False
     last_line = stripped.rsplit("\n", 1)[-1].strip()
-    return last_line.endswith("?") or last_line.endswith("？")
+    
+    # 以问号结尾
+    if last_line.endswith("?") or last_line.endswith("？"):
+        return True
+    
+    # 以感叹号结尾，但包含询问用语
+    if last_line.endswith("!") or last_line.endswith("！"):
+        question_indicators = [
+            "请告诉我", "告诉我", "let me know", "please tell me",
+            "是否", "有没有", "还想了解", "还有其他",
+            "do you want", "would you like", "is there",
+        ]
+        text_lower = text.lower()
+        if any(indicator in text_lower for indicator in question_indicators):
+            return True
+    
+    return False
 
 
 # === 反馈注入节点 ===
@@ -104,18 +134,49 @@ def _is_user_question(text: str) -> bool:
 async def empty_feedback_node(state: AgentState, config: RunnableConfig) -> dict:
     """空响应纠正节点：注入提示消息或终止"""
     count = state.get("empty_retry_count", 0) + 1
+    
+    # 记录详细日志以便诊断
+    messages = state.get("messages", [])
+    last_msg = messages[-1] if messages else None
+    last_msg_type = type(last_msg).__name__ if last_msg else "None"
+    last_msg_content = _extract_text(last_msg) if last_msg else ""
+    last_msg_tool_calls = _extract_tool_calls(last_msg) if last_msg else []
+    
+    logger.warning(
+        "Empty response detected (attempt %d/%d). "
+        "Last message: type=%s, content_length=%d, tool_calls_count=%d, "
+        "content_preview=%s",
+        count,
+        _EMPTY_MAX_RETRY,
+        last_msg_type,
+        len(last_msg_content),
+        len(last_msg_tool_calls),
+        last_msg_content[:100] if last_msg_content else "<empty>",
+    )
+    
     if count > _EMPTY_MAX_RETRY:
+        logger.error(
+            "Empty response persists after %d corrections. Terminating.",
+            _EMPTY_MAX_RETRY,
+        )
         return {
             "empty_retry_count": count,
             "error": "Empty response persists after correction",
             "should_end": True,
         }
     if _exhausted_turn_budget(state):
+        logger.error(
+            "Max turns reached after empty response (turn %d/%d). Terminating.",
+            state.get("current_turn", 0),
+            state.get("max_turns", 100),
+        )
         return {
             "empty_retry_count": count,
             "error": f"Max turns ({state.get('max_turns', 100)}) reached after empty response",
             "should_end": True,
         }
+    
+    logger.info("Injecting correction prompt for empty response (attempt %d)", count)
     return {
         "messages": [
             HumanMessage(
@@ -265,7 +326,7 @@ def route_after_llm(state: AgentState) -> str:
     判定优先级（从高到低）：
     1. 有 tool_calls + 超限 -> terminate
     2. 有 tool_calls -> loop_detect
-    3. 声明完成 -> complete_check
+    3. 声明完成 -> observe（进行质量判定）
     4. Empty Response -> empty_feedback
     5. Planning-only -> planning_feedback
     6. 问用户问题 -> finalize_result
@@ -283,17 +344,21 @@ def route_after_llm(state: AgentState) -> str:
     tool_calls = _extract_tool_calls(last_msg)
     text = _extract_text(last_msg)
 
-    # 1. 有工具调用
+    # 1. 有工具调用（即使文本为空，只要有 tool_calls 就不算空响应）
     if tool_calls:
         if _exhausted_turn_budget(state):
             return "terminate"
         return "loop_detect"
 
-    # 2. 声明完成
-    if is_claiming_complete(text):
-        return "complete_check"
+    # 2. 声明完成 → 进入 observe 节点进行质量判定
+    # 使用规则快速判断，高置信度情况直接路由
+    rule_result = rule_based_completion_check(text)
+    if rule_result is True:
+        return "observe"
+    # 如果规则判断为未完成或不确定，继续后续判断
 
-    # 3. 空响应
+    # 3. 空响应（仅在既无 tool_calls 也无文本内容时）
+    # 注意：LLM 可能返回 tool_calls 但 content 为空，这是正常行为
     if not text.strip():
         return "empty_feedback"
 
@@ -327,10 +392,8 @@ def route_after_loop_feedback(state: AgentState) -> str:
 
 
 def route_after_stuck_detect(state: AgentState) -> str:
-    """Stuck 检测后：无卡住 → 结果终结，有卡住 → 反馈节点"""
-    if not state.get("stuck_detected"):
-        return "finalize_result"
-    return "stuck_feedback"
+    """Stuck 检测后：无论是否卡住，都进入 observe 节点进行质量评估"""
+    return "observe"
 
 
 def route_after_feedback(state: AgentState) -> str:
@@ -349,8 +412,6 @@ def route_after_complete_check(state: AgentState) -> str:
 
 def route_after_tool_execute(state: AgentState) -> str:
     """工具执行后的路由。"""
-    if state.get("awaiting_approval"):
-        return END
     if state.get("awaiting_user_input"):
         return END
     tool_results = state.get("tool_results", {})
@@ -362,6 +423,19 @@ def route_after_tool_execute(state: AgentState) -> str:
             and metadata.get("type") in ("plan", "plan_execute")
         ):
             return "plan_prepare"
+    # 非 Plan 分支进入观察节点
+    return "observe"
+
+
+def route_after_observe(state: AgentState) -> str:
+    """Observe 后路由：由 route_hint 主导。"""
+    if state.get("should_end"):
+        return END
+    hint = state.get("route_hint") or "llm_call"
+    if hint == "finalize":
+        return "finalize_result"
+    if hint == "loop_detect":
+        return "loop_detect"
     return "llm_call"
 
 
@@ -384,6 +458,7 @@ class AgentWorkflowBuilder:
         # === 核心节点 ===
         workflow.add_node("llm_call", llm_call_node)
         workflow.add_node("tool_execute", tool_execute_node)
+        workflow.add_node("observe", observe_node)
         workflow.add_node("loop_detect", loop_detect_node)
         workflow.add_node("stuck_detect", stuck_detect_node)
         workflow.add_node("context_compact", context_compact_node)
@@ -410,10 +485,9 @@ class AgentWorkflowBuilder:
             "llm_call",
             route_after_llm,
             {
-                "plan_prepare": "plan_prepare",
+                "observe": "observe",
                 "loop_detect": "loop_detect",
                 "stuck_detect": "stuck_detect",
-                "complete_check": "complete_check",
                 "empty_feedback": "empty_feedback",
                 "planning_feedback": "planning_feedback",
                 "finalize_result": "finalize_result",
@@ -432,7 +506,24 @@ class AgentWorkflowBuilder:
         workflow.add_conditional_edges(
             "tool_execute",
             route_after_tool_execute,
-            {"llm_call": "llm_call", "plan_prepare": "plan_prepare", END: END},
+            {
+                "llm_call": "llm_call",
+                "observe": "observe",
+                "plan_prepare": "plan_prepare",
+                END: END,
+            },
+        )
+
+        # === Observe 后路由 ===
+        workflow.add_conditional_edges(
+            "observe",
+            route_after_observe,
+            {
+                "llm_call": "llm_call",
+                "loop_detect": "loop_detect",
+                "finalize_result": "finalize_result",
+                END: END,
+            },
         )
 
         # === Loop 检测后路由 ===
@@ -453,7 +544,7 @@ class AgentWorkflowBuilder:
         workflow.add_conditional_edges(
             "stuck_detect",
             route_after_stuck_detect,
-            {"finalize_result": "finalize_result", "stuck_feedback": "stuck_feedback"},
+            {"observe": "observe"},
         )
 
         # === 完成检查后路由 ===

@@ -13,7 +13,6 @@ const PHASE_LABELS: Record<string, string> = {
   loop_correcting: 'Correcting loop...',
   stuck_recovering: 'Recovering...',
   context_compacting: 'Compacting...',
-  paused: 'Waiting approval',
   complete: 'Done',
   failed: 'Failed',
   cancelled: 'Cancelled',
@@ -25,10 +24,7 @@ interface ChatHeaderProps {
   session: Session | null;
   isStreaming: boolean;
   currentPhase: AgentPhase;
-  pendingApprovalToolName?: string | null;
   onCancel: () => void;
-  onApprove?: () => void;
-  onDeny?: () => void;
 }
 
 export const ChatHeader: React.FC<ChatHeaderProps> = ({
@@ -37,13 +33,8 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   session,
   isStreaming,
   currentPhase,
-  pendingApprovalToolName,
   onCancel,
-  onApprove,
-  onDeny,
 }) => {
-  const isPausedForApproval = currentPhase === 'paused' && !!pendingApprovalToolName;
-
   return (
     <div className="flex items-center justify-between border-b bg-card px-4 py-3">
       <div className="flex items-center gap-3">
@@ -65,41 +56,19 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
       </div>
 
       <div className="flex items-center gap-3">
-        {(isStreaming || isPausedForApproval) && (
+        {isStreaming && (
           <>
             <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <span className="h-2 w-2 animate-pulse rounded-full bg-primary" />
               {PHASE_LABELS[currentPhase] || currentPhase}
             </span>
-            {isPausedForApproval ? (
-              <>
-                <span className="text-xs text-muted-foreground">
-                  `{pendingApprovalToolName}`
-                </span>
-                <button
-                  type="button"
-                  onClick={onApprove}
-                  className="btn btn-outline px-3 py-1 text-xs text-foreground hover:bg-accent"
-                >
-                  Approve
-                </button>
-                <button
-                  type="button"
-                  onClick={onDeny}
-                  className="btn btn-outline px-3 py-1 text-xs text-destructive hover:bg-destructive/10"
-                >
-                  Deny
-                </button>
-              </>
-            ) : (
-              <button
-                type="button"
-                onClick={onCancel}
-                className="btn btn-outline px-3 py-1 text-xs text-destructive hover:bg-destructive/10"
-              >
-                Stop
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={onCancel}
+              className="btn btn-outline px-3 py-1 text-xs text-destructive hover:bg-destructive/10"
+            >
+              Stop
+            </button>
           </>
         )}
         <Link

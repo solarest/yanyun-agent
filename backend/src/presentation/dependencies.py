@@ -126,6 +126,7 @@ def create_tool_registry() -> ToolRegistry:
     import src.infrastructure.tools.builtin.file_ops  # noqa: F401
     import src.infrastructure.tools.builtin.clarify  # noqa: F401
     import src.infrastructure.tools.builtin.plan  # noqa: F401
+    import src.infrastructure.tools.builtin.shell  # noqa: F401
 
     # 构建中间件管道
     pipeline = ExecutionPipeline()

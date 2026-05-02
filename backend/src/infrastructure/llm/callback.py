@@ -114,6 +114,7 @@ class LLMCallLogger(BaseCallbackHandler):
             "agent_id": meta.get("agent_id", "unknown"),
             "task_id": meta.get("task_id", "unknown"),
             "turn": meta.get("turn"),
+            "node_name": meta.get("node_name", "unknown"),
             "model": (
                 invocation_params.get("model")
                 or invocation_params.get("model_name")

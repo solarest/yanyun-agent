@@ -15,7 +15,6 @@ from src.infrastructure.tools.decorator import tool
     category="clarify",
     returns="标记为等待用户回复的特殊响应",
     timeout_ms=5000,
-    risk_level="low",
 )
 async def clarify(
     question: str,

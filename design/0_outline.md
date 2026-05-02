@@ -1,4 +1,4 @@
-# yanyun-agent 项目大纲
+# wordlight-agent 项目大纲
 
 ## 系统架构总览
 

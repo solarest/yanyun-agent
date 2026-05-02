@@ -19,7 +19,6 @@ const phaseLabels: Record<string, string> = {
   loop_correcting: '循环纠正中',
   stuck_recovering: '恢复中',
   context_compacting: '上下文压缩中',
-  paused: '等待审批',
   complete: '完成',
   failed: '失败',
   cancelled: '已取消',

@@ -78,20 +78,6 @@ export interface ToolResultPayload extends BaseEventPayload {
   error?: string;
 }
 
-/** approval-requested 事件 */
-export interface ApprovalRequestedPayload extends BaseEventPayload {
-  toolCallId: string;
-  toolName: string;
-  input: Record<string, unknown>;
-  riskLevel: string;
-  message: string;
-}
-
-/** approval-resolved 事件 */
-export interface ApprovalResolvedPayload extends ApprovalRequestedPayload {
-  approved: boolean;
-}
-
 /** context-compacting 事件 */
 export interface ContextCompactingPayload extends BaseEventPayload {
   beforeTokens: number;
@@ -198,8 +184,6 @@ export interface AgentEventMap {
   'llm:complete': LLMCompletePayload;
   'tool:call': ToolCallPayload;
   'tool:result': ToolResultPayload;
-  'approval:requested': ApprovalRequestedPayload;
-  'approval:resolved': ApprovalResolvedPayload;
   'context:compacting': ContextCompactingPayload;
   'loop:detected': LoopDetectedPayload;
   'stuck:detected': StuckDetectedPayload;
@@ -235,8 +219,6 @@ export const SSE_EVENT_TYPES: readonly string[] = [
   'llm-complete',
   'tool-call',
   'tool-result',
-  'approval-requested',
-  'approval-resolved',
   'context-compacting',
   'loop-detected',
   'stuck-detected',

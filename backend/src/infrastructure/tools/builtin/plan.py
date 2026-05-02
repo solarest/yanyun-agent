@@ -18,7 +18,6 @@ logger = logging.getLogger(__name__)
     category="plan",
     returns="结构化的任务计划",
     timeout_ms=5000,
-    risk_level="low",
 )
 async def plan(
     goal: str,
@@ -73,7 +72,6 @@ async def plan(
     category="plan",
     returns="plan_id和plan结构确认,将触发plan执行流程",
     timeout_ms=5000,
-    risk_level="low",
 )
 async def plan_execute(
     goal: str,

@@ -19,9 +19,6 @@ def make_state(**overrides):
         "pending_tool_calls": [],
         "tool_results": {},
         "awaiting_user_input": False,
-        "awaiting_approval": False,
-        "approval_request": None,
-        "approved_tool_call_ids": [],
         "last_executed_tool_call_ids": [],
         "loop_detection_count": 0,
         "loop_detected": False,
@@ -64,9 +61,4 @@ def test_route_after_llm_blocks_tool_followup_when_turn_budget_exhausted() -> No
 
 def test_route_after_tool_execute_ends_when_awaiting_user_input() -> None:
     state = make_state(awaiting_user_input=True)
-    assert route_after_tool_execute(state) == "__end__"
-
-
-def test_route_after_tool_execute_ends_when_awaiting_approval() -> None:
-    state = make_state(awaiting_approval=True)
     assert route_after_tool_execute(state) == "__end__"

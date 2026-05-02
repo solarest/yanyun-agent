@@ -90,7 +90,6 @@ def create_app() -> FastAPI:
 
     # 全局状态
     app.state.running_tasks = {}  # task_id -> asyncio.Task
-    app.state.approval_requests = {}  # task_id -> PendingApprovalContext
 
     @app.get("/health")
     async def health_check():

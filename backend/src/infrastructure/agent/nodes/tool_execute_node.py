@@ -16,30 +16,12 @@ from src.domain.entities.tool import ToolContext
 logger = logging.getLogger("tool.call")
 
 
-def _build_approval_request(tool_registry, tc: dict) -> dict | None:
-    tool_name = tc.get("name", "")
-    tool = tool_registry.resolve(tool_name) if hasattr(tool_registry, "resolve") else None
-    if tool is None or not getattr(tool.policy, "requires_approval", False):
-        return None
-
-    return {
-        "toolCallId": tc.get("id", ""),
-        "toolName": tool_name,
-        "input": tc.get("input", {}),
-        "riskLevel": getattr(tool.policy, "risk_level", "medium"),
-        "message": (
-            f"Tool '{tool_name}' needs approval before it can run."
-        ),
-    }
-
-
 async def _execute_single_tool(
     tool_registry,
     event_emitter,
     task_id: str,
     tc: dict,
     context: ToolContext,
-    approved_tool_call_ids: list[str],
 ) -> tuple[str, dict]:
     """执行单个工具调用，返回 (tool_call_id, result_dict)"""
     tool_call_id = tc.get("id", "")
@@ -53,7 +35,6 @@ async def _execute_single_tool(
         extra={
             **context.extra,
             "tool_call_id": tool_call_id,
-            "approved_tool_call_ids": approved_tool_call_ids,
         },
     )
 
@@ -151,10 +132,7 @@ async def tool_execute_node(state: AgentState, config: RunnableConfig) -> dict:
     execution_tools = plan_tools or pending_tools
     structured_results = dict(state.get("tool_results", {}))
     awaiting_user_input = False
-    awaiting_approval = False
-    approval_request = None
     final_result = state.get("final_result")
-    approved_tool_call_ids = list(state.get("approved_tool_call_ids", []))
     last_executed_tool_call_ids: list[str] = []
 
     if plan_tools:
@@ -170,18 +148,7 @@ async def tool_execute_node(state: AgentState, config: RunnableConfig) -> dict:
                 "metadata": {"skipped_for_plan_execution": True},
             }
 
-    for tc in execution_tools:
-        tool_call_id = tc.get("id", "")
-        if tool_call_id in approved_tool_call_ids:
-            continue
-        approval_request = _build_approval_request(tool_registry, tc)
-        if approval_request is not None:
-            awaiting_approval = True
-            final_result = approval_request["message"]
-            break
-
-    # 审批工具命中时暂停，不执行任何工具，等待用户确认后恢复
-    if execution_tools and not awaiting_approval:
+    if execution_tools:
         tasks = [
             _execute_single_tool(
                 tool_registry,
@@ -189,7 +156,6 @@ async def tool_execute_node(state: AgentState, config: RunnableConfig) -> dict:
                 task_id,
                 tc,
                 context,
-                approved_tool_call_ids,
             )
             for tc in execution_tools
         ]
@@ -237,11 +203,8 @@ async def tool_execute_node(state: AgentState, config: RunnableConfig) -> dict:
     return {
         "messages": tool_messages,
         "tool_results": structured_results,
-        "pending_tool_calls": pending_tools if awaiting_approval else [],
+        "pending_tool_calls": [],
         "awaiting_user_input": awaiting_user_input,
-        "awaiting_approval": awaiting_approval,
-        "approval_request": approval_request,
-        "approved_tool_call_ids": approved_tool_call_ids,
         "last_executed_tool_call_ids": last_executed_tool_call_ids,
         "final_result": final_result,
         "phase": "tool_executing",

@@ -9,7 +9,6 @@ import { taskApi } from '@infrastructure/api/taskApi';
 import { AgentEventStream } from '@infrastructure/api/eventStream';
 import type { SessionMessage, SendMessageRequest } from '@domain/entities/session';
 import type { AgentPhase } from '@domain/entities/task';
-import type { ApprovalRequestedPayload } from '@domain/entities/events';
 
 export type PlanStepStatus = 'pending' | 'running' | 'completed' | 'failed';
 export type PlanStatus = 'planning' | 'executing' | 'completed' | 'failed';
@@ -36,7 +35,6 @@ export interface ChatState {
   currentPhase: AgentPhase;
   currentTaskId: string | null;
   error: string | null;
-  pendingApproval: ApprovalRequestedPayload | null;
   currentPlan: PlanProgress | null;
 }
 
@@ -55,7 +53,6 @@ const INITIAL_STATE: ChatState = {
   currentPhase: 'idle',
   currentTaskId: null,
   error: null,
-  pendingApproval: null,
   currentPlan: null,
 };
 
@@ -198,7 +195,6 @@ export const useChat = ({
         error: null,
         streamingContent: '',
         currentPhase: 'idle',
-        pendingApproval: null,
         currentPlan: null,
       }));
 
@@ -429,55 +425,8 @@ export const useChat = ({
             isStreaming: false,
             currentPhase: 'complete',
             currentTaskId: null,
-            pendingApproval: null,
           }));
           disconnectStream();
-        });
-
-        stream.on('task:paused', () => {
-          setState((prev) => ({
-            ...prev,
-            isStreaming: false,
-            currentPhase: 'paused',
-          }));
-        });
-
-        stream.on('approval:requested', (data) => {
-          setState((prev) => ({
-            ...prev,
-            pendingApproval: data,
-          }));
-        });
-
-        stream.on('approval:resolved', () => {
-          setState((prev) => ({
-            ...prev,
-            pendingApproval: null,
-          }));
-        });
-
-        stream.on('task:resumed', () => {
-          const resumedTaskId = task_id;
-          const placeholderMsg: SessionMessage = {
-            id: `streaming-resume-${resumedTaskId}-${Date.now()}`,
-            session_id: sessionId,
-            task_id: resumedTaskId,
-            role: 'assistant',
-            content: '',
-            tool_calls: [],
-            tool_results: [],
-            status: 'streaming',
-            error: null,
-            cost: {},
-            created_at: new Date().toISOString(),
-          };
-          onAppendMessage?.(placeholderMsg);
-          setState((prev) => ({
-            ...prev,
-            isStreaming: true,
-            currentPhase: 'thinking',
-            pendingApproval: null,
-          }));
         });
 
         // —— 任务取消 ——
@@ -488,7 +437,6 @@ export const useChat = ({
             isStreaming: false,
             currentPhase: 'cancelled',
             currentTaskId: null,
-            pendingApproval: null,
           }));
           onUpdateLastAssistant?.((msg) => ({
             ...msg,
@@ -507,7 +455,6 @@ export const useChat = ({
             currentPhase: 'failed',
             error: errorMsg,
             currentTaskId: null,
-            pendingApproval: null,
           }));
           onUpdateLastAssistant?.((msg) => ({
             ...msg,
@@ -545,15 +492,6 @@ export const useChat = ({
     }
   }, [state.currentTaskId]);
 
-  const resolveApproval = useCallback(async (approved: boolean) => {
-    if (!state.currentTaskId || !state.pendingApproval) return;
-    try {
-      await taskApi.resolveApproval(state.currentTaskId, approved);
-    } catch (err: unknown) {
-      console.error('Approval resolve failed:', err);
-    }
-  }, [state.currentTaskId, state.pendingApproval]);
-
   // 组件卸载时断开连接
   useEffect(() => {
     return () => {
@@ -570,7 +508,5 @@ export const useChat = ({
     ...state,
     sendMessage,
     cancelExecution,
-    approvePendingTool: () => resolveApproval(true),
-    denyPendingTool: () => resolveApproval(false),
   };
 };

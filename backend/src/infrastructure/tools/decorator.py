@@ -45,9 +45,7 @@ def tool(
     returns: str = "",
     timeout_ms: int = 30000,
     max_calls_per_minute: int = 60,
-    requires_approval: bool = False,
     sandboxed: bool = False,
-    risk_level: str = "low",
 ) -> Callable:
     """工具定义装饰器
 
@@ -82,9 +80,7 @@ def tool(
         policy = ToolPolicy(
             timeout_ms=timeout_ms,
             max_calls_per_minute=max_calls_per_minute,
-            requires_approval=requires_approval,
             sandboxed=sandboxed,
-            risk_level=risk_level,
         )
 
         wrapped = _wrap_tool_function(func)

@@ -70,17 +70,6 @@ const buildToolTimeline = (
   return items;
 };
 
-const isStaleApprovalText = (text: string): boolean =>
-  /^Tool\s+'[^']+'\s+needs approval before it can run\.$/.test(text.trim());
-
-const buildCompletionFallback = (items: ToolTimelineItem[]): string => {
-  const successfulTools = items
-    .filter((item) => item.status === 'success')
-    .map((item) => item.name);
-  if (successfulTools.length === 0) return '';
-  return `已完成：${successfulTools.join('、')} 执行成功。`;
-};
-
 export const MessageBubble: React.FC<MessageBubbleProps> = ({
   message,
   clarifyDisabled = false,
@@ -102,11 +91,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   const content = contentIsClarifyPrompt ? '' : message.content;
   const toolTimeline = buildToolTimeline(visibleToolCalls, visibleToolResults);
   const hasVisibleTools = toolTimeline.length > 0;
-  const contentFallback =
-    !isUser && message.status === 'completed' && isStaleApprovalText(content)
-      ? buildCompletionFallback(toolTimeline)
-      : '';
-  const displayContent = contentFallback || content;
+  const displayContent = content;
 
   if (!isUser && clarifyPrompt && !content.trim() && !hasVisibleTools) {
     return (

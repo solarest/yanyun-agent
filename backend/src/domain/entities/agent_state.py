@@ -33,9 +33,6 @@ class AgentState(TypedDict):
     pending_tool_calls: List[Dict[str, Any]]
     tool_results: Dict[str, Dict[str, Any]]
     awaiting_user_input: bool
-    awaiting_approval: bool
-    approval_request: Optional[Dict[str, Any]]
-    approved_tool_call_ids: List[str]
     last_executed_tool_call_ids: List[str]
 
     # === Loop 检测器状态 ===
@@ -59,6 +56,25 @@ class AgentState(TypedDict):
     # === 结果 ===
     final_result: Optional[str]
     error: Optional[str]
+
+    # === Observation 状态（observe_node 写入）===
+    observation_summary: Optional[str]
+    """本轮观察文本总结（供调试/前端展示）"""
+
+    observation_quality: Optional[str]
+    """本轮观察总体质量：good / empty / partial / failed / mixed"""
+
+    observation_items: List[Dict[str, Any]]
+    """每个 tool_call 的观察详情"""
+
+    consecutive_empty_observations: int
+    """连续空观察计数（触发语义循环检测）"""
+
+    last_error_category: Optional[str]
+    """最近一次错误分类"""
+
+    route_hint: Optional[str]
+    """observe_node 给出的路由建议（llm_call / loop_detect / finalize）"""
 
     # === Plan 执行状态 ===
     plan: Optional[Dict[str, Any]]

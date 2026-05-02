@@ -22,7 +22,6 @@ logger = logging.getLogger(__name__)
     returns="搜索结果列表，包含标题、摘要、来源链接，可选 AI 摘要",
     timeout_ms=15000,
     max_calls_per_minute=20,
-    risk_level="low",
 )
 async def web_search(
     query: str,

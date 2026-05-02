@@ -158,7 +158,6 @@ class TestToolDecorator:
         @tool(
             name="t", description="d",
             timeout_ms=5000, max_calls_per_minute=10,
-            requires_approval=True, risk_level="high",
         )
         async def t(x: str) -> ToolResult:
             """Args:
@@ -169,8 +168,6 @@ class TestToolDecorator:
         rt = get_collected_tools()[0]
         assert rt.policy.timeout_ms == 5000
         assert rt.policy.max_calls_per_minute == 10
-        assert rt.policy.requires_approval is True
-        assert rt.policy.risk_level == "high"
 
     @pytest.mark.asyncio
     async def test_wrapped_function_returns_tool_result(self) -> None:

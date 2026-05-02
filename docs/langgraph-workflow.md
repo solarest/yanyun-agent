@@ -8,65 +8,77 @@
 
 ```mermaid
 graph TB
-    Start([开始]) --> llm_call[LLM 调用节点]
+    Start([开始]) --> llm_call["llm_call_node<br/>LLM调用节点<br/>调用LLM并流式输出文本"]
     
-    llm_call --> route_after_llm{LLM 后路由}
+    llm_call --> route_after_llm{LLM后路由}
     
-    route_after_llm -->|有工具调用 + 超限| terminate[终止节点]
-    route_after_llm -->|有工具调用| loop_detect[循环检测节点]
-    route_after_llm -->|声明完成| complete_check[完成检查节点]
-    route_after_llm -->|空响应| empty_feedback[空响应纠正节点]
-    route_after_llm -->|纯规划/思考| planning_feedback[纯规划纠正节点]
-    route_after_llm -->|问用户问题| finalize_result[结果终结节点]
-    route_after_llm -->|纯文本| stuck_detect[卡住检测节点]
     route_after_llm -->|should_end标记| End1([结束])
+    route_after_llm -->|有工具调用+超限| terminate["terminate_node<br/>终止节点<br/>超限终止"]
+    route_after_llm -->|有工具调用| loop_detect["loop_detect_node<br/>循环检测节点<br/>检测工具调用/内容重复"]
+    route_after_llm -->|声明完成| complete_check["complete_check_node<br/>完成检查节点<br/>检查完成关键词"]
+    route_after_llm -->|空响应| empty_feedback["empty_feedback_node<br/>空响应纠正节点<br/>注入空响应反馈"]
+    route_after_llm -->|纯规划/思考| planning_feedback["planning_feedback_node<br/>纯规划纠正节点<br/>注入执行提醒"]
+    route_after_llm -->|问用户问题| finalize_result["finalize_result_node<br/>结果终结节点<br/>提取最终结果"]
+    route_after_llm -->|纯文本| stuck_detect["stuck_detect_node<br/>卡住检测节点<br/>检测单话模式"]
     
     loop_detect --> route_loop{循环检测路由}
-    route_loop -->|无循环| tool_execute[工具执行节点]
-    route_loop -->|有循环| loop_feedback[循环纠正节点]
+    route_loop -->|无循环| tool_execute["tool_execute_node<br/>工具执行节点<br/>并行执行工具调用"]
+    route_loop -->|有循环| loop_feedback["loop_feedback_node<br/>循环纠正节点<br/>注入循环警告"]
     
     loop_feedback --> route_loop_fb{循环反馈路由}
     route_loop_fb -->|should_end| End2([结束])
-    route_loop_fb -->|检测次数=2| context_compact[上下文压缩节点]
+    route_loop_fb -->|检测次数=2| context_compact["context_compact_node<br/>上下文压缩节点<br/>压缩对话历史"]
     route_loop_fb -->|检测次数=1| llm_call
     
     context_compact --> llm_call
     tool_execute --> route_tool{工具执行路由}
-    route_tool -->|awaiting_user_input| End3([结束])
-    route_tool -->|否则| llm_call
+    route_tool -->|awaiting_user_input| End4([结束])
+    route_tool -->|plan/plan_execute成功| plan_prepare["plan_prepare_node<br/>Plan准备节点<br/>解析Plan结构"]
+    route_tool -->|否则| observe["observe_node<br/>观察节点<br/>工具结果质量判定"]
+
+    observe --> route_observe{观察后路由}
+    route_observe -->|正常| llm_call
+    route_observe -->|连续空观察| loop_detect
+    route_observe -->|致命错误| finalize_result
+
+    plan_prepare --> plan_execute["plan_execute_node<br/>Plan执行节点<br/>执行Plan汇总结果"]
+    plan_execute --> finalize_result
     
-    terminate --> End4([结束])
+    terminate --> End5([结束])
     
     complete_check --> route_complete{完成检查路由}
-    route_complete -->|任务完成| End5([结束])
-    route_complete -->|未完成| completion_feedback[完成纠正节点]
+    route_complete -->|任务完成| End6([结束])
+    route_complete -->|未完成| completion_feedback["completion_feedback_node<br/>完成纠正节点<br/>注入继续工作提示"]
     completion_feedback --> route_cf{反馈路由}
-    route_cf -->|should_end| End6([结束])
+    route_cf -->|should_end| End7([结束])
     route_cf -->|否则| llm_call
     
     stuck_detect --> route_stuck{卡住检测路由}
     route_stuck -->|无卡住| finalize_result
-    route_stuck -->|卡住| stuck_feedback[卡住纠正节点]
+    route_stuck -->|卡住| stuck_feedback["stuck_feedback_node<br/>卡住纠正节点<br/>注入行动提醒"]
     stuck_feedback --> route_sf{反馈路由}
-    route_sf -->|should_end| End7([结束])
+    route_sf -->|should_end| End8([结束])
     route_sf -->|否则| llm_call
     
     empty_feedback --> route_ef{反馈路由}
-    route_ef -->|should_end| End8([结束])
+    route_ef -->|should_end| End9([结束])
     route_ef -->|否则| llm_call
     
     planning_feedback --> route_pf{反馈路由}
-    route_pf -->|should_end| End9([结束])
+    route_pf -->|should_end| End10([结束])
     route_pf -->|否则| llm_call
     
-    finalize_result --> End10([结束])
+    finalize_result --> End11([结束])
     
     style llm_call fill:#e1f5fe
     style tool_execute fill:#f3e5f5
+    style observe fill:#ffe0b2
     style loop_detect fill:#fff3e0
     style complete_check fill:#e8f5e9
     style context_compact fill:#fce4ec
     style stuck_detect fill:#f1f8e9
+    style plan_prepare fill:#e0f7fa
+    style plan_execute fill:#e0f2f1
 ```
 
 ## 系统提示词（System Prompt）
@@ -175,7 +187,7 @@ LLM 调用节点的 system prompt 由 **PromptBuilder** 服务构建，底层由
 ```
 # Workspace
 
-Current working directory: /Users/solarest/project/yanyun-agent
+Current working directory: /Users/solarest/project/wordlight-agent
 ```
 
 #### Layer 9: Environment（动态注入）
@@ -300,14 +312,75 @@ Timezone: Asia/Shanghai
 - **文件**: `backend/src/infrastructure/agent/nodes/stuck_detect_node.py`
 - **职责**: 检测 Agent 是否卡住（无法推进任务）
 - **检测模式**:
-  1. 从 `task_start_message_count` 位置开始，反向提取最近 3 条 assistant 消息
-  2. 若连续 3 条都没有 `tool_calls`（纯文本输出），认为卡住（`stuck_type="monologue"`）
+  1. **单话模式（monologue）**：从 `task_start_message_count` 位置开始，反向提取最近 3 条 assistant 消息；若连续 3 条都没有 `tool_calls`（纯文本输出），认为卡住（`stuck_type="monologue"`）
+  2. *注：代码注释提到还支持"重复 action/error"和"交替模式"，但当前实现仅检测 monologue 模式*
 - **事件发射**:
   - `event_emitter.emit("stuck:detected", {stuckType, count, action})` — action 为 `inject_feedback`（<3次）/ `terminate`（≥3次）
   - `event_emitter.emit_phase_changed(...)` — phase=stuck_recovering
 - **返回状态**:
   - 检测到卡住: `{"stuck_detected": true, "stuck_detection_count": count, "stuck_type": "monologue", "phase": "stuck_recovering"}`
   - 未检测到: `{"stuck_detected": false, "stuck_type": null, "stuck_detection_count": 0}`
+
+### 7. Plan准备节点 (plan_prepare_node)
+- **文件**: `backend/src/infrastructure/agent/nodes/plan_prepare_node.py`
+- **职责**: 从plan_execute工具的结果中解析plan结构并注入state
+- **逻辑**:
+  1. 子Agent跳过（`is_sub_agent=true` 时返回错误）
+  2. 从 `last_executed_tool_call_ids` 或 `tool_results` 中提取 `plan` 或 `plan_execute` 类型的工具结果
+  3. 从metadata中解析 `goal`、`execution_order`、`steps`
+  4. 构建 `Plan` 对象并验证结构
+  5. 注入state：`plan`、`plan_results={}`、`phase="plan_prepared"`
+- **返回状态**:
+  - 成功: `{"plan": Plan对象, "plan_results": {}, "phase": "plan_prepared"}`
+  - 失败: `{"error": "错误信息"}`
+
+### 8. Plan执行节点 (plan_execute_node)
+- **文件**: `backend/src/infrastructure/agent/nodes/plan_execute_node.py`
+- **职责**: 执行plan，等待所有子任务完成，汇总结果
+- **逻辑**:
+  1. 检查state中是否有plan（无则返回空）
+  2. 子Agent跳过（`is_sub_agent=true` 时返回空）
+  3. 使用 `PlanExecutor` 执行plan（`max_parallel=5`）
+  4. 等待所有子任务完成
+  5. 汇总结果到 `final_result`
+- **返回状态**:
+  - 成功: `{"final_result": result["summary"], "plan_results": result["step_results"], "phase": "plan_completed", "is_complete": true}`
+  - 失败: `{"error": f"Plan execution failed: {e}", "phase": "plan_failed", "should_end": true}`
+
+### 9. 观察节点 (observe_node)
+- **文件**: `backend/src/infrastructure/agent/nodes/observe_node.py`
+- **职责**: ReAct 闭环中的“观察”环节。对工具执行结果做质量判定、错误分类、摘要化与反思注入，并给出路由建议
+- **质量判定**（每条工具结果）:
+  | 质量 | 条件 |
+  |------|------|
+  | `good` | `status=success` 且输出非空、长度 > `empty_threshold_chars`（默认 2） |
+  | `empty` | `status=success` 但输出为空/空白/`[]`/`{}`/`null` 等占位 |
+  | `partial` | `status=success` 且 `metadata.truncated=true` |
+  | `failed` | `status=error` |
+  | `skipped` | `status=skipped`（不计入观察统计） |
+- **错误分类**（`_classify_error()`）: `timeout` / `permission` / `invalid_args` / `not_found` / `network` / `business_error` / `unknown`，`metadata.error_type` 显式指定时优先采用
+- **摘要化**: 当单条输出 > `output_max_chars`（默认 4000）时标记 `truncated=true`，仅用于观察事件与反思，**`tool_results` 原文不变**
+- **反思注入**: 按质量/错误类别生成 `HumanMessage` 追加到 `messages`
+  - 单工具 `good`：**不注入**
+  - 多工具全成功：注入 `Observed: N tools succeeded. ...`
+  - `empty`：注入“结果为空”提示；连续第 N≥2 次不再重复注入
+  - `failed`：根据 `errorCategory` 注入分类提示（timeout/permission/…）
+  - 开关 `observe_options.enable_reflection_inject=false` 可关闭注入
+- **事件发射**:
+  - `phase:changed` — phase=observing
+  - `observe:summary` — `{turn, items:[{toolCallId, toolName, quality, errorCategory, truncated}], overallQuality}`
+  - `observe:decision` — `{turn, routeHint, reason}`
+- **路由建议（写入 `route_hint`）**:
+  - 任一条目 `errorCategory ∈ {permission}` → `finalize`（终结任务）
+  - `overall_quality=empty` 且 `consecutive_empty_observations >= max_consecutive_empty`（默认 2） → `loop_detect`
+  - 其他 → `llm_call`
+- **返回状态**:
+  - `observation_summary` / `observation_quality` / `observation_items`
+  - `consecutive_empty_observations`（非空观察时重置为 0）
+  - `last_error_category`
+  - `route_hint` ∈ `{"llm_call", "loop_detect", "finalize"}`
+  - `phase`: `"observing"`
+  - `messages`: 如需则为 `[HumanMessage(...)]`
 
 ## 路由逻辑
 
@@ -325,10 +398,6 @@ Timezone: Asia/Shanghai
 | 5 | 消息包含规划关键词（见下方列表） | planning_feedback（纯规划纠正） |
 | 6 | 消息最后一行以 `?` 或 `？` 结尾 | finalize_result（结果终结） |
 | 7 | 其他纯文本 | stuck_detect（卡住检测） |
-
-**规划关键词检测**（`_is_planning_only()`，不区分大小写）：
-- 英文: `"here's a plan"`, `"my plan is"`, `"i will"`, `"let me think"`, `"first, i need to"`, `"i should"`, `"the approach is"`
-- 中文: `"我的计划是"`, `"让我想想"`, `"我需要先"`, `"我应该"`, `"方案是"`, `"思路是"`, `"计划如下"`, `"步骤如下"`
 
 ### 循环检测后路由 (route_after_loop_detect)
 - 无循环（`loop_detected=false`）→ tool_execute（执行工具）
@@ -348,8 +417,15 @@ Timezone: Asia/Shanghai
 - 未完成 → completion_feedback（完成纠正节点）
 
 ### 工具执行后路由 (route_after_tool_execute)
-- `awaiting_user_input=true` → END
-- 否则 → llm_call
+- `awaiting_user_input=true` → END（等待用户输入）
+- 工具结果为 `plan` 或 `plan_execute` 类型且成功 → plan_prepare（Plan准备节点）
+- 否则 → **observe（观察节点）**
+
+### 观察后路由 (route_after_observe)
+- `should_end=true` → END
+- `route_hint="finalize"` → finalize_result（结果终结）
+- `route_hint="loop_detect"` → loop_detect（循环检测）
+- 其他 → llm_call（回到LLM）
 
 ### 通用反馈后路由 (route_after_feedback)
 适用于 `empty_feedback`、`planning_feedback`、`stuck_feedback`、`completion_feedback`：
@@ -428,6 +504,7 @@ Agent 状态定义在 `backend/src/domain/entities/agent_state.py` 中，继承 
 | `pending_tool_calls` | `List[Dict[str, Any]]` | 待执行工具调用 |
 | `tool_results` | `Dict[str, Dict[str, Any]]` | 工具执行结果 |
 | `awaiting_user_input` | `bool` | 是否等待用户输入 |
+| `last_executed_tool_call_ids` | `List[str]` | 最近执行的工具调用ID列表 |
 | `loop_detection_count` | `int` | 循环检测连续次数 |
 | `loop_detected` | `bool` | 本轮是否检测到循环 |
 | `loop_type` | `Optional[str]` | 循环类型 |
@@ -440,6 +517,16 @@ Agent 状态定义在 `backend/src/domain/entities/agent_state.py` 中，继承 
 | `system_prompt` | `str` | 系统提示词 |
 | `final_result` | `Optional[str]` | 最终结果 |
 | `error` | `Optional[str]` | 错误信息 |
+| `plan` | `Optional[Dict[str, Any]]` | 当前plan结构 |
+| `plan_results` | `Dict[int, Dict[str, Any]]` | 各步骤执行结果 {step_id: result} |
+| `is_sub_agent` | `bool` | 是否为子Agent |
+| `parent_task_id` | `Optional[str]` | 父Agent的task_id(子Agent用) |
+| `observation_summary` | `Optional[str]` | 本轮观察文本总结 |
+| `observation_quality` | `Optional[str]` | 本轮观察总体质量：good/empty/partial/failed/mixed |
+| `observation_items` | `List[Dict[str, Any]]` | 每个tool_call的观察详情 |
+| `consecutive_empty_observations` | `int` | 连续空观察计数 |
+| `last_error_category` | `Optional[str]` | 最近一次错误分类 |
+| `route_hint` | `Optional[str]` | observe给出的路由建议 |
 
 ## 维护说明
 

@@ -43,11 +43,8 @@ export const AgentSessionPage: React.FC = () => {
     currentPhase,
     currentPlan,
     error: chatError,
-    pendingApproval,
     sendMessage,
     cancelExecution,
-    approvePendingTool,
-    denyPendingTool,
   } = useChat({
     agentId: agentId || '',
     sessionId: currentSession?.id || null,
@@ -127,10 +124,7 @@ export const AgentSessionPage: React.FC = () => {
           session={currentSession}
           isStreaming={isStreaming}
           currentPhase={currentPhase}
-          pendingApprovalToolName={pendingApproval?.toolName || null}
           onCancel={cancelExecution}
-          onApprove={approvePendingTool}
-          onDeny={denyPendingTool}
         />
 
         {/* 错误提示 */}
@@ -152,11 +146,9 @@ export const AgentSessionPage: React.FC = () => {
         {/* 输入框 */}
         <MessageInput
           onSend={handleSendMessage}
-          disabled={isSending || isStreaming || currentPhase === 'paused'}
+          disabled={isSending || isStreaming}
           placeholder={
-            currentPhase === 'paused'
-              ? 'Approval pending. Approve or deny the requested tool first...'
-              : !currentSession
+            !currentSession
               ? 'Send a message to start a new chat...'
               : 'Type a message...'
           }

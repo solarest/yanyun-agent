@@ -118,9 +118,7 @@ class TestToolPolicy:
         p = ToolPolicy()
         assert p.timeout_ms == 30000
         assert p.max_calls_per_minute == 60
-        assert p.requires_approval is False
         assert p.sandboxed is False
-        assert p.risk_level == "low"
 
     def test_frozen(self) -> None:
         p = ToolPolicy()
@@ -130,8 +128,8 @@ class TestToolPolicy:
     def test_custom_values(self) -> None:
         p = ToolPolicy(
             timeout_ms=5000, max_calls_per_minute=10,
-            requires_approval=True, sandboxed=True,
-            allowed_paths=("/workspace",), risk_level="high",
+            sandboxed=True,
+            allowed_paths=("/workspace",),
         )
         assert p.timeout_ms == 5000
         assert p.allowed_paths == ("/workspace",)

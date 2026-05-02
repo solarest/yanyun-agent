@@ -62,12 +62,13 @@ async def llm_call_node(state: AgentState, config: RunnableConfig) -> dict:
     accumulated: AIMessageChunk | None = None
 
     # 通过 metadata 将业务上下文传入，LLMCallLogger 会在 on_chat_model_start
-    # 中读取 metadata，从而关联 agent_id/task_id/turn。
+    # 中读取 metadata，从而关联 agent_id/task_id/turn/node_name。
     llm_call_config = {
         "metadata": {
             "agent_id": agent_id,
             "task_id": task_id,
             "turn": current_turn,
+            "node_name": "llm_call_node",
         }
     }
 

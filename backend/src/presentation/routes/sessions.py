@@ -246,7 +246,6 @@ async def send_message(
         task_repo=bg_task_repo,
         event_emitter=bg_event_emitter,
         tool_registry=bg_tool_registry,
-        approval_store=request.app.state.approval_requests,
         running_tasks=request.app.state.running_tasks,
     )
 

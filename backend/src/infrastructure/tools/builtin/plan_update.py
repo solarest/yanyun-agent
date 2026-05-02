@@ -18,7 +18,6 @@ logger = logging.getLogger(__name__)
     category="plan",
     returns="更新确认",
     timeout_ms=3000,
-    risk_level="low",
 )
 async def plan_update(
     step_id: int,
