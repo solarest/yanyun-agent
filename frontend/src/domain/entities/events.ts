@@ -29,6 +29,14 @@ export interface TaskFailedPayload extends BaseEventPayload {
 /** task-cancelled 事件 */
 export type TaskCancelledPayload = BaseEventPayload;
 
+/** task-paused 事件 */
+export interface TaskPausedPayload extends BaseEventPayload {
+  reason: string;
+}
+
+/** task-resumed 事件 */
+export type TaskResumedPayload = BaseEventPayload;
+
 /** phase-changed 事件 */
 export interface PhaseChangedPayload extends BaseEventPayload {
   phase: AgentPhase | string;
@@ -70,6 +78,20 @@ export interface ToolResultPayload extends BaseEventPayload {
   error?: string;
 }
 
+/** approval-requested 事件 */
+export interface ApprovalRequestedPayload extends BaseEventPayload {
+  toolCallId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+  riskLevel: string;
+  message: string;
+}
+
+/** approval-resolved 事件 */
+export interface ApprovalResolvedPayload extends ApprovalRequestedPayload {
+  approved: boolean;
+}
+
 /** context-compacting 事件 */
 export interface ContextCompactingPayload extends BaseEventPayload {
   beforeTokens: number;
@@ -90,6 +112,71 @@ export interface StuckDetectedPayload extends BaseEventPayload {
   action: string;
 }
 
+/** plan-created 事件 */
+export interface PlanCreatedPayload extends BaseEventPayload {
+  plan_id: string;
+  goal?: string;
+  execution_order?: unknown[];
+}
+
+/** plan-step-started 事件 */
+export interface PlanStepStartedPayload extends BaseEventPayload {
+  step_id: number;
+  description?: string;
+}
+
+/** plan-step-completed 事件 */
+export interface PlanStepCompletedPayload extends BaseEventPayload {
+  step_id: number;
+  status: 'completed' | 'failed' | string;
+  result?: string | null;
+  error?: string | null;
+  sub_agent_task_id?: string | null;
+}
+
+/** plan-parallel-group-started 事件 */
+export interface PlanParallelGroupStartedPayload extends BaseEventPayload {
+  step_ids: number[];
+}
+
+/** plan-parallel-group-completed 事件 */
+export interface PlanParallelGroupCompletedPayload extends BaseEventPayload {
+  step_ids: number[];
+  results?: Record<
+    string,
+    {
+      status: 'completed' | 'failed' | string;
+      result?: string | null;
+      error?: string | null;
+      sub_agent_task_id?: string | null;
+    }
+  >;
+}
+
+/** plan-completed 事件 */
+export interface PlanCompletedPayload extends BaseEventPayload {
+  plan_id: string;
+  summary?: string;
+  step_results?: Record<
+    string,
+    {
+      status: 'completed' | 'failed' | string;
+      result?: string | null;
+      error?: string | null;
+      sub_agent_task_id?: string | null;
+    }
+  >;
+}
+
+/** sub-agent 事件 */
+export interface SubAgentPayload extends BaseEventPayload {
+  sub_task_id: string;
+  step_id?: number;
+  description?: string;
+  status?: string;
+  error?: string | null;
+}
+
 /** session-message-saved 事件（最终落库消息） */
 export interface SessionMessageSavedPayload extends BaseEventPayload {
   message: SessionMessage;
@@ -104,14 +191,27 @@ export interface AgentEventMap {
   'task:completed': TaskCompletedPayload;
   'task:failed': TaskFailedPayload;
   'task:cancelled': TaskCancelledPayload;
+  'task:paused': TaskPausedPayload;
+  'task:resumed': TaskResumedPayload;
   'phase:changed': PhaseChangedPayload;
   'llm:chunk': LLMChunkPayload;
   'llm:complete': LLMCompletePayload;
   'tool:call': ToolCallPayload;
   'tool:result': ToolResultPayload;
+  'approval:requested': ApprovalRequestedPayload;
+  'approval:resolved': ApprovalResolvedPayload;
   'context:compacting': ContextCompactingPayload;
   'loop:detected': LoopDetectedPayload;
   'stuck:detected': StuckDetectedPayload;
+  'plan:created': PlanCreatedPayload;
+  'plan:step_started': PlanStepStartedPayload;
+  'plan:step_completed': PlanStepCompletedPayload;
+  'plan:parallel_group_started': PlanParallelGroupStartedPayload;
+  'plan:parallel_group_completed': PlanParallelGroupCompletedPayload;
+  'plan:completed': PlanCompletedPayload;
+  'sub_agent:started': SubAgentPayload;
+  'sub_agent:completed': SubAgentPayload;
+  'sub_agent:failed': SubAgentPayload;
   'session:message:saved': SessionMessageSavedPayload;
 }
 
@@ -128,13 +228,26 @@ export const SSE_EVENT_TYPES: readonly string[] = [
   'task-completed',
   'task-failed',
   'task-cancelled',
+  'task-paused',
+  'task-resumed',
   'phase-changed',
   'llm-chunk',
   'llm-complete',
   'tool-call',
   'tool-result',
+  'approval-requested',
+  'approval-resolved',
   'context-compacting',
   'loop-detected',
   'stuck-detected',
+  'plan-created',
+  'plan-step_started',
+  'plan-step_completed',
+  'plan-parallel_group_started',
+  'plan-parallel_group_completed',
+  'plan-completed',
+  'sub_agent-started',
+  'sub_agent-completed',
+  'sub_agent-failed',
   'session-message-saved',
 ] as const;

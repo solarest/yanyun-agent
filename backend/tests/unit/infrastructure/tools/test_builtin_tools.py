@@ -238,6 +238,13 @@ class TestPlan:
         assert "Deploy app" in result.output
         assert "Step 1: Build" in result.output
         assert result.metadata["step_count"] == 3
+        assert result.metadata["type"] == "plan"
+        assert result.metadata["execution_order"] == [1, 2, 3]
+        assert result.metadata["steps"] == [
+            {"id": 1, "description": "Build"},
+            {"id": 2, "description": "Test"},
+            {"id": 3, "description": "Deploy"},
+        ]
 
     @pytest.mark.asyncio
     async def test_empty_goal(self) -> None:

@@ -60,3 +60,9 @@ class TaskListResponseDTO(BaseModel):
 
     data: list[TaskResponseDTO]
     total: int
+
+
+class ApprovalDecisionDTO(BaseModel):
+    """审批决策请求 DTO"""
+
+    approved: bool = Field(..., description="是否批准工具执行")

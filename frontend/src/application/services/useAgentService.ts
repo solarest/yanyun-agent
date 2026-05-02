@@ -91,6 +91,16 @@ export const useAgentService = (baseUrl: string) => {
       setIsConnected(false);
     });
 
+    stream.on('task:paused', () => {
+      setCurrentPhase('paused');
+      setIsConnected(true);
+    });
+
+    stream.on('task:resumed', () => {
+      setCurrentPhase('thinking');
+      setIsConnected(true);
+    });
+
     stream.on('task:cancelled', () => {
       setCurrentPhase('cancelled');
       setIsConnected(false);

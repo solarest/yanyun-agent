@@ -22,6 +22,8 @@ from src.infrastructure.agent.nodes.context_compact_node import (
 )
 from src.infrastructure.agent.nodes.llm_call_node import llm_call_node
 from src.infrastructure.agent.nodes.loop_detect_node import loop_detect_node
+from src.infrastructure.agent.nodes.plan_execute_node import plan_execute_node
+from src.infrastructure.agent.nodes.plan_prepare_node import plan_prepare_node
 from src.infrastructure.agent.nodes.stuck_detect_node import stuck_detect_node
 from src.infrastructure.agent.nodes.tool_execute_node import tool_execute_node
 
@@ -236,6 +238,10 @@ async def completion_feedback_node(
 
 async def finalize_result_node(state: AgentState, config: RunnableConfig) -> dict:
     """结果终结节点：从最后消息提取 final_result"""
+    if state.get("error"):
+        return {"final_result": state.get("final_result")}
+    if state.get("final_result"):
+        return {"final_result": state.get("final_result")}
     messages = state.get("messages", [])
     text = _extract_text(messages[-1]) if messages else ""
     return {"final_result": text}
@@ -343,8 +349,19 @@ def route_after_complete_check(state: AgentState) -> str:
 
 def route_after_tool_execute(state: AgentState) -> str:
     """工具执行后的路由。"""
+    if state.get("awaiting_approval"):
+        return END
     if state.get("awaiting_user_input"):
         return END
+    tool_results = state.get("tool_results", {})
+    for tool_call_id in state.get("last_executed_tool_call_ids", []):
+        result = tool_results.get(tool_call_id, {})
+        metadata = result.get("metadata", {})
+        if (
+            result.get("status") == "success"
+            and metadata.get("type") in ("plan", "plan_execute")
+        ):
+            return "plan_prepare"
     return "llm_call"
 
 
@@ -372,6 +389,10 @@ class AgentWorkflowBuilder:
         workflow.add_node("context_compact", context_compact_node)
         workflow.add_node("complete_check", complete_check_node)
 
+        # === Plan 相关节点 ===
+        workflow.add_node("plan_prepare", plan_prepare_node)
+        workflow.add_node("plan_execute", plan_execute_node)
+
         # === 反馈注入节点 ===
         workflow.add_node("empty_feedback", empty_feedback_node)
         workflow.add_node("planning_feedback", planning_feedback_node)
@@ -389,6 +410,7 @@ class AgentWorkflowBuilder:
             "llm_call",
             route_after_llm,
             {
+                "plan_prepare": "plan_prepare",
                 "loop_detect": "loop_detect",
                 "stuck_detect": "stuck_detect",
                 "complete_check": "complete_check",
@@ -400,11 +422,17 @@ class AgentWorkflowBuilder:
             },
         )
 
+        # === Plan 准备后路由 ===
+        workflow.add_edge("plan_prepare", "plan_execute")
+
+        # === Plan 执行后路由 ===
+        workflow.add_edge("plan_execute", "finalize_result")
+
         # === 工具执行后路由 ===
         workflow.add_conditional_edges(
             "tool_execute",
             route_after_tool_execute,
-            {"llm_call": "llm_call", END: END},
+            {"llm_call": "llm_call", "plan_prepare": "plan_prepare", END: END},
         )
 
         # === Loop 检测后路由 ===

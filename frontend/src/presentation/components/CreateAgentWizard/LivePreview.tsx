@@ -10,18 +10,21 @@ interface LivePreviewProps {
   description: string;
   vibes: string[];
   generated: GeneratedContent | null;
+  avatarColor: string;
 }
 
-/** 基于名称生成显示颜色 */
-function getAvatarColor(name: string): string {
-  const colors = [
-    '#6366f1', '#8b5cf6', '#ec4899', '#f43f5e',
-    '#f97316', '#eab308', '#22c55e', '#06b6d4',
-    '#3b82f6', '#a855f7', '#14b8a6', '#f59e0b',
-  ];
-  const hash = name.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
-  return colors[hash % colors.length];
-}
+export const AVATAR_COLOR_OPTIONS = [
+  '#6366f1',
+  '#8b5cf6',
+  '#ec4899',
+  '#f43f5e',
+  '#f97316',
+  '#eab308',
+  '#22c55e',
+  '#06b6d4',
+  '#3b82f6',
+  '#14b8a6',
+] as const;
 
 /** 从 SOUL.md 内容中提取座右铭 */
 function extractQuote(soulMd: string): string {
@@ -34,6 +37,7 @@ export const LivePreview: React.FC<LivePreviewProps> = ({
   description,
   vibes,
   generated,
+  avatarColor,
 }) => {
   const quote = generated ? extractQuote(generated.soul_md) : '';
 
@@ -48,7 +52,7 @@ export const LivePreview: React.FC<LivePreviewProps> = ({
         <div
           className="mb-4 flex h-20 w-20 items-center justify-center rounded-full text-2xl font-bold text-white"
           style={{
-            backgroundColor: name ? getAvatarColor(name) : '#94a3b8',
+            backgroundColor: avatarColor,
           }}
         >
           {name ? name.charAt(0).toUpperCase() : '?'}

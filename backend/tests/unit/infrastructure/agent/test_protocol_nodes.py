@@ -65,6 +65,11 @@ def make_state(**overrides):
         "is_complete": False,
         "pending_tool_calls": [],
         "tool_results": {},
+        "awaiting_user_input": False,
+        "awaiting_approval": False,
+        "approval_request": None,
+        "approved_tool_call_ids": [],
+        "last_executed_tool_call_ids": [],
         "loop_detection_count": 0,
         "loop_detected": False,
         "loop_type": None,
@@ -215,6 +220,134 @@ async def test_tool_execute_node_preserves_previous_tool_results() -> None:
             "metadata": {},
         },
     }
+
+
+@pytest.mark.asyncio
+async def test_tool_execute_node_pauses_when_tool_requires_approval() -> None:
+    emitter = RecordingEmitter()
+
+    class FakeToolRegistry:
+        def resolve(self, _tool_name):
+            return SimpleNamespace(
+                policy=SimpleNamespace(requires_approval=True, risk_level="medium")
+            )
+
+        async def execute(self, tool_name, tool_input, context):
+            raise AssertionError("approval-gated tool should not execute before approval")
+
+    result = await tool_execute_node(
+        make_state(
+            phase="thinking",
+            current_turn=2,
+            pending_tool_calls=[{"id": "call-1", "name": "file_write", "input": {"path": "a.txt"}}],
+        ),
+        {"configurable": {"tool_registry": FakeToolRegistry(), "event_emitter": emitter}},
+    )
+
+    assert [event["event_type"] for event in emitter.events] == ["phase:changed"]
+    assert result["awaiting_approval"] is True
+    assert result["approval_request"] == {
+        "toolCallId": "call-1",
+        "toolName": "file_write",
+        "input": {"path": "a.txt"},
+        "riskLevel": "medium",
+        "message": "Tool 'file_write' needs approval before it can run.",
+    }
+    assert result["pending_tool_calls"] == [
+        {"id": "call-1", "name": "file_write", "input": {"path": "a.txt"}}
+    ]
+    assert result["messages"] == []
+    assert result["tool_results"] == {}
+
+
+@pytest.mark.asyncio
+async def test_tool_execute_node_runs_approved_tool_with_approval_context() -> None:
+    emitter = RecordingEmitter()
+
+    class FakeToolRegistry:
+        def resolve(self, _tool_name):
+            return SimpleNamespace(
+                policy=SimpleNamespace(requires_approval=True, risk_level="medium")
+            )
+
+        async def execute(self, tool_name, tool_input, context):
+            assert tool_name == "file_write"
+            assert tool_input == {"path": "a.txt", "content": "hello"}
+            assert context.extra["tool_call_id"] == "call-1"
+            assert context.extra["approved_tool_call_ids"] == ["call-1"]
+            return SimpleNamespace(
+                output="written",
+                success=True,
+                error=None,
+                metadata={},
+            )
+
+    result = await tool_execute_node(
+        make_state(
+            phase="paused",
+            current_turn=2,
+            pending_tool_calls=[
+                {
+                    "id": "call-1",
+                    "name": "file_write",
+                    "input": {"path": "a.txt", "content": "hello"},
+                }
+            ],
+            approved_tool_call_ids=["call-1"],
+        ),
+        {"configurable": {"tool_registry": FakeToolRegistry(), "event_emitter": emitter}},
+    )
+
+    assert [event["event_type"] for event in emitter.events] == [
+        "phase:changed",
+        "tool:call",
+        "tool:result",
+    ]
+    assert result["awaiting_approval"] is False
+    assert result["pending_tool_calls"] == []
+    assert result["messages"][0].content == "written"
+    assert result["tool_results"]["call-1"]["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_tool_execute_node_delegates_non_plan_tools_when_plan_is_present() -> None:
+    emitter = RecordingEmitter()
+    executed_tools: list[str] = []
+
+    class FakeToolRegistry:
+        def resolve(self, _tool_name):
+            return SimpleNamespace(
+                policy=SimpleNamespace(requires_approval=False, risk_level="low")
+            )
+
+        async def execute(self, tool_name, tool_input, context):
+            executed_tools.append(tool_name)
+            return SimpleNamespace(
+                output="plan created",
+                success=True,
+                error=None,
+                metadata={
+                    "type": "plan",
+                    "goal": "goal",
+                    "execution_order": [1],
+                    "steps": [{"id": 1, "description": "step"}],
+                },
+            )
+
+    result = await tool_execute_node(
+        make_state(
+            pending_tool_calls=[
+                {"id": "call-search", "name": "web_search", "input": {"query": "news"}},
+                {"id": "call-plan", "name": "plan", "input": {"goal": "goal", "steps": ["step"]}},
+            ],
+        ),
+        {"configurable": {"tool_registry": FakeToolRegistry(), "event_emitter": emitter}},
+    )
+
+    assert executed_tools == ["plan"]
+    assert result["last_executed_tool_call_ids"] == ["call-plan"]
+    assert result["tool_results"]["call-search"]["status"] == "skipped"
+    assert result["tool_results"]["call-plan"]["status"] == "success"
 
 
 @pytest.mark.asyncio

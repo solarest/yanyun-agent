@@ -46,8 +46,15 @@ class SecurityMiddleware:
                     error="path_not_allowed",
                 )
 
-        # 审批检查（需要 HITL 支持）
+        # 审批检查：高风险工具必须由 tool_execute_node 暂停并在人审通过后
+        # 携带当前 tool_call_id 才允许真正执行。
         if tool.policy.requires_approval:
+            extra = context.extra if context else {}
+            tool_call_id = extra.get("tool_call_id")
+            approved_tool_call_ids = extra.get("approved_tool_call_ids") or []
+            if tool_call_id and tool_call_id in approved_tool_call_ids:
+                return await next_handler(tool, input, context)
+
             return ToolResult(
                 output=(
                     f"Tool '{tool.name}' requires user approval, "

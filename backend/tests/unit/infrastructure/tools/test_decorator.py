@@ -109,6 +109,15 @@ class TestPythonTypeToSchemaType:
 
     def test_unknown_type_defaults_to_string(self) -> None:
         assert _python_type_to_schema_type(bytes) == "string"
+    
+    def test_optional_list_str(self) -> None:
+        """测试 Optional[list[str]] 能正确识别为 array"""
+        from typing import Optional
+        assert _python_type_to_schema_type(Optional[list[str]]) == "array"
+    
+    def test_list_str(self) -> None:
+        """测试 list[str] 能正确识别为 array"""
+        assert _python_type_to_schema_type(list[str]) == "array"
 
 
 class TestToolDecorator:

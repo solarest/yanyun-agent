@@ -37,4 +37,8 @@ export const taskApi = {
   cancelTask: async (taskId: string): Promise<void> => {
     await apiClient.post(`/tasks/${taskId}/cancel`);
   },
+
+  resolveApproval: async (taskId: string, approved: boolean): Promise<void> => {
+    await apiClient.post(`/tasks/${taskId}/approval`, { approved });
+  },
 };

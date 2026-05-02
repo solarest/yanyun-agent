@@ -172,6 +172,18 @@ def _python_type_to_schema_type(py_type: Any) -> str:
         return "array"
     if origin is dict:
         return "object"
+    # 处理 Optional[T] 或 Union[T, None] - 提取实际类型
+    if origin is not None:
+        # Optional[X] 实际上是 Union[X, None]
+        # 获取第一个非 None 的类型参数
+        args = getattr(py_type, "__args__", None)
+        if args:
+            # 找到第一个不是 NoneType 的参数
+            for arg in args:
+                if arg is type(None):
+                    continue
+                # 递归处理实际类型
+                return _python_type_to_schema_type(arg)
     return type_map.get(py_type, "string")
 
 

@@ -9,7 +9,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from src.infrastructure.database.session import init_db
 from src.presentation.routes.llm_config import router as llm_router
-from src.presentation.routes.ping import router as ping_router
 from src.presentation.routes.sse_stream import router as sse_router
 from src.presentation.routes.tasks import router as tasks_router
 from src.presentation.routes.agents import router as agents_router
@@ -74,7 +73,6 @@ def create_app() -> FastAPI:
     )
 
     # 注册路由
-    app.include_router(ping_router)
     app.include_router(tasks_router)
     app.include_router(sse_router)
     app.include_router(llm_router)
@@ -92,6 +90,7 @@ def create_app() -> FastAPI:
 
     # 全局状态
     app.state.running_tasks = {}  # task_id -> asyncio.Task
+    app.state.approval_requests = {}  # task_id -> PendingApprovalContext
 
     @app.get("/health")
     async def health_check():

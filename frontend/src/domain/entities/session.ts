@@ -36,12 +36,16 @@ export interface SessionMessage {
 export interface ToolCallInfo {
   name: string;
   id: string;
+  args?: Record<string, unknown>;
+  input?: Record<string, unknown>;
 }
 
 export interface ToolResultInfo {
   tool_name: string;
+  id?: string;
   result: string;
   status: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface CreateSessionRequest {

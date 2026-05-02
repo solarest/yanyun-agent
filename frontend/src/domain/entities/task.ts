@@ -11,6 +11,7 @@ export type AgentPhase =
   | 'loop_correcting'
   | 'stuck_recovering'
   | 'context_compacting'
+  | 'paused'
   | 'complete'
   | 'failed'
   | 'cancelled';

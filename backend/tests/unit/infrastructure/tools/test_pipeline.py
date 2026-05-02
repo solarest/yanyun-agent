@@ -178,13 +178,32 @@ class TestSecurityMiddleware:
         assert result.error == "path_not_allowed"
 
     @pytest.mark.asyncio
-    async def test_blocks_tools_requiring_approval_until_hitl_exists(self) -> None:
+    async def test_blocks_tools_requiring_approval_without_hitl_approval(self) -> None:
         t = _make_tool(name="file_write", policy=ToolPolicy(requires_approval=True))
         mw = SecurityMiddleware()
         pipeline = ExecutionPipeline(middlewares=[mw])
         result = await pipeline.execute(t, {"msg": "ok"})
         assert result.success is False
         assert result.error == "approval_required"
+
+    @pytest.mark.asyncio
+    async def test_allows_tools_requiring_approval_with_matching_approved_call_id(self) -> None:
+        t = _make_tool(name="file_write", policy=ToolPolicy(requires_approval=True))
+        mw = SecurityMiddleware()
+        pipeline = ExecutionPipeline(middlewares=[mw])
+        result = await pipeline.execute(
+            t,
+            {"msg": "ok"},
+            ToolContext(
+                task_id="task-1",
+                extra={
+                    "tool_call_id": "call-1",
+                    "approved_tool_call_ids": ["call-1"],
+                },
+            ),
+        )
+        assert result.success is True
+        assert result.output == "ok"
 
 
 class TestSandboxMiddleware:

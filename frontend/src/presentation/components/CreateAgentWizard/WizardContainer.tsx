@@ -5,6 +5,7 @@ import React, { useState, useMemo } from 'react';
 import { StepIndicator } from './StepIndicator';
 import { IdentityModelStep } from './steps/IdentityModelStep';
 import { ToolsStep } from './steps/ToolsStep';
+import { AVATAR_COLOR_OPTIONS } from './LivePreview';
 import {
   useAgentGenerator,
   type GeneratedContent,
@@ -32,6 +33,7 @@ export const WizardContainer: React.FC<WizardContainerProps> = ({
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [vibes, setVibes] = useState<string[]>([]);
+  const [avatarColor, setAvatarColor] = useState<string>(AVATAR_COLOR_OPTIONS[0]);
   const [selectedTools, setSelectedTools] = useState<string[]>([]);
 
   const { generate } = useAgentGenerator();
@@ -94,10 +96,12 @@ export const WizardContainer: React.FC<WizardContainerProps> = ({
             name={name}
             description={description}
             vibes={vibes}
+            avatarColor={avatarColor}
             generated={generated}
             onNameChange={setName}
             onDescriptionChange={setDescription}
             onVibesChange={setVibes}
+            onAvatarColorChange={setAvatarColor}
           />
         )}
 

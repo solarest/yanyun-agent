@@ -16,17 +16,46 @@ from src.domain.entities.tool import ToolContext
 logger = logging.getLogger("tool.call")
 
 
+def _build_approval_request(tool_registry, tc: dict) -> dict | None:
+    tool_name = tc.get("name", "")
+    tool = tool_registry.resolve(tool_name) if hasattr(tool_registry, "resolve") else None
+    if tool is None or not getattr(tool.policy, "requires_approval", False):
+        return None
+
+    return {
+        "toolCallId": tc.get("id", ""),
+        "toolName": tool_name,
+        "input": tc.get("input", {}),
+        "riskLevel": getattr(tool.policy, "risk_level", "medium"),
+        "message": (
+            f"Tool '{tool_name}' needs approval before it can run."
+        ),
+    }
+
+
 async def _execute_single_tool(
     tool_registry,
     event_emitter,
     task_id: str,
     tc: dict,
     context: ToolContext,
+    approved_tool_call_ids: list[str],
 ) -> tuple[str, dict]:
     """执行单个工具调用，返回 (tool_call_id, result_dict)"""
     tool_call_id = tc.get("id", "")
     tool_name = tc.get("name", "")
     tool_input = tc.get("input", {})
+    tool_context = ToolContext(
+        task_id=context.task_id,
+        workspace=context.workspace,
+        user_id=context.user_id,
+        agent_id=context.agent_id,
+        extra={
+            **context.extra,
+            "tool_call_id": tool_call_id,
+            "approved_tool_call_ids": approved_tool_call_ids,
+        },
+    )
 
     await event_emitter.emit(
         task_id,
@@ -39,7 +68,7 @@ async def _execute_single_tool(
     )
 
     try:
-        result = await tool_registry.execute(tool_name, tool_input, context)
+        result = await tool_registry.execute(tool_name, tool_input, tool_context)
         status = "success" if result.success else "error"
         result_dict = {
             "tool_name": tool_name,
@@ -117,23 +146,59 @@ async def tool_execute_node(state: AgentState, config: RunnableConfig) -> dict:
     )
 
     pending_tools = state.get("pending_tool_calls", [])
+    plan_tool_names = {"plan", "plan_execute"}
+    plan_tools = [tc for tc in pending_tools if tc.get("name") in plan_tool_names]
+    execution_tools = plan_tools or pending_tools
     structured_results = dict(state.get("tool_results", {}))
     awaiting_user_input = False
+    awaiting_approval = False
+    approval_request = None
     final_result = state.get("final_result")
+    approved_tool_call_ids = list(state.get("approved_tool_call_ids", []))
+    last_executed_tool_call_ids: list[str] = []
 
-    # 并行执行所有工具调用
-    if pending_tools:
+    if plan_tools:
+        for tc in pending_tools:
+            if tc in execution_tools:
+                continue
+            tool_call_id = tc.get("id", "")
+            structured_results[tool_call_id] = {
+                "tool_name": tc.get("name", ""),
+                "status": "skipped",
+                "output": "Skipped because execution is delegated through the generated plan.",
+                "error": None,
+                "metadata": {"skipped_for_plan_execution": True},
+            }
+
+    for tc in execution_tools:
+        tool_call_id = tc.get("id", "")
+        if tool_call_id in approved_tool_call_ids:
+            continue
+        approval_request = _build_approval_request(tool_registry, tc)
+        if approval_request is not None:
+            awaiting_approval = True
+            final_result = approval_request["message"]
+            break
+
+    # 审批工具命中时暂停，不执行任何工具，等待用户确认后恢复
+    if execution_tools and not awaiting_approval:
         tasks = [
             _execute_single_tool(
-                tool_registry, event_emitter, task_id, tc, context
+                tool_registry,
+                event_emitter,
+                task_id,
+                tc,
+                context,
+                approved_tool_call_ids,
             )
-            for tc in pending_tools
+            for tc in execution_tools
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         for i, result in enumerate(results):
-            tc = pending_tools[i]
+            tc = execution_tools[i]
             tool_call_id = tc.get("id", "")
+            last_executed_tool_call_ids.append(tool_call_id)
             if isinstance(result, Exception):
                 # asyncio.gather 异常兜底
                 logger.exception(
@@ -158,6 +223,8 @@ async def tool_execute_node(state: AgentState, config: RunnableConfig) -> dict:
     tool_messages = []
     for tc in pending_tools:
         tool_call_id = tc.get("id", "")
+        if tool_call_id not in structured_results:
+            continue
         result_entry = structured_results.get(tool_call_id, {})
         content = result_entry.get("output") or result_entry.get("error") or "No result"
         # 防御性保障：LLM provider 不接受 content=None
@@ -170,8 +237,12 @@ async def tool_execute_node(state: AgentState, config: RunnableConfig) -> dict:
     return {
         "messages": tool_messages,
         "tool_results": structured_results,
-        "pending_tool_calls": [],
+        "pending_tool_calls": pending_tools if awaiting_approval else [],
         "awaiting_user_input": awaiting_user_input,
+        "awaiting_approval": awaiting_approval,
+        "approval_request": approval_request,
+        "approved_tool_call_ids": approved_tool_call_ids,
+        "last_executed_tool_call_ids": last_executed_tool_call_ids,
         "final_result": final_result,
         "phase": "tool_executing",
     }

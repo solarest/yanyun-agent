@@ -33,6 +33,10 @@ class AgentState(TypedDict):
     pending_tool_calls: List[Dict[str, Any]]
     tool_results: Dict[str, Dict[str, Any]]
     awaiting_user_input: bool
+    awaiting_approval: bool
+    approval_request: Optional[Dict[str, Any]]
+    approved_tool_call_ids: List[str]
+    last_executed_tool_call_ids: List[str]
 
     # === Loop 检测器状态 ===
     loop_detection_count: int
@@ -55,3 +59,16 @@ class AgentState(TypedDict):
     # === 结果 ===
     final_result: Optional[str]
     error: Optional[str]
+
+    # === Plan 执行状态 ===
+    plan: Optional[Dict[str, Any]]
+    """当前plan结构"""
+    
+    plan_results: Dict[int, Dict[str, Any]]
+    """各步骤执行结果 {step_id: result}"""
+    
+    is_sub_agent: bool
+    """是否为子Agent"""
+    
+    parent_task_id: Optional[str]
+    """父Agent的task_id(子Agent用)"""

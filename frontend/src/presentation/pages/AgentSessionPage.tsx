@@ -13,6 +13,7 @@ import { SessionSidebar } from '@presentation/components/chat/SessionSidebar';
 import { ChatHeader } from '@presentation/components/chat/ChatHeader';
 import { MessageList } from '@presentation/components/chat/MessageList';
 import { MessageInput } from '@presentation/components/chat/MessageInput';
+import { PlanStatusPanel } from '@presentation/components/chat/PlanStatusPanel';
 
 export const AgentSessionPage: React.FC = () => {
   const { id: agentId } = useParams<{ id: string }>();
@@ -40,9 +41,13 @@ export const AgentSessionPage: React.FC = () => {
     isSending,
     isStreaming,
     currentPhase,
+    currentPlan,
     error: chatError,
+    pendingApproval,
     sendMessage,
     cancelExecution,
+    approvePendingTool,
+    denyPendingTool,
   } = useChat({
     agentId: agentId || '',
     sessionId: currentSession?.id || null,
@@ -122,7 +127,10 @@ export const AgentSessionPage: React.FC = () => {
           session={currentSession}
           isStreaming={isStreaming}
           currentPhase={currentPhase}
+          pendingApprovalToolName={pendingApproval?.toolName || null}
           onCancel={cancelExecution}
+          onApprove={approvePendingTool}
+          onDeny={denyPendingTool}
         />
 
         {/* 错误提示 */}
@@ -132,15 +140,23 @@ export const AgentSessionPage: React.FC = () => {
           </div>
         )}
 
+        <PlanStatusPanel plan={currentPlan} />
+
         {/* 消息列表 */}
-        <MessageList messages={messages} isStreaming={isStreaming} />
+        <MessageList
+          messages={messages}
+          isStreaming={isStreaming}
+          onClarifyAnswer={handleSendMessage}
+        />
 
         {/* 输入框 */}
         <MessageInput
           onSend={handleSendMessage}
-          disabled={isSending || isStreaming}
+          disabled={isSending || isStreaming || currentPhase === 'paused'}
           placeholder={
-            !currentSession
+            currentPhase === 'paused'
+              ? 'Approval pending. Approve or deny the requested tool first...'
+              : !currentSession
               ? 'Send a message to start a new chat...'
               : 'Type a message...'
           }
