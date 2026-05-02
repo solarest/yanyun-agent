@@ -18,6 +18,13 @@ async_engine = create_async_engine(
 
 # Session 工厂 (同步)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=sync_engine)
+AsyncSessionLocal = sessionmaker(
+    bind=async_engine,
+    class_=AsyncSession,
+    autocommit=False,
+    autoflush=False,
+    expire_on_commit=False,
+)
 
 # Base 类用于声明 ORM 模型
 Base = declarative_base()
@@ -46,7 +53,7 @@ async def get_async_db():
         async def example(db: AsyncSession = Depends(get_async_db)):
             ...
     """
-    async with AsyncSession(async_engine) as session:
+    async with AsyncSessionLocal() as session:
         try:
             yield session
         finally:
@@ -54,8 +61,36 @@ async def get_async_db():
 
 
 def init_db():
-    """初始化数据库(创建所有表)"""
+    """初始化数据库(创建所有表 + 轻量列迁移)"""
     # 导入所有模型以注册
-    from src.infrastructure.database.models.agent_model import TaskModel, EventModel  # noqa: F401
+    from src.infrastructure.database.models.agent_model import (  # noqa: F401
+        TaskModel,
+        EventModel,
+        AgentModel,
+        SessionModel,
+        SessionMessageModel,
+    )
 
     Base.metadata.create_all(bind=sync_engine)
+
+    # 轻量列迁移：兼容旧库（避免重建数据库）
+    _ensure_column(
+        table="sse_events",
+        column="task_seq",
+        column_def="INTEGER NOT NULL DEFAULT 0",
+    )
+
+
+def _ensure_column(table: str, column: str, column_def: str) -> None:
+    """若表已存在但缺少指定列，则 ALTER TABLE 追加（SQLite 兼容）。"""
+    from sqlalchemy import text
+
+    with sync_engine.connect() as conn:
+        rows = conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
+        existing_cols = {row[1] for row in rows}
+        if not existing_cols:
+            # 表不存在（理论上 create_all 已建好；这里防御性退出）
+            return
+        if column not in existing_cols:
+            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {column_def}"))
+            conn.commit()

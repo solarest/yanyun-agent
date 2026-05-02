@@ -30,6 +30,10 @@ class CreateTaskDTO(BaseModel):
         default="gpt-4",
         description="使用的模型",
     )
+    agent_id: Optional[str] = Field(
+        default=None,
+        description="关联的 Agent ID",
+    )
 
 
 class TaskResponseDTO(BaseModel):
@@ -42,6 +46,7 @@ class TaskResponseDTO(BaseModel):
     model: str
     current_turn: int
     max_turns: int
+    agent_id: Optional[str] = None
     result: Optional[str] = None
     error: Optional[str] = None
     cost: Dict[str, Any] = {}
@@ -55,3 +60,9 @@ class TaskListResponseDTO(BaseModel):
 
     data: list[TaskResponseDTO]
     total: int
+
+
+class ApprovalDecisionDTO(BaseModel):
+    """审批决策请求 DTO"""
+
+    approved: bool = Field(..., description="是否批准工具执行")

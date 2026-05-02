@@ -2,7 +2,7 @@
 name = "ddd-backend"
 version = "0.1.0"
 description = "DDD Scaffold Backend"
-requires-python = ">=3.9"
+requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.104.0,<0.115.0",
     "uvicorn[standard]>=0.24.0",
@@ -20,18 +20,22 @@ dependencies = [
     "tiktoken>=0.5.0",
     "python-dotenv>=1.0.0",
     "aiosqlite>=0.19.0",
+    "greenlet>=3.2.5",
+    # 搜索工具
+    "tavily-python>=0.3.0",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+asyncio_mode = "auto"
 
 [tool.ruff]
 line-length = 100
-target-version = "py39"
+target-version = "py312"
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
@@ -39,5 +43,6 @@ disallow_untyped_defs = true
 [dependency-groups]
 dev = [
     "pytest>=8.4.2",
+    "pytest-asyncio>=1.0.0",
     "ruff>=0.15.11",
 ]

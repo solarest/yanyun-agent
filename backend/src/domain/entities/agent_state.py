@@ -20,24 +20,55 @@ class AgentState(TypedDict):
     task_id: str
     workspace: str
     user_message: str
+    task_start_message_count: int
 
     # === 控制流 ===
     current_turn: int
     max_turns: int
     phase: str
+    should_end: bool
+    is_complete: bool
 
     # === 工具调用 ===
     pending_tool_calls: List[Dict[str, Any]]
-    tool_results: Dict[str, str]
+    tool_results: Dict[str, Dict[str, Any]]
+    awaiting_user_input: bool
+    awaiting_approval: bool
+    approval_request: Optional[Dict[str, Any]]
+    approved_tool_call_ids: List[str]
+    last_executed_tool_call_ids: List[str]
 
-    # === 检测器状态 ===
+    # === Loop 检测器状态 ===
     loop_detection_count: int
+    loop_detected: bool
+    loop_type: Optional[str]
+
+    # === Stuck 检测器状态 ===
     stuck_detection_count: int
+    stuck_detected: bool
+    stuck_type: Optional[str]
 
     # === 流式输出 ===
     current_llm_text: str
+    empty_retry_count: int
+    planning_retry_count: int
+
+    # === 系统提示词 ===
+    system_prompt: str
 
     # === 结果 ===
     final_result: Optional[str]
     error: Optional[str]
-    should_end: bool
+
+    # === Plan 执行状态 ===
+    plan: Optional[Dict[str, Any]]
+    """当前plan结构"""
+    
+    plan_results: Dict[int, Dict[str, Any]]
+    """各步骤执行结果 {step_id: result}"""
+    
+    is_sub_agent: bool
+    """是否为子Agent"""
+    
+    parent_task_id: Optional[str]
+    """父Agent的task_id(子Agent用)"""

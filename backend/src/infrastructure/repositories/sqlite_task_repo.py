@@ -55,6 +55,8 @@ class SQLiteTaskRepository(ITaskRepository):
         model.cost = task.cost.to_dict()
         model.started_at = task.started_at
         model.completed_at = task.completed_at
+        model.agent_id = task.agent_id
+        model.session_id = task.session_id
 
         await self.session.commit()
         await self.session.refresh(model)
@@ -99,6 +101,8 @@ class SQLiteTaskRepository(ITaskRepository):
             created_at=model.created_at,
             started_at=model.started_at,
             completed_at=model.completed_at,
+            agent_id=model.agent_id,
+            session_id=model.session_id,
         )
 
     def _to_model(self, entity: Task) -> TaskModel:
@@ -121,4 +125,6 @@ class SQLiteTaskRepository(ITaskRepository):
             created_at=entity.created_at,
             started_at=entity.started_at,
             completed_at=entity.completed_at,
+            agent_id=entity.agent_id,
+            session_id=entity.session_id,
         )

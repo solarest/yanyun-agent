@@ -9,14 +9,22 @@ from langgraph.types import RunnableConfig
 from src.domain.entities.agent_state import AgentState
 
 
-# 完成声明的关键词
+# 完成声明的关键词（中英文）
 COMPLETION_PHRASES = [
+    # English
     "task complete",
     "i have completed",
     "i've completed",
     "the task is done",
     "everything is done",
     "all done",
+    # Chinese
+    "任务完成",
+    "已完成",
+    "全部完成",
+    "任务已完成",
+    "所有步骤已完成",
+    "工作已完成",
 ]
 
 
@@ -30,8 +38,8 @@ async def complete_check_node(state: AgentState, config: RunnableConfig) -> dict
     """完成检查节点
 
     1. 检查 LLM 是否声明完成
-    2. 如果声明完成，设置 final_result
-    3. 如果未完成，返回需要继续执行
+    2. 如果声明完成，设置 is_complete 和 final_result
+    3. 如果未完成，返回 is_complete=False
 
     Args:
         state: 当前 Agent 状态
@@ -55,7 +63,7 @@ async def complete_check_node(state: AgentState, config: RunnableConfig) -> dict
         return {
             "is_complete": True,
             "final_result": text,
-            "phase": "completed",
+            "phase": "complete",
         }
 
     return {"is_complete": False}

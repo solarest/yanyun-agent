@@ -1,5 +1,6 @@
 ---
-trigger: always_on
+trigger: glob
+glob: backend/**/*.py
 ---
 # Python 后端代码规范
 

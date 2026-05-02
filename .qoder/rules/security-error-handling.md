@@ -1,5 +1,6 @@
 ---
-trigger: always_on
+trigger: model_decision
+description: 编写api层时生效
 ---
 # 安全和错误处理规范
 
