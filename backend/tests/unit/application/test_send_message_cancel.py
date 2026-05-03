@@ -83,6 +83,12 @@ class FakeTaskRepository:
 class FakeToolRegistry:
     tool_count = 0
 
+    def register(self, tool):
+        pass
+
+    def get_tool_defs(self, category=None):
+        return []
+
 
 class BlockingGraph:
     async def ainvoke(self, _state, _config):

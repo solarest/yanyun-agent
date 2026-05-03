@@ -8,8 +8,9 @@ from src.infrastructure.llm.config import LLMSettings
 def test_llm_settings_default_values():
     """测试 LLM 配置的默认值"""
     with patch.dict("os.environ", {}, clear=True):
-        settings = LLMSettings()
-        
+        # 创建不加载 .env 文件的配置实例
+        settings = LLMSettings(_env_file=None)
+
         assert settings.default_provider == "openai"
         assert settings.default_model == "gpt-4"
         assert settings.default_temperature == 0.7
@@ -26,7 +27,7 @@ def test_llm_settings_from_env():
         "LLM_DEFAULT_TEMPERATURE": "0.9",
     }, clear=True):
         settings = LLMSettings()
-        
+
         assert settings.default_provider == "anthropic"
         assert settings.default_model == "claude-3-sonnet"
         assert settings.default_temperature == 0.9

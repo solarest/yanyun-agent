@@ -57,34 +57,29 @@ class AgentState(TypedDict):
     final_result: Optional[str]
     error: Optional[str]
 
-    # === Observation 状态（observe_node 写入）===
+    # === Observation 状态(loop_detect / stuck_detect 节点写入)===
     observation_summary: Optional[str]
-    """本轮观察文本总结（供调试/前端展示）"""
+    """本轮观察文本总结(供调试/前端展示)"""
 
     observation_quality: Optional[str]
-    """本轮观察总体质量：good / empty / partial / failed / mixed"""
+    """本轮观察总体质量:good / empty / partial / failed / mixed"""
 
     observation_items: List[Dict[str, Any]]
     """每个 tool_call 的观察详情"""
 
     consecutive_empty_observations: int
-    """连续空观察计数（触发语义循环检测）"""
+    """连续空观察计数(触发语义循环检测)"""
 
     last_error_category: Optional[str]
     """最近一次错误分类"""
 
-    route_hint: Optional[str]
-    """observe_node 给出的路由建议（llm_call / loop_detect / finalize）"""
+    # === 压缩策略 ===
+    compression_strategy: Optional[str]
+    """context_compact 使用的压缩策略：trim / summarize"""
 
-    # === Plan 执行状态 ===
-    plan: Optional[Dict[str, Any]]
-    """当前plan结构"""
-    
-    plan_results: Dict[int, Dict[str, Any]]
-    """各步骤执行结果 {step_id: result}"""
-    
+    # === Sub-Agent 状态 ===
     is_sub_agent: bool
     """是否为子Agent"""
-    
+
     parent_task_id: Optional[str]
     """父Agent的task_id(子Agent用)"""

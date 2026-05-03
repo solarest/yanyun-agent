@@ -102,6 +102,7 @@ async def test_llm_call_node_emits_phase_chunks_and_completion() -> None:
     assert result["messages"][0].content == "Hello world"
     assert result["phase"] == "thinking"
     assert result["current_turn"] == 1
+    assert result["last_executed_tool_call_ids"] == []
 
 
 @pytest.mark.asyncio
@@ -124,7 +125,8 @@ async def test_tool_execute_node_emits_phase_call_and_result() -> None:
         make_state(
             phase="thinking",
             current_turn=2,
-            pending_tool_calls=[{"id": "call-1", "name": "search", "input": {"q": "hello"}}],
+            pending_tool_calls=[
+                {"id": "call-1", "name": "search", "input": {"q": "hello"}}],
         ),
         {"configurable": {"tool_registry": FakeToolRegistry(), "event_emitter": emitter}},
     )
@@ -163,7 +165,8 @@ async def test_tool_execute_node_marks_awaiting_user_input_for_clarify_like_tool
         make_state(
             phase="thinking",
             current_turn=1,
-            pending_tool_calls=[{"id": "call-clarify", "name": "clarify", "input": {"question": "?"}}],
+            pending_tool_calls=[
+                {"id": "call-clarify", "name": "clarify", "input": {"question": "?"}}],
         ),
         {"configurable": {"tool_registry": FakeToolRegistry(), "event_emitter": emitter}},
     )
@@ -196,7 +199,8 @@ async def test_tool_execute_node_preserves_previous_tool_results() -> None:
                     "metadata": {},
                 }
             },
-            pending_tool_calls=[{"id": "call-new", "name": "search", "input": {"q": "hello"}}],
+            pending_tool_calls=[
+                {"id": "call-new", "name": "search", "input": {"q": "hello"}}],
         ),
         {"configurable": {"tool_registry": FakeToolRegistry(), "event_emitter": emitter}},
     )
@@ -220,7 +224,8 @@ async def test_tool_execute_node_preserves_previous_tool_results() -> None:
 
 
 @pytest.mark.asyncio
-async def test_tool_execute_node_delegates_non_plan_tools_when_plan_is_present() -> None:
+async def test_tool_execute_node_executes_all_tools_uniformly() -> None:
+    """plan 优先级已移除，所有工具统一执行"""
     emitter = RecordingEmitter()
     executed_tools: list[str] = []
 
@@ -242,16 +247,20 @@ async def test_tool_execute_node_delegates_non_plan_tools_when_plan_is_present()
     result = await tool_execute_node(
         make_state(
             pending_tool_calls=[
-                {"id": "call-search", "name": "web_search", "input": {"query": "news"}},
-                {"id": "call-plan", "name": "plan", "input": {"goal": "goal", "steps": ["step"]}},
+                {"id": "call-search", "name": "web_search",
+                    "input": {"query": "news"}},
+                {"id": "call-plan", "name": "plan",
+                    "input": {"goal": "goal", "steps": ["step"]}},
             ],
         ),
         {"configurable": {"tool_registry": FakeToolRegistry(), "event_emitter": emitter}},
     )
 
-    assert executed_tools == ["plan"]
-    assert result["last_executed_tool_call_ids"] == ["call-plan"]
-    assert result["tool_results"]["call-search"]["status"] == "skipped"
+    # 所有工具均被执行（不再有 plan 优先级跳过逻辑）
+    assert executed_tools == ["web_search", "plan"]
+    assert result["last_executed_tool_call_ids"] == [
+        "call-search", "call-plan"]
+    assert result["tool_results"]["call-search"]["status"] == "success"
     assert result["tool_results"]["call-plan"]["status"] == "success"
 
 
@@ -264,9 +273,12 @@ async def test_loop_detect_node_emits_loop_detected_and_phase_change() -> None:
             phase="thinking",
             current_turn=3,
             messages=[
-                {"role": "assistant", "tool_calls": [{"name": "search", "args": {"q": "x"}}]},
-                {"role": "assistant", "tool_calls": [{"name": "search", "args": {"q": "x"}}]},
-                {"role": "assistant", "tool_calls": [{"name": "search", "args": {"q": "x"}}]},
+                {"role": "assistant", "tool_calls": [
+                    {"name": "search", "args": {"q": "x"}}]},
+                {"role": "assistant", "tool_calls": [
+                    {"name": "search", "args": {"q": "x"}}]},
+                {"role": "assistant", "tool_calls": [
+                    {"name": "search", "args": {"q": "x"}}]},
             ],
         ),
         {"configurable": {"event_emitter": emitter}},
@@ -288,10 +300,14 @@ async def test_loop_detect_node_ignores_tool_history_before_current_task() -> No
         make_state(
             task_start_message_count=3,
             messages=[
-                {"role": "assistant", "tool_calls": [{"name": "search", "args": {"q": "x"}}]},
-                {"role": "assistant", "tool_calls": [{"name": "search", "args": {"q": "x"}}]},
-                {"role": "assistant", "tool_calls": [{"name": "search", "args": {"q": "x"}}]},
-                {"role": "assistant", "content": "new run", "tool_calls": [{"name": "search", "args": {"q": "y"}}]},
+                {"role": "assistant", "tool_calls": [
+                    {"name": "search", "args": {"q": "x"}}]},
+                {"role": "assistant", "tool_calls": [
+                    {"name": "search", "args": {"q": "x"}}]},
+                {"role": "assistant", "tool_calls": [
+                    {"name": "search", "args": {"q": "x"}}]},
+                {"role": "assistant", "content": "new run", "tool_calls": [
+                    {"name": "search", "args": {"q": "y"}}]},
             ],
         ),
         {"configurable": {"event_emitter": emitter}},
@@ -343,7 +359,9 @@ async def test_stuck_detect_node_ignores_text_history_before_current_task() -> N
         {"configurable": {"event_emitter": emitter}},
     )
 
-    assert result["stuck_detected"] is False
+    # 只有1条新的 assistant消息,不应检测到 stuck
+    assert result.get("stuck_detected") is None or result.get(
+        "stuck_detected") is False
     assert emitter.events == []
 
 
@@ -351,7 +369,8 @@ async def test_stuck_detect_node_ignores_text_history_before_current_task() -> N
 async def test_context_compact_node_emits_phase_and_compaction_event() -> None:
     emitter = RecordingEmitter()
     # 使用真实 LangChain 消息对象（带 id）以测试 RemoveMessage 逻辑
-    messages = [AIMessage(content=f"msg-{i}", id=f"msg-id-{i}") for i in range(12)]
+    messages = [
+        AIMessage(content=f"msg-{i}", id=f"msg-id-{i}") for i in range(12)]
 
     result = await context_compact_node(
         make_state(messages=messages, phase="thinking", current_turn=4),
@@ -365,4 +384,5 @@ async def test_context_compact_node_emits_phase_and_compaction_event() -> None:
     assert result["phase"] == "context_compacting"
     # 应该删除 messages[1:-10]（即 msg-1），保留第 1 条和最近 10 条
     assert all(isinstance(m, RemoveMessage) for m in result["messages"])
-    assert len(result["messages"]) == 1  # 12 - 1(first) - 10(recent) = 1 to remove
+    # 12 - 1(first) - 10(recent) = 1 to remove
+    assert len(result["messages"]) == 1

@@ -25,6 +25,8 @@ from src.domain.repositories.session_repository import ISessionRepository
 from src.domain.repositories.task_repository import ITaskRepository
 from src.domain.services import IEventEmitter
 from src.domain.services.prompt_builder import PromptBuilder
+from src.domain.entities.prompt_template import PromptTemplate
+from src.domain.services.prompt_assemble_service import PromptAssembleService
 from src.infrastructure.llm.model_factory import create_chat_model
 from src.infrastructure.tools.registry import ToolRegistry
 
@@ -200,7 +202,8 @@ class SendMessageUseCase:
         if tool_registry and tool_registry.tool_count > 0:
             tool_schemas = _tool_defs_to_openai_functions(tool_registry)
             llm = llm.bind_tools(tool_schemas)
-            logger.info("binding-tools agent %s Tool schemas: %s", agent_id, tool_schemas)
+            logger.info("binding-tools agent %s Tool schemas: %s",
+                        agent_id, tool_schemas)
         return llm
 
     def _build_graph_config(
@@ -246,7 +249,8 @@ class SendMessageUseCase:
                 for t in tc:
                     if isinstance(t, dict):
                         all_tool_calls.append(
-                            {"name": t.get("name", ""), "args": t.get("args", {}), "id": t.get("id", "")}
+                            {"name": t.get("name", ""), "args": t.get(
+                                "args", {}), "id": t.get("id", "")}
                         )
                     else:
                         all_tool_calls.append(
@@ -332,13 +336,41 @@ class SendMessageUseCase:
     ) -> None:
         """后台 Agent Loop Runner"""
         try:
-            # 步骤 A: 构建 system_prompt
+            # 步骤 A: 构建 system_prompt（使用 11 层 Prompt 架构）
             agent = await self.agent_repo.get_by_id(agent_id)
             if not agent:
                 raise ValueError(f"Agent {agent_id} not found")
 
-            system_prompt = PromptBuilder.build_system_prompt(agent)
-            logger.info("building-system_prompt agent %s System prompt: %s", agent_id, system_prompt)
+            # 使用新的 PromptAssembleService 组装 11 层 system_message
+            template = PromptTemplate.from_agent(agent)
+            assemble_service = PromptAssembleService()
+
+            # 从 ToolRegistry 获取 ToolDef 列表（用于 Layer 5 工具描述）
+            tool_defs = []
+            if self.tool_registry:
+                tool_defs = self.tool_registry.get_tool_defs()
+
+            assembly_result = assemble_service.assemble(
+                template=template,
+                tools=tool_defs,  # 注入工具定义到 Layer 5
+                skills=[],  # Skills 模块待实现
+                workspace=workspace,
+                environment={
+                    "platform": "darwin",
+                    "date": datetime.now().strftime("%Y-%m-%d"),
+                    "timezone": "Asia/Shanghai",
+                },
+                memory_enabled=bool(template.memory_md),
+            )
+            system_prompt = assembly_result.system_message
+
+            logger.info(
+                "[Prompt Assembly] agent=%s | layers=%s | total_tokens=%d | static_prefix_tokens=%d",
+                agent_id,
+                assembly_result.layers,
+                assembly_result.total_token_estimate,
+                assembly_result.static_prefix_tokens,
+            )
 
             # 步骤 B: 加载会话历史 → LangChain 消息格式
             # 注意：历史 AIMessage 不传 tool_calls，因为对应的 ToolMessage
@@ -354,9 +386,14 @@ class SendMessageUseCase:
                 elif msg.role == SessionMessageRole.ASSISTANT:
                     messages.append(AIMessage(content=msg.content or ""))
                 elif msg.role == SessionMessageRole.TOOL_SUMMARY:
-                    messages.append(HumanMessage(content=f"[Tool Results] {msg.content}"))
+                    messages.append(HumanMessage(
+                        content=f"[Tool Results] {msg.content}"))
 
             # 步骤 C: 创建 LLM 实例 + 绑定工具
+            # 注册闭包式 plan_execute 工具（替换静态工具定义）
+            if self.tool_registry:
+                plan_execute_tool = self._create_plan_execute_tool()
+                self.tool_registry.register(plan_execute_tool)
             llm = self._build_llm(model, self.tool_registry, agent_id)
 
             # 步骤 D: 构建初始 AgentState
@@ -387,11 +424,22 @@ class SendMessageUseCase:
                 "system_prompt": system_prompt,
                 "final_result": None,
                 "error": None,
+                "observation_summary": None,
+                "observation_quality": None,
+                "observation_items": [],
+                "consecutive_empty_observations": 0,
+                "last_error_category": None,
+                "route_hint": None,
+                "observe_mode": None,
+                "compression_strategy": None,
+                "is_sub_agent": False,
+                "parent_task_id": None,
             }
 
             # 步骤 E: 编译并执行 LangGraph
             graph = AgentWorkflowBuilder().build()
-            graph_config = self._build_graph_config(llm, self.tool_registry, agent_id, model)
+            graph_config = self._build_graph_config(
+                llm, self.tool_registry, agent_id, model)
 
             await self.event_emitter.emit(task.id, "task:started", {})
 
@@ -543,9 +591,14 @@ class SendMessageUseCase:
             "system_prompt": "",  # 子Agent使用默认system_prompt
             "final_result": None,
             "error": None,
-            # Plan相关字段
-            "plan": None,
-            "plan_results": {},
+            "observation_summary": None,
+            "observation_quality": None,
+            "observation_items": [],
+            "consecutive_empty_observations": 0,
+            "last_error_category": None,
+            "route_hint": None,
+            "observe_mode": None,
+            "compression_strategy": None,
             "is_sub_agent": True,
             "parent_task_id": parent_task_id,
         }
@@ -658,7 +711,8 @@ class SendMessageUseCase:
             sub_registry.register(tool)
 
         # 添加plan_update工具(需要绑定parent_task_id和step_id)
-        plan_update_tool = self._create_plan_update_tool(parent_task_id, step_id)
+        plan_update_tool = self._create_plan_update_tool(
+            parent_task_id, step_id)
         sub_registry.register(plan_update_tool)
 
         logger.info(
@@ -720,5 +774,163 @@ class SendMessageUseCase:
             name="plan_update",
             description="向主Agent报告当前plan步骤的完成状态。",
             func=plan_update_func,
+            category="plan",
+        )
+
+    def _create_plan_execute_tool(self) -> "RegisteredTool":
+        """创建闭包式 plan_execute 工具
+
+        捕获 self（SendMessageUseCase 实例）以访问 _run_sub_agent、event_emitter 等运行时依赖。
+        工具内部完成：输入验证 → 构建 Plan → 创建 PlanExecutor → 执行 → 返回 ToolResult。
+        """
+        from src.domain.entities.tool import RegisteredTool, ToolContext, ToolResult
+        from src.domain.entities.tool.definition import ToolParameter
+
+        use_case = self  # 闭包捕获
+
+        async def plan_execute_func(
+            input_data: dict,
+            context: Optional[ToolContext] = None,
+        ) -> ToolResult:
+            """创建并执行结构化计划，支持串行+并行混合执行"""
+            from src.application.use_cases.plan_executor import PlanExecutor
+            from src.domain.entities.plan import Plan, PlanStep, validate_plan
+
+            goal = input_data.get("goal", "").strip()
+            execution_order = input_data.get("execution_order", [])
+            steps_input = input_data.get("steps", [])
+
+            # 输入验证
+            if not goal:
+                return ToolResult(
+                    output="Error: goal cannot be empty",
+                    success=False,
+                    error="invalid_input",
+                )
+            if not execution_order:
+                return ToolResult(
+                    output="Error: execution_order cannot be empty",
+                    success=False,
+                    error="invalid_input",
+                )
+            if not steps_input:
+                return ToolResult(
+                    output="Error: steps cannot be empty",
+                    success=False,
+                    error="invalid_input",
+                )
+            for step in steps_input:
+                if "id" not in step or "description" not in step:
+                    return ToolResult(
+                        output="Error: each step must have 'id' and 'description'",
+                        success=False,
+                        error="invalid_input",
+                    )
+
+            # 构建 Plan 结构（原 plan_prepare_node 逻辑）
+            steps: Dict[int, PlanStep] = {}
+            for step_data in steps_input:
+                step_id = step_data["id"]
+                steps[step_id] = PlanStep(
+                    id=step_id,
+                    description=step_data["description"],
+                    depends_on=[],
+                    status="pending",
+                    result=None,
+                    sub_agent_task_id=None,
+                )
+
+            plan: Plan = Plan(
+                goal=goal,
+                steps=steps,
+                execution_order=execution_order,
+                current_index=0,
+                status="planning",
+            )
+
+            # 验证 Plan
+            error = validate_plan(plan)
+            if error:
+                return ToolResult(
+                    output=f"Plan validation failed: {error}",
+                    success=False,
+                    error="invalid_input",
+                )
+
+            # 构建虚拟 state 和 config 供 PlanExecutor 使用
+            task_id = context.task_id if context else "unknown"
+            workspace = context.workspace if context else "/tmp/agent-workspace"
+            agent_id = context.agent_id if context else ""
+
+            mock_state = {
+                "task_id": task_id,
+                "workspace": workspace,
+            }
+            mock_config = {
+                "configurable": {
+                    "event_emitter": use_case.event_emitter,
+                    "event_service": use_case.event_emitter,
+                    "send_message_use_case": use_case,
+                    "agent_id": agent_id,
+                    "llm_model": context.extra.get("llm_model") if context and context.extra else None,
+                }
+            }
+
+            # 执行 Plan
+            executor = PlanExecutor(max_parallel=5)
+            try:
+                result = await executor.execute_plan(
+                    plan=plan,
+                    main_agent_state=mock_state,
+                    main_config=mock_config,
+                )
+                summary = result["summary"]
+                return ToolResult(
+                    output=summary,
+                    metadata={
+                        "type": "plan_execute",
+                        "goal": goal,
+                        "step_count": len(steps),
+                        "step_results": {
+                            str(k): v for k, v in result.get("step_results", {}).items()
+                        },
+                    },
+                )
+            except Exception as e:
+                logger.exception("Plan execution failed in tool")
+                return ToolResult(
+                    output=f"Plan execution failed: {e}",
+                    success=False,
+                    error=str(e),
+                )
+
+        return RegisteredTool(
+            name="plan_execute",
+            description=(
+                "创建并执行结构化计划。支持串行+并行混合执行。"
+                "execution_order格式: [1,[2,3,4],5] 表示1串行,[2,3,4]并行,5串行。"
+            ),
+            func=plan_execute_func,
+            parameters=[
+                ToolParameter(
+                    name="goal",
+                    type="string",
+                    description="计划目标",
+                    required=True,
+                ),
+                ToolParameter(
+                    name="execution_order",
+                    type="array",
+                    description="执行顺序列表,整数表示串行,列表表示并行。如 [1, [2,3,4], 5]",
+                    required=True,
+                ),
+                ToolParameter(
+                    name="steps",
+                    type="array",
+                    description='步骤定义列表,每个步骤包含 {"id": int, "description": str}',
+                    required=True,
+                ),
+            ],
+            returns="plan执行结果汇总",
             category="plan",
         )

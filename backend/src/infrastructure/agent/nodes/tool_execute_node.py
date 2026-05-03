@@ -38,6 +38,13 @@ async def _execute_single_tool(
         },
     )
 
+    # 工具调用前日志
+    logger.info(
+        "[NODE:tool_execute] TOOL_CALL_INPUT | task_id=%s | tool_call_id=%s | "
+        "tool_name=%s | input=%s",
+        task_id, tool_call_id, tool_name, tool_input
+    )
+
     await event_emitter.emit(
         task_id,
         "tool:call",
@@ -58,6 +65,16 @@ async def _execute_single_tool(
             "error": result.error,
             "metadata": result.metadata,
         }
+
+        # 工具调用成功日志
+        output_preview = str(result.output)[
+            :200] if result.output else "(empty)"
+        logger.info(
+            "[NODE:tool_execute] TOOL_CALL_SUCCESS | task_id=%s | tool_call_id=%s | "
+            "tool_name=%s | status=%s | output_preview=%s",
+            task_id, tool_call_id, tool_name, status, output_preview
+        )
+
         await event_emitter.emit(
             task_id,
             "tool:result",
@@ -77,6 +94,14 @@ async def _execute_single_tool(
             "error": str(e),
             "metadata": {},
         }
+
+        # 工具调用失败日志
+        logger.error(
+            "[NODE:tool_execute] TOOL_CALL_ERROR | task_id=%s | tool_call_id=%s | "
+            "tool_name=%s | error=%s",
+            task_id, tool_call_id, tool_name, str(e)
+        )
+
         await event_emitter.emit(
             task_id,
             "tool:result",
@@ -127,28 +152,20 @@ async def tool_execute_node(state: AgentState, config: RunnableConfig) -> dict:
     )
 
     pending_tools = state.get("pending_tool_calls", [])
-    plan_tool_names = {"plan", "plan_execute"}
-    plan_tools = [tc for tc in pending_tools if tc.get("name") in plan_tool_names]
-    execution_tools = plan_tools or pending_tools
     structured_results = dict(state.get("tool_results", {}))
     awaiting_user_input = False
     final_result = state.get("final_result")
     last_executed_tool_call_ids: list[str] = []
 
-    if plan_tools:
-        for tc in pending_tools:
-            if tc in execution_tools:
-                continue
-            tool_call_id = tc.get("id", "")
-            structured_results[tool_call_id] = {
-                "tool_name": tc.get("name", ""),
-                "status": "skipped",
-                "output": "Skipped because execution is delegated through the generated plan.",
-                "error": None,
-                "metadata": {"skipped_for_plan_execution": True},
-            }
+    # Node 入口日志
+    logger.info(
+        "[NODE:tool_execute] START | task_id=%s | turn=%d | pending_tools_count=%d | "
+        "pending_tools=%s",
+        task_id, current_turn, len(pending_tools),
+        [tc.get("name") for tc in pending_tools]
+    )
 
-    if execution_tools:
+    if pending_tools:
         tasks = [
             _execute_single_tool(
                 tool_registry,
@@ -157,12 +174,12 @@ async def tool_execute_node(state: AgentState, config: RunnableConfig) -> dict:
                 tc,
                 context,
             )
-            for tc in execution_tools
+            for tc in pending_tools
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         for i, result in enumerate(results):
-            tc = execution_tools[i]
+            tc = pending_tools[i]
             tool_call_id = tc.get("id", "")
             last_executed_tool_call_ids.append(tool_call_id)
             if isinstance(result, Exception):
@@ -185,6 +202,18 @@ async def tool_execute_node(state: AgentState, config: RunnableConfig) -> dict:
                     awaiting_user_input = True
                     final_result = result_dict.get("output")
 
+    # Node 完成日志
+    success_count = sum(1 for r in structured_results.values()
+                        if r.get("status") == "success")
+    error_count = sum(1 for r in structured_results.values()
+                      if r.get("status") == "error")
+    logger.info(
+        "[NODE:tool_execute] COMPLETE | task_id=%s | turn=%d | "
+        "total_tools=%d | success=%d | error=%d | awaiting_user_input=%s",
+        task_id, current_turn, len(
+            structured_results), success_count, error_count, awaiting_user_input
+    )
+
     # 构建 ToolMessage 列表（LangChain 格式，确保 content 不为 None）
     tool_messages = []
     for tc in pending_tools:
@@ -192,7 +221,8 @@ async def tool_execute_node(state: AgentState, config: RunnableConfig) -> dict:
         if tool_call_id not in structured_results:
             continue
         result_entry = structured_results.get(tool_call_id, {})
-        content = result_entry.get("output") or result_entry.get("error") or "No result"
+        content = result_entry.get(
+            "output") or result_entry.get("error") or "No result"
         # 防御性保障：LLM provider 不接受 content=None
         if not isinstance(content, str):
             content = str(content)

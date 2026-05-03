@@ -43,6 +43,12 @@ async def llm_call_node(state: AgentState, config: RunnableConfig) -> dict:
     current_turn = state.get("current_turn", 0) + 1
     previous_phase = state.get("phase", "idle")
 
+    # Node 入口日志
+    logger.info(
+        "[NODE:llm_call] START | agent_id=%s | task_id=%s | turn=%d | previous_phase=%s",
+        agent_id, task_id, current_turn, previous_phase
+    )
+
     # 发射阶段变更事件（走 IEventEmitter 抽象，事件名为 phase:changed）
     await event_emitter.emit_phase_changed(
         task_id,
@@ -56,6 +62,10 @@ async def llm_call_node(state: AgentState, config: RunnableConfig) -> dict:
     system_prompt = state.get("system_prompt", "")
     if system_prompt and (not messages or not isinstance(messages[0], SystemMessage)):
         messages = [SystemMessage(content=system_prompt)] + messages
+        logger.info(
+            "[NODE:llm_call] SystemMessage injected | task_id=%s | turn=%d",
+            task_id, current_turn
+        )
 
     full_text = ""
     # 使用 AIMessageChunk 聚合来正确合并流式 tool_call_chunks
@@ -71,6 +81,19 @@ async def llm_call_node(state: AgentState, config: RunnableConfig) -> dict:
             "node_name": "llm_call_node",
         }
     }
+
+    # LLM 调用前日志：记录输入信息
+    message_count = len(messages)
+    has_tool_calls = any(
+        hasattr(msg, "tool_calls") and msg.tool_calls
+        for msg in messages
+    )
+    logger.info(
+        "[NODE:llm_call] LLM_CALL_INPUT | agent_id=%s | task_id=%s | turn=%d | "
+        "message_count=%d | has_tool_calls=%s | system_prompt=%s",
+        agent_id, task_id, current_turn, message_count, has_tool_calls, bool(
+            system_prompt)
+    )
 
     # LLM 流式调用超时保护（默认 5 分钟），防止网络异常导致 task 永久挂起
     llm_timeout_sec = config["configurable"].get("llm_timeout_sec", 300)
@@ -93,8 +116,9 @@ async def llm_call_node(state: AgentState, config: RunnableConfig) -> dict:
                     accumulated = accumulated + chunk
     except TimeoutError:
         logger.error(
-            "LLM streaming timed out after %ss for task %s turn %s",
-            llm_timeout_sec, task_id, current_turn,
+            "[NODE:llm_call] LLM_CALL_ERROR | agent_id=%s | task_id=%s | turn=%d | "
+            "error=timeout | timeout_sec=%d",
+            agent_id, task_id, current_turn, llm_timeout_sec,
         )
         return {
             "messages": [AIMessage(content=full_text or "LLM call timed out.")],
@@ -124,6 +148,15 @@ async def llm_call_node(state: AgentState, config: RunnableConfig) -> dict:
             "input": tc.get("args", {}),
         })
 
+    # LLM 调用后日志：记录输出信息
+    tool_call_names = [tc.get("name") for tc in pending_tool_calls]
+    logger.info(
+        "[NODE:llm_call] LLM_CALL_OUTPUT | agent_id=%s | task_id=%s | turn=%d | "
+        "response_length=%d | tool_call_count=%d | tool_calls=%s",
+        agent_id, task_id, current_turn, len(full_text), len(
+            pending_tool_calls), tool_call_names
+    )
+
     # 发射 LLM 完成事件（与前端 AgentEventStream 约定：llm:complete）
     await event_emitter.emit(
         task_id,
@@ -135,12 +168,21 @@ async def llm_call_node(state: AgentState, config: RunnableConfig) -> dict:
         },
     )
 
+    # Node 完成日志
+    logger.info(
+        "[NODE:llm_call] COMPLETE | agent_id=%s | task_id=%s | turn=%d | "
+        "phase=thinking | pending_tools=%d",
+        agent_id, task_id, current_turn, len(pending_tool_calls)
+    )
+
     # 返回状态更新（包含 pending_tool_calls 供 tool_execute_node 使用）
     return {
         "messages": [
             AIMessage(content=full_text, tool_calls=tool_calls_list or [])
         ],
         "pending_tool_calls": pending_tool_calls,
+        # 上一轮工具执行结果在此处失效，避免 observe 误走 Mode B。
+        "last_executed_tool_call_ids": [],
         "current_llm_text": full_text,
         "phase": "thinking",
         "current_turn": current_turn,
