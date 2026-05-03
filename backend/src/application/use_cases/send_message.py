@@ -592,6 +592,7 @@ class SendMessageUseCase:
                     "sub_task_id": initial_state["task_id"],
                     "step_id": step.get("id"),
                     "status": "failed" if sub_agent_failed else "completed",
+                    "result": result.get("final_result"),
                     "error": result.get("error"),
                 },
             )

@@ -160,6 +160,7 @@ export interface SubAgentPayload extends BaseEventPayload {
   step_id?: number;
   description?: string;
   status?: string;
+  result?: string | null;
   error?: string | null;
 }
 

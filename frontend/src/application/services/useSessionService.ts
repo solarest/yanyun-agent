@@ -122,6 +122,33 @@ export const useSessionService = (agentId: string) => {
     setMessages(prev => [...prev, msg]);
   }, []);
 
+  const upsertMessage = useCallback((msg: SessionMessage) => {
+    setMessages(prev => {
+      const index = prev.findIndex(item => item.id === msg.id);
+      if (index === -1) {
+        return [...prev, msg];
+      }
+
+      const next = [...prev];
+      next[index] = msg;
+      return next;
+    });
+  }, []);
+
+  const updateMessageById = useCallback((
+    messageId: string,
+    updater: (msg: SessionMessage) => SessionMessage,
+  ) => {
+    setMessages(prev => {
+      const index = prev.findIndex(item => item.id === messageId);
+      if (index === -1) return prev;
+
+      const next = [...prev];
+      next[index] = updater(next[index]);
+      return next;
+    });
+  }, []);
+
   /**
    * 更新消息列表中的最后一条 assistant 消息
    */
@@ -150,6 +177,8 @@ export const useSessionService = (agentId: string) => {
     deleteSession,
     setCurrentSession,
     appendMessage,
+    upsertMessage,
+    updateMessageById,
     updateLastAssistantMessage,
   };
 };

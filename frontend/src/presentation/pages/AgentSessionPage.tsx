@@ -33,6 +33,8 @@ export const AgentSessionPage: React.FC = () => {
     selectSession,
     deleteSession,
     appendMessage,
+    upsertMessage,
+    updateMessageById,
     updateLastAssistantMessage,
   } = useSessionService(agentId || '');
 
@@ -49,6 +51,8 @@ export const AgentSessionPage: React.FC = () => {
     agentId: agentId || '',
     sessionId: currentSession?.id || null,
     onAppendMessage: appendMessage,
+    onUpsertMessage: upsertMessage,
+    onUpdateMessageById: updateMessageById,
     onUpdateLastAssistant: updateLastAssistantMessage,
   });
 

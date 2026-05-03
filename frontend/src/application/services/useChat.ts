@@ -43,6 +43,11 @@ interface UseChatOptions {
   sessionId: string | null;
   onMessageSaved?: (msg: SessionMessage) => void;
   onAppendMessage?: (msg: SessionMessage) => void;
+  onUpsertMessage?: (msg: SessionMessage) => void;
+  onUpdateMessageById?: (
+    messageId: string,
+    updater: (msg: SessionMessage) => SessionMessage,
+  ) => void;
   onUpdateLastAssistant?: (updater: (msg: SessionMessage) => SessionMessage) => void;
 }
 
@@ -169,11 +174,31 @@ export const useChat = ({
   sessionId,
   onMessageSaved,
   onAppendMessage,
+  onUpsertMessage,
+  onUpdateMessageById,
   onUpdateLastAssistant,
 }: UseChatOptions) => {
   const [state, setState] = useState<ChatState>(INITIAL_STATE);
 
   const streamRef = useRef<AgentEventStream | null>(null);
+  const subStreamsRef = useRef<Map<string, AgentEventStream>>(new Map());
+  const mainMessageIdRef = useRef<string | null>(null);
+
+  const updateMessage = useCallback((
+    messageId: string | null,
+    updater: (msg: SessionMessage) => SessionMessage,
+  ) => {
+    if (messageId && onUpdateMessageById) {
+      onUpdateMessageById(messageId, updater);
+      return;
+    }
+    onUpdateLastAssistant?.(updater);
+  }, [onUpdateLastAssistant, onUpdateMessageById]);
+
+  const disconnectSubStreams = useCallback(() => {
+    subStreamsRef.current.forEach((stream) => stream.disconnect());
+    subStreamsRef.current.clear();
+  }, []);
 
   const disconnectStream = useCallback(() => {
     if (streamRef.current) {
@@ -181,6 +206,108 @@ export const useChat = ({
       streamRef.current = null;
     }
   }, []);
+
+  const disconnectAllStreams = useCallback(() => {
+    disconnectStream();
+    disconnectSubStreams();
+  }, [disconnectStream, disconnectSubStreams]);
+
+  const bindMessageStream = useCallback((
+    stream: AgentEventStream,
+    messageId: string,
+    onChunk?: (chunk: string) => void,
+  ) => {
+    stream.on('llm:chunk', (data) => {
+      const chunk = data.text || '';
+      if (!chunk) return;
+      onChunk?.(chunk);
+      updateMessage(messageId, (msg) => ({
+        ...msg,
+        content: msg.content + chunk,
+      }));
+    });
+
+    stream.on('tool:call', (data) => {
+      updateMessage(messageId, (msg) => ({
+        ...msg,
+        tool_calls: [
+          ...msg.tool_calls,
+          {
+            name: data.toolName || '',
+            id: data.toolCallId || '',
+            input: data.input || {},
+          },
+        ],
+      }));
+    });
+
+    stream.on('tool:result', (data) => {
+      updateMessage(messageId, (msg) => ({
+        ...msg,
+        tool_results: [
+          ...msg.tool_results,
+          {
+            tool_name: data.toolName || '',
+            id: data.toolCallId || '',
+            status: data.status || 'success',
+            result: data.output ?? data.error ?? '',
+          },
+        ],
+      }));
+    });
+  }, [updateMessage]);
+
+  const connectSubAgentStream = useCallback((
+    subTaskId: string,
+    stepId?: number,
+    description?: string,
+  ) => {
+    if (!sessionId || subStreamsRef.current.has(subTaskId)) return;
+
+    const message: SessionMessage = {
+      id: subTaskId,
+      session_id: sessionId,
+      task_id: subTaskId,
+      role: 'assistant',
+      content: '',
+      tool_calls: [],
+      tool_results: [],
+      status: 'streaming',
+      error: null,
+      cost: {},
+      created_at: new Date().toISOString(),
+      meta: {
+        isSubAgent: true,
+        stepId,
+        title: description,
+      },
+    };
+    onUpsertMessage?.(message);
+
+    const stream = new AgentEventStream(window.location.origin, subTaskId);
+    subStreamsRef.current.set(subTaskId, stream);
+    bindMessageStream(stream, subTaskId);
+    stream.connect();
+  }, [bindMessageStream, onUpsertMessage, sessionId]);
+
+  const finalizeSubAgentMessage = useCallback((
+    subTaskId: string,
+    status: 'completed' | 'error',
+    result?: string | null,
+    error?: string | null,
+  ) => {
+    updateMessage(subTaskId, (msg) => ({
+      ...msg,
+      content: msg.content || result || error || '',
+      status,
+      error: error || null,
+    }));
+    const subStream = subStreamsRef.current.get(subTaskId);
+    if (subStream) {
+      subStream.disconnect();
+      subStreamsRef.current.delete(subTaskId);
+    }
+  }, [updateMessage]);
 
   /**
    * 发送消息
@@ -234,22 +361,15 @@ export const useChat = ({
         }));
 
         // 4. 连接 SSE 订阅任务事件
-        disconnectStream();
+        disconnectAllStreams();
         const stream = new AgentEventStream(window.location.origin, task_id);
         streamRef.current = stream;
+        mainMessageIdRef.current = placeholderMsg.id;
 
-        // —— LLM 流式增量输出 ——
-        // 后端字段为 `text`（见 backend/src/infrastructure/agent/nodes/llm_call_node.py）
-        stream.on('llm:chunk', (data) => {
-          const chunk = data.text || '';
-          if (!chunk) return;
+        bindMessageStream(stream, placeholderMsg.id, (chunk) => {
           setState((prev) => ({
             ...prev,
             streamingContent: prev.streamingContent + chunk,
-          }));
-          onUpdateLastAssistant?.((msg) => ({
-            ...msg,
-            content: msg.content + chunk,
           }));
         });
 
@@ -273,18 +393,6 @@ export const useChat = ({
               ),
             }));
           }
-
-          onUpdateLastAssistant?.((msg) => ({
-            ...msg,
-            tool_calls: [
-              ...msg.tool_calls,
-              {
-                name: data.toolName || '',
-                id: data.toolCallId || '',
-                input: data.input || {},
-              },
-            ],
-          }));
         });
 
         // —— 工具结果 —— 追加到 tool_results
@@ -300,19 +408,6 @@ export const useChat = ({
                 : prev.currentPlan,
             }));
           }
-
-          onUpdateLastAssistant?.((msg) => ({
-            ...msg,
-            tool_results: [
-              ...msg.tool_results,
-              {
-                tool_name: data.toolName || '',
-                id: data.toolCallId || '',
-                status: data.status || 'success',
-                result: data.output ?? data.error ?? '',
-              },
-            ],
-          }));
         });
 
         stream.on('plan:created', (data) => {
@@ -414,8 +509,38 @@ export const useChat = ({
           const savedMsg = data.message;
           if (savedMsg) {
             onMessageSaved?.(savedMsg);
-            onUpdateLastAssistant?.(() => savedMsg);
+            updateMessage(mainMessageIdRef.current, () => savedMsg);
+            mainMessageIdRef.current = savedMsg.id;
           }
+        });
+
+        stream.on('sub_agent:started', (data) => {
+          if (!data.sub_task_id) return;
+          connectSubAgentStream(
+            data.sub_task_id,
+            data.step_id,
+            data.description,
+          );
+        });
+
+        stream.on('sub_agent:completed', (data) => {
+          if (!data.sub_task_id) return;
+          finalizeSubAgentMessage(
+            data.sub_task_id,
+            'completed',
+            data.result,
+            data.error,
+          );
+        });
+
+        stream.on('sub_agent:failed', (data) => {
+          if (!data.sub_task_id) return;
+          finalizeSubAgentMessage(
+            data.sub_task_id,
+            'error',
+            data.result,
+            data.error,
+          );
         });
 
         // —— 任务完成 ——
@@ -426,7 +551,8 @@ export const useChat = ({
             currentPhase: 'complete',
             currentTaskId: null,
           }));
-          disconnectStream();
+          mainMessageIdRef.current = null;
+          disconnectAllStreams();
         });
 
         // —— 任务取消 ——
@@ -438,12 +564,13 @@ export const useChat = ({
             currentPhase: 'cancelled',
             currentTaskId: null,
           }));
-          onUpdateLastAssistant?.((msg) => ({
+          updateMessage(mainMessageIdRef.current, (msg) => ({
             ...msg,
             status: 'error',
             error: errorMsg,
           }));
-          disconnectStream();
+          mainMessageIdRef.current = null;
+          disconnectAllStreams();
         });
 
         // —— 任务失败 ——
@@ -456,12 +583,13 @@ export const useChat = ({
             error: errorMsg,
             currentTaskId: null,
           }));
-          onUpdateLastAssistant?.((msg) => ({
+          updateMessage(mainMessageIdRef.current, (msg) => ({
             ...msg,
             status: 'error',
             error: errorMsg,
           }));
-          disconnectStream();
+          mainMessageIdRef.current = null;
+          disconnectAllStreams();
         });
 
         stream.connect();
@@ -477,7 +605,17 @@ export const useChat = ({
         }));
       }
     },
-    [agentId, sessionId, onAppendMessage, onUpdateLastAssistant, onMessageSaved, disconnectStream],
+    [
+      agentId,
+      sessionId,
+      onAppendMessage,
+      onMessageSaved,
+      bindMessageStream,
+      connectSubAgentStream,
+      disconnectAllStreams,
+      finalizeSubAgentMessage,
+      updateMessage,
+    ],
   );
 
   /**
@@ -495,14 +633,15 @@ export const useChat = ({
   // 组件卸载时断开连接
   useEffect(() => {
     return () => {
-      disconnectStream();
+      disconnectAllStreams();
     };
-  }, [disconnectStream]);
+  }, [disconnectAllStreams]);
 
   useEffect(() => {
     setState(INITIAL_STATE);
-    disconnectStream();
-  }, [sessionId, disconnectStream]);
+    mainMessageIdRef.current = null;
+    disconnectAllStreams();
+  }, [sessionId, disconnectAllStreams]);
 
   return {
     ...state,

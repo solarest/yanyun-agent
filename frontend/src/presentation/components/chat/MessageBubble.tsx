@@ -92,6 +92,9 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   const toolTimeline = buildToolTimeline(visibleToolCalls, visibleToolResults);
   const hasVisibleTools = toolTimeline.length > 0;
   const displayContent = content;
+  const subAgentLabel = message.meta?.isSubAgent
+    ? `Plan ${message.meta.stepId || '?'}`
+    : null;
 
   if (!isUser && clarifyPrompt && !content.trim() && !hasVisibleTools) {
     return (
@@ -117,6 +120,13 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
               : 'bg-accent text-foreground'
         }`}
       >
+        {!isUser && subAgentLabel && (
+          <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            {subAgentLabel}
+            {message.meta?.title ? ` · ${message.meta.title}` : ' · Sub-agent'}
+          </div>
+        )}
+
         {/* 工具调用摘要 */}
         {!isUser && hasVisibleTools && (
           <div className="mb-2 space-y-2 border-b border-border/50 pb-2">
