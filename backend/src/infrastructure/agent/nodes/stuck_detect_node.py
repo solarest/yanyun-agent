@@ -508,7 +508,8 @@ async def stuck_detect_node(state: AgentState, config: RunnableConfig) -> dict:
     logger.info(
         "[NODE:stuck_detect] TEXT_EVAL | task_id=%s | turn=%d | "
         "category=%s | route=%s | text_length=%d",
-        task_id, current_turn, text_eval["category"], text_eval["route"], len(text)
+        task_id, current_turn, text_eval["category"], text_eval["route"], len(
+            text)
     )
 
     # 处理空响应
