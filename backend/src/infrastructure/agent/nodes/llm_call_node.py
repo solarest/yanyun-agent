@@ -133,11 +133,8 @@ async def llm_call_node(state: AgentState, config: RunnableConfig) -> dict:
     # 从聚合后的消息中提取完整的 tool_calls
     tool_calls_list = []
     if accumulated and hasattr(accumulated, "tool_calls") and accumulated.tool_calls:
-        # 过滤掉无效的工具调用（无名称或无 ID）
-        tool_calls_list = [
-            tc for tc in accumulated.tool_calls
-            if tc.get("name") and tc.get("id")
-        ]
+        # 不再过滤无效工具调用，保留给 loop_detect 检测
+        tool_calls_list = accumulated.tool_calls
 
     # 解析 tool_calls 为 pending_tool_calls 格式
     pending_tool_calls = []

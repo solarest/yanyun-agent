@@ -289,6 +289,53 @@ async def test_loop_detect_node_emits_loop_detected_and_phase_change() -> None:
         "phase:changed",
     ]
     assert result["loop_detected"] is True
+    assert result["loop_type"] == "exact_tool_repeat"
+    assert result["phase"] == "loop_correcting"
+
+
+@pytest.mark.asyncio
+async def test_loop_detect_invalid_tool_calls() -> None:
+    """测试无效工具调用检测（缺少 name 或 id）"""
+    emitter = RecordingEmitter()
+
+    result = await loop_detect_node(
+        make_state(
+            pending_tool_calls=[
+                {"id": "", "name": "search", "input": {"q": "x"}},  # 缺少 id
+            ],
+        ),
+        {"configurable": {"event_emitter": emitter}},
+    )
+
+    assert result["loop_detected"] is True
+    assert result["loop_type"] == "invalid_tool_call"
+    assert result["loop_detection_count"] == 1
+    assert result["phase"] == "loop_correcting"
+
+
+@pytest.mark.asyncio
+async def test_loop_detect_alternating_pattern() -> None:
+    """测试 A-B-A-B 交替模式检测"""
+    emitter = RecordingEmitter()
+
+    result = await loop_detect_node(
+        make_state(
+            messages=[
+                {"role": "assistant", "tool_calls": [
+                    {"name": "read_file", "args": {"path": "a.txt"}}]},
+                {"role": "assistant", "tool_calls": [
+                    {"name": "grep_search", "args": {"query": "x"}}]},
+                {"role": "assistant", "tool_calls": [
+                    {"name": "read_file", "args": {"path": "a.txt"}}]},
+                {"role": "assistant", "tool_calls": [
+                    {"name": "grep_search", "args": {"query": "x"}}]},
+            ],
+        ),
+        {"configurable": {"event_emitter": emitter}},
+    )
+
+    assert result["loop_detected"] is True
+    assert result["loop_type"] == "alternating_pattern"
     assert result["phase"] == "loop_correcting"
 
 

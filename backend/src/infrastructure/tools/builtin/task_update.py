@@ -1,6 +1,6 @@
-"""基础设施层 - Plan更新工具
+"""基础设施层 - 任务更新工具
 
-子Agent通过此工具向主Agent报告plan步骤的完成状态。
+更新已创建任务的执行状态和结果。
 """
 
 import logging
@@ -13,22 +13,22 @@ logger = logging.getLogger(__name__)
 
 
 @tool(
-    name="plan_update",
-    description="向主Agent报告当前plan步骤的完成状态。仅子Agent使用。",
-    category="plan",
+    name="task_update",
+    description="更新任务的完成状态。在子任务执行完成后调用此工具记录结果。",
+    category="task",
     returns="更新确认",
     timeout_ms=3000,
 )
-async def plan_update(
-    step_id: int,
+async def task_update(
+    task_id: int,
     status: str,
     result: str,
     context: Optional[ToolContext] = None,
 ) -> ToolResult:
-    """更新plan步骤状态
-    
+    """更新任务状态
+
     Args:
-        step_id: 步骤ID
+        task_id: 任务ID
         status: 完成状态 (completed | failed)
         result: 执行结果摘要
     """
@@ -38,14 +38,14 @@ async def plan_update(
             success=False,
             error="invalid_input",
         )
-    
+
     if not result.strip():
         return ToolResult(
             output="Error: result cannot be empty",
             success=False,
             error="invalid_input",
         )
-    
+
     # 验证context
     if not context or not context.task_id:
         return ToolResult(
@@ -53,14 +53,14 @@ async def plan_update(
             success=False,
             error="invalid_context",
         )
-    
+
     # 注意: 实际的事件发射将在tool_execute_node中通过metadata传递
     # 这里只返回确认信息
     return ToolResult(
-        output=f"Step {step_id} marked as {status}. Result recorded.",
+        output=f"Task {task_id} marked as {status}. Result recorded.",
         metadata={
-            "type": "plan_update",
-            "step_id": step_id,
+            "type": "task_update",
+            "task_id": task_id,
             "status": status,
             "result": result,
             "awaiting_user_input": False,

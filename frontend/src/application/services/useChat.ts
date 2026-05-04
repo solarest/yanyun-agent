@@ -10,21 +10,21 @@ import { AgentEventStream } from '@infrastructure/api/eventStream';
 import type { SessionMessage, SendMessageRequest } from '@domain/entities/session';
 import type { AgentPhase } from '@domain/entities/task';
 
-export type PlanStepStatus = 'pending' | 'running' | 'completed' | 'failed';
-export type PlanStatus = 'planning' | 'executing' | 'completed' | 'failed';
+export type TaskStepStatus = 'pending' | 'running' | 'completed' | 'failed';
+export type TaskStatus = 'planning' | 'executing' | 'completed' | 'failed';
 
-export interface PlanStepProgress {
+export interface TaskStepProgress {
   id: number;
   description: string;
-  status: PlanStepStatus;
+  status: TaskStepStatus;
   result?: string | null;
   error?: string | null;
 }
 
-export interface PlanProgress {
+export interface TaskProgress {
   goal: string;
-  steps: PlanStepProgress[];
-  status: PlanStatus;
+  steps: TaskStepProgress[];
+  status: TaskStatus;
   executionOrder?: unknown[];
 }
 
@@ -35,7 +35,7 @@ export interface ChatState {
   currentPhase: AgentPhase;
   currentTaskId: string | null;
   error: string | null;
-  currentPlan: PlanProgress | null;
+  currentTask: TaskProgress | null;
 }
 
 interface UseChatOptions {
@@ -58,10 +58,10 @@ const INITIAL_STATE: ChatState = {
   currentPhase: 'idle',
   currentTaskId: null,
   error: null,
-  currentPlan: null,
+  currentTask: null,
 };
 
-const PLAN_TOOL_NAMES = new Set(['plan', 'plan_execute']);
+const TASK_TOOL_NAMES = new Set(['task_create']);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -74,7 +74,7 @@ const toNumberValue = (value: unknown, fallback: number): number => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
 
-const normalizePlanSteps = (rawSteps: unknown): PlanStepProgress[] => {
+const normalizeTaskSteps = (rawSteps: unknown): TaskStepProgress[] => {
   if (!Array.isArray(rawSteps)) return [];
 
   return rawSteps.map((step, index) => {
@@ -98,15 +98,15 @@ const normalizePlanSteps = (rawSteps: unknown): PlanStepProgress[] => {
   });
 };
 
-const buildPlanFromToolInput = (
+const buildTaskFromToolInput = (
   toolName: string,
   input: Record<string, unknown>,
-  previousPlan: PlanProgress | null,
-): PlanProgress | null => {
-  if (!PLAN_TOOL_NAMES.has(toolName)) return null;
+  previousTask: TaskProgress | null,
+): TaskProgress | null => {
+  if (!TASK_TOOL_NAMES.has(toolName)) return null;
 
-  const incomingSteps = normalizePlanSteps(input.steps);
-  const previousSteps = new Map(previousPlan?.steps.map((step) => [step.id, step]));
+  const incomingSteps = normalizeTaskSteps(input.steps);
+  const previousSteps = new Map(previousTask?.steps.map((step) => [step.id, step]));
   const steps = incomingSteps.map((step) => ({
     ...step,
     status: previousSteps.get(step.id)?.status || step.status,
@@ -115,36 +115,36 @@ const buildPlanFromToolInput = (
   }));
 
   return {
-    goal: toStringValue(input.goal) || previousPlan?.goal || 'Plan',
+    goal: toStringValue(input.goal) || previousTask?.goal || 'Task',
     steps,
     status: 'planning',
     executionOrder: Array.isArray(input.execution_order)
       ? input.execution_order
-      : previousPlan?.executionOrder,
+      : previousTask?.executionOrder,
   };
 };
 
-const ensurePlan = (plan: PlanProgress | null): PlanProgress => ({
-  goal: plan?.goal || 'Plan',
-  steps: plan?.steps || [],
-  status: plan?.status || 'planning',
-  executionOrder: plan?.executionOrder,
+const ensureTask = (task: TaskProgress | null): TaskProgress => ({
+  goal: task?.goal || 'Task',
+  steps: task?.steps || [],
+  status: task?.status || 'planning',
+  executionOrder: task?.executionOrder,
 });
 
-const updatePlanStep = (
-  plan: PlanProgress | null,
+const updateTaskStep = (
+  task: TaskProgress | null,
   stepId: number,
-  updater: (step: PlanStepProgress) => PlanStepProgress,
+  updater: (step: TaskStepProgress) => TaskStepProgress,
   description?: string,
-): PlanProgress => {
-  const currentPlan = ensurePlan(plan);
-  const stepIndex = currentPlan.steps.findIndex((step) => step.id === stepId);
+): TaskProgress => {
+  const currentTask = ensureTask(task);
+  const stepIndex = currentTask.steps.findIndex((step) => step.id === stepId);
 
   if (stepIndex === -1) {
     return {
-      ...currentPlan,
+      ...currentTask,
       steps: [
-        ...currentPlan.steps,
+        ...currentTask.steps,
         updater({
           id: stepId,
           description: description || `Step ${stepId}`,
@@ -157,8 +157,8 @@ const updatePlanStep = (
   }
 
   return {
-    ...currentPlan,
-    steps: currentPlan.steps.map((step) =>
+    ...currentTask,
+    steps: currentTask.steps.map((step) =>
       step.id === stepId
         ? updater({
             ...step,
@@ -322,7 +322,7 @@ export const useChat = ({
         error: null,
         streamingContent: '',
         currentPhase: 'idle',
-        currentPlan: null,
+        currentTask: null,
       }));
 
       try {
@@ -383,13 +383,13 @@ export const useChat = ({
 
         // —— 工具调用 —— 后端字段为 `toolName` / `toolCallId`
         stream.on('tool:call', (data) => {
-          if (PLAN_TOOL_NAMES.has(data.toolName || '')) {
+          if (TASK_TOOL_NAMES.has(data.toolName || '')) {
             setState((prev) => ({
               ...prev,
-              currentPlan: buildPlanFromToolInput(
+              currentTask: buildTaskFromToolInput(
                 data.toolName || '',
                 data.input || {},
-                prev.currentPlan,
+                prev.currentTask,
               ),
             }));
           }
@@ -397,37 +397,37 @@ export const useChat = ({
 
         // —— 工具结果 —— 追加到 tool_results
         stream.on('tool:result', (data) => {
-          if (PLAN_TOOL_NAMES.has(data.toolName || '')) {
+          if (TASK_TOOL_NAMES.has(data.toolName || '')) {
             setState((prev) => ({
               ...prev,
-              currentPlan: prev.currentPlan
+              currentTask: prev.currentTask
                 ? {
-                    ...prev.currentPlan,
+                    ...prev.currentTask,
                     status: data.status === 'error' ? 'failed' : 'executing',
                   }
-                : prev.currentPlan,
+                : prev.currentTask,
             }));
           }
         });
 
-        stream.on('plan:created', (data) => {
+        stream.on('step:created', (data) => {
           setState((prev) => ({
             ...prev,
-            currentPlan: {
-              ...ensurePlan(prev.currentPlan),
-              goal: data.goal || prev.currentPlan?.goal || 'Plan',
+            currentTask: {
+              ...ensureTask(prev.currentTask),
+              goal: data.goal || prev.currentTask?.goal || 'Task',
               status: 'executing',
-              executionOrder: data.execution_order || prev.currentPlan?.executionOrder,
+              executionOrder: data.execution_order || prev.currentTask?.executionOrder,
             },
           }));
         });
 
-        stream.on('plan:step_started', (data) => {
+        stream.on('step:started', (data) => {
           setState((prev) => ({
             ...prev,
-            currentPlan: {
-              ...updatePlanStep(
-                prev.currentPlan,
+            currentTask: {
+              ...updateTaskStep(
+                prev.currentTask,
                 data.step_id,
                 (step) => ({ ...step, status: 'running' }),
                 data.description,
@@ -437,14 +437,14 @@ export const useChat = ({
           }));
         });
 
-        stream.on('plan:step_completed', (data) => {
-          const status: PlanStepStatus =
+        stream.on('step:completed', (data) => {
+          const status: TaskStepStatus =
             data.status === 'failed' ? 'failed' : 'completed';
           setState((prev) => ({
             ...prev,
-            currentPlan: updatePlanStep(
+            currentTask: updateTaskStep(
               {
-                ...ensurePlan(prev.currentPlan),
+                ...ensureTask(prev.currentTask),
                 status: status === 'failed' ? 'failed' : 'executing',
               },
               data.step_id,
@@ -458,15 +458,15 @@ export const useChat = ({
           }));
         });
 
-        stream.on('plan:parallel_group_started', (data) => {
+        stream.on('step:parallel_group_started', (data) => {
           setState((prev) => {
-            const basePlan = ensurePlan(prev.currentPlan);
+            const baseTask = ensureTask(prev.currentTask);
             return {
               ...prev,
-              currentPlan: {
-                ...basePlan,
+              currentTask: {
+                ...baseTask,
                 status: 'executing',
-                steps: basePlan.steps.map((step) =>
+                steps: baseTask.steps.map((step) =>
                   data.step_ids.includes(step.id)
                     ? { ...step, status: 'running' }
                     : step,
@@ -476,11 +476,11 @@ export const useChat = ({
           });
         });
 
-        stream.on('plan:completed', (data) => {
+        stream.on('step:all_completed', (data) => {
           setState((prev) => {
-            const basePlan = ensurePlan(prev.currentPlan);
+            const baseTask = ensureTask(prev.currentTask);
             const stepResults = data.step_results || {};
-            const steps = basePlan.steps.map((step) => {
+            const steps = baseTask.steps.map((step) => {
               const result = stepResults[String(step.id)];
               if (!result) return step;
               return {
@@ -488,13 +488,13 @@ export const useChat = ({
                 status: result.status === 'failed' ? 'failed' : 'completed',
                 result: result.result || step.result || null,
                 error: result.error || step.error || null,
-              } satisfies PlanStepProgress;
+              } satisfies TaskStepProgress;
             });
 
             return {
               ...prev,
-              currentPlan: {
-                ...basePlan,
+              currentTask: {
+                ...baseTask,
                 status: steps.some((step) => step.status === 'failed')
                   ? 'failed'
                   : 'completed',

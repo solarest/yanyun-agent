@@ -105,10 +105,23 @@ async def _handle_empty_response(state: AgentState, event_emitter: Any, task_id:
     """处理空响应"""
     count = state.get("empty_retry_count", 0) + 1
 
+    logger.info(
+        "[NODE:stuck_detect] HANDLE_EMPTY | task_id=%s | turn=%d | "
+        "empty_retry_count=%d",
+        task_id, current_turn, count
+    )
+
     correction_total = (
         count
         + int(state.get("loop_detection_count", 0) or 0)
         + int(state.get("stuck_detection_count", 0) or 0)
+    )
+
+    logger.info(
+        "[NODE:stuck_detect] EMPTY_CHECK_TERMINATE | task_id=%s | turn=%d | "
+        "count=%d | correction_total=%d | max_retry=%d | global_budget=%d | budget_exhausted=%s",
+        task_id, current_turn, count, correction_total,
+        EMPTY_MAX_RETRY, GLOBAL_CORRECTION_BUDGET, exhausted_turn_budget(state)
     )
 
     if (
@@ -124,8 +137,9 @@ async def _handle_empty_response(state: AgentState, event_emitter: Any, task_id:
             reason = "budget_exhausted"
 
         logger.error(
-            "Empty response unrecoverable (%s). Terminating. correction_total=%d",
-            reason, correction_total,
+            "[NODE:stuck_detect] EMPTY_TERMINATE | task_id=%s | turn=%d | "
+            "reason=%s | correction_total=%d | count=%d",
+            task_id, current_turn, reason, correction_total, count,
         )
         await emit_decision(event_emitter, task_id, current_turn, "terminate", f"empty:{reason}")
 
@@ -137,12 +151,20 @@ async def _handle_empty_response(state: AgentState, event_emitter: Any, task_id:
             "phase": "complete",
         }
 
+    logger.info(
+        "[NODE:stuck_detect] EMPTY_RETRY | task_id=%s | turn=%d | "
+        "count=%d | will_retry_llm",
+        task_id, current_turn, count
+    )
     await emit_decision(event_emitter, task_id, current_turn, "llm_call", f"empty:retry_{count}")
 
     final_result = extract_final_result(state)
     if final_result:
         logger.warning(
-            "Empty response but valid result exists. Terminating with result. count=%d", count)
+            "[NODE:stuck_detect] EMPTY_HAS_RESULT | task_id=%s | turn=%d | "
+            "count=%d | has_valid_result, terminating",
+            task_id, current_turn, count
+        )
         return {
             "empty_retry_count": count,
             "should_end": True,
@@ -150,6 +172,11 @@ async def _handle_empty_response(state: AgentState, event_emitter: Any, task_id:
             "phase": "complete",
         }
 
+    logger.info(
+        "[NODE:stuck_detect] EMPTY_INJECT_FEEDBACK | task_id=%s | turn=%d | "
+        "count=%d | injecting_system_correction",
+        task_id, current_turn, count
+    )
     return {
         "empty_retry_count": count,
         "messages": [
@@ -167,7 +194,11 @@ async def _handle_empty_response(state: AgentState, event_emitter: Any, task_id:
 
 async def _handle_completion_claim(state: AgentState, event_emitter: Any, task_id: str, current_turn: int, text: str) -> dict:
     """处理完成声明(有实质内容)"""
-    logger.info("Completion claim validated, task complete")
+    logger.info(
+        "[NODE:stuck_detect] HANDLE_COMPLETION | task_id=%s | turn=%d | "
+        "text_length=%d | validated_complete",
+        task_id, current_turn, len(text)
+    )
     await emit_safe(
         event_emitter,
         task_id,
@@ -187,15 +218,29 @@ async def _handle_completion_claim(state: AgentState, event_emitter: Any, task_i
 
 async def _handle_incomplete_completion(state: AgentState, event_emitter: Any, task_id: str, current_turn: int, text: str) -> dict:
     """处理完成声明(缺少实质内容)"""
-    logger.info("Completion claim lacks substance, injecting feedback")
+    logger.info(
+        "[NODE:stuck_detect] HANDLE_INCOMPLETE_COMPLETION | task_id=%s | turn=%d | "
+        "text_length=%d | injecting_feedback",
+        task_id, current_turn, len(text)
+    )
 
     if exhausted_turn_budget(state):
+        max_turns = state.get("max_turns", 100)
+        logger.error(
+            "[NODE:stuck_detect] INCOMPLETE_BUDGET_EXHAUSTED | task_id=%s | turn=%d/%d",
+            task_id, current_turn, max_turns
+        )
         return {
             "error": f"Max turns ({state.get('max_turns', 100)}) reached after incomplete completion",
             "should_end": True,
             "final_result": text,
         }
 
+    logger.info(
+        "[NODE:stuck_detect] INCOMPLETE_INJECT_FEEDBACK | task_id=%s | turn=%d | "
+        "will_continue_llm",
+        task_id, current_turn
+    )
     await emit_decision(event_emitter, task_id, current_turn, "llm_call", "completion_lacks_substance")
 
     return {
@@ -214,6 +259,11 @@ async def _handle_incomplete_completion(state: AgentState, event_emitter: Any, t
 
 async def _handle_user_question(event_emitter: Any, task_id: str, current_turn: int, text: str) -> dict:
     """处理用户提问"""
+    logger.info(
+        "[NODE:stuck_detect] HANDLE_USER_QUESTION | task_id=%s | turn=%d | "
+        "text_length=%d | completing",
+        task_id, current_turn, len(text)
+    )
     await emit_decision(event_emitter, task_id, current_turn, "complete", "user_question")
     return {
         "phase": "complete",
@@ -227,8 +277,20 @@ async def _handle_planning_only(state: AgentState, event_emitter: Any, task_id: 
     """处理纯规划(无行动)"""
     count = state.get("planning_retry_count", 0) + 1
 
+    logger.info(
+        "[NODE:stuck_detect] HANDLE_PLANNING | task_id=%s | turn=%d | "
+        "planning_retry_count=%d",
+        task_id, current_turn, count
+    )
+
     if count > PLANNING_MAX_RETRY or exhausted_turn_budget(state):
         reason = "planning_max_retry" if count > PLANNING_MAX_RETRY else "budget_exhausted"
+        max_turns = state.get("max_turns", 100)
+        logger.error(
+            "[NODE:stuck_detect] PLANNING_TERMINATE | task_id=%s | turn=%d | "
+            "reason=%s | count=%d | max_turns=%d",
+            task_id, current_turn, reason, count, max_turns
+        )
         await emit_decision(event_emitter, task_id, current_turn, "terminate", f"planning:{reason}")
         return {
             "planning_retry_count": count,
@@ -237,6 +299,11 @@ async def _handle_planning_only(state: AgentState, event_emitter: Any, task_id: 
             "final_result": extract_final_result(state),
         }
 
+    logger.info(
+        "[NODE:stuck_detect] PLANNING_RETRY | task_id=%s | turn=%d | "
+        "count=%d | will_retry_llm",
+        task_id, current_turn, count
+    )
     await emit_decision(event_emitter, task_id, current_turn, "llm_call", f"planning:retry_{count}")
     return {
         "planning_retry_count": count,
@@ -416,9 +483,15 @@ async def stuck_detect_node(state: AgentState, config: RunnableConfig) -> dict:
     # Node 入口日志
     logger.info(
         "[NODE:stuck_detect] START | agent_id=%s | task_id=%s | turn=%d | "
-        "empty_retry_count=%d | messages_count=%d",
+        "phase=%s | empty_retry_count=%d | planning_retry_count=%d | "
+        "stuck_detection_count=%d | loop_detection_count=%d | messages_count=%d",
         agent_id, task_id, current_turn,
-        state.get("empty_retry_count", 0), len(state.get("messages", []))
+        state.get("phase", "unknown"),
+        state.get("empty_retry_count", 0),
+        state.get("planning_retry_count", 0),
+        state.get("stuck_detection_count", 0),
+        state.get("loop_detection_count", 0),
+        len(state.get("messages", []))
     )
 
     messages = state.get("messages", [])
@@ -432,35 +505,79 @@ async def stuck_detect_node(state: AgentState, config: RunnableConfig) -> dict:
 
     # 步骤1: 评估 LLM 文本输出
     text_eval = _evaluate_llm_text(text)
+    logger.info(
+        "[NODE:stuck_detect] TEXT_EVAL | task_id=%s | turn=%d | "
+        "category=%s | route=%s | text_length=%d",
+        task_id, current_turn, text_eval["category"], text_eval["route"], len(text)
+    )
 
     # 处理空响应
     if text_eval["category"] == "empty":
         logger.info(
-            "[NODE:stuck_detect] EMPTY_TEXT_DETECTED | task_id=%s | turn=%d", task_id, current_turn)
+            "[NODE:stuck_detect] BRANCH:EMPTY_TEXT | task_id=%s | turn=%d | "
+            "route=%s",
+            task_id, current_turn, text_eval["route"]
+        )
         return await _handle_empty_response(state, event_emitter, task_id, current_turn)
 
     # 处理完成声明(有实质内容)
     if text_eval["category"] == "complete":
+        logger.info(
+            "[NODE:stuck_detect] BRANCH:COMPLETION_VALIDATED | task_id=%s | turn=%d | "
+            "text_length=%d",
+            task_id, current_turn, len(text)
+        )
         return await _handle_completion_claim(state, event_emitter, task_id, current_turn, text)
 
     # 处理完成声明(缺少实质内容)
     if text_eval["category"] == "incomplete":
+        logger.info(
+            "[NODE:stuck_detect] BRANCH:COMPLETION_INCOMPLETE | task_id=%s | turn=%d | "
+            "text_length=%d",
+            task_id, current_turn, len(text)
+        )
         return await _handle_incomplete_completion(state, event_emitter, task_id, current_turn, text)
 
     # 处理用户提问
     if text_eval["category"] == "user_question":
+        logger.info(
+            "[NODE:stuck_detect] BRANCH:USER_QUESTION | task_id=%s | turn=%d | "
+            "text_length=%d",
+            task_id, current_turn, len(text)
+        )
         return await _handle_user_question(event_emitter, task_id, current_turn, text)
 
     # 处理纯规划
     if text_eval["category"] == "planning_only":
+        logger.info(
+            "[NODE:stuck_detect] BRANCH:PLANNING_ONLY | task_id=%s | turn=%d | "
+            "route=%s",
+            task_id, current_turn, text_eval["route"]
+        )
         return await _handle_planning_only(state, event_emitter, task_id, current_turn)
 
     # 步骤2: 检测 monologue 模式(连续无工具调用)
     # (实质性文本且未归类为其他场景)
+    logger.info(
+        "[NODE:stuck_detect] BRANCH:SUBSTANTIVE_TEXT | task_id=%s | turn=%d | "
+        "proceeding_to_monologue_detection",
+        task_id, current_turn
+    )
     stuck_result = await _detect_monologue(state, config)
 
     # 如果未卡住,继续 llm_call
     if not stuck_result.get("stuck_detected"):
+        logger.info(
+            "[NODE:stuck_detect] BRANCH:CONTINUE | task_id=%s | turn=%d | "
+            "phase=thinking",
+            task_id, current_turn
+        )
         return {"phase": "thinking"}
 
+    # 卡住,返回 stuck 处理结果
+    logger.info(
+        "[NODE:stuck_detect] BRANCH:STUCK_RECOVERY | task_id=%s | turn=%d | "
+        "stuck_type=%s",
+        task_id, current_turn, stuck_result.get("stuck_type")
+    )
     return stuck_result

@@ -12,7 +12,6 @@ from src.infrastructure.tools.builtin.web_search import (
 )
 from src.infrastructure.tools.builtin.file_ops import file_read, file_search, file_write
 from src.infrastructure.tools.builtin.clarify import clarify
-from src.infrastructure.tools.builtin.plan import plan
 from src.infrastructure.tools.decorator import clear_collected_tools
 
 
@@ -222,40 +221,3 @@ class TestClarify:
         result = await rt.func({"question": "What version?"}, None)
         assert result.success is True
         assert "Options" not in result.output
-
-
-# === plan 测试 ===
-
-
-class TestPlan:
-    @pytest.mark.asyncio
-    async def test_with_steps(self) -> None:
-        rt = plan._registered_tool  # type: ignore[attr-defined]
-        result = await rt.func(
-            {"goal": "Deploy app", "steps": ["Build", "Test", "Deploy"]}, None
-        )
-        assert result.success is True
-        assert "Deploy app" in result.output
-        assert "Step 1: Build" in result.output
-        assert result.metadata["step_count"] == 3
-        assert result.metadata["type"] == "plan"
-        assert result.metadata["execution_order"] == [1, 2, 3]
-        assert result.metadata["steps"] == [
-            {"id": 1, "description": "Build"},
-            {"id": 2, "description": "Test"},
-            {"id": 3, "description": "Deploy"},
-        ]
-
-    @pytest.mark.asyncio
-    async def test_empty_goal(self) -> None:
-        rt = plan._registered_tool  # type: ignore[attr-defined]
-        result = await rt.func({"goal": "  ", "steps": ["a"]}, None)
-        assert result.success is False
-        assert result.error == "invalid_input"
-
-    @pytest.mark.asyncio
-    async def test_empty_steps(self) -> None:
-        rt = plan._registered_tool  # type: ignore[attr-defined]
-        result = await rt.func({"goal": "Do something", "steps": []}, None)
-        assert result.success is False
-        assert result.error == "invalid_input"

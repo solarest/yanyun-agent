@@ -13,7 +13,7 @@ import { SessionSidebar } from '@presentation/components/chat/SessionSidebar';
 import { ChatHeader } from '@presentation/components/chat/ChatHeader';
 import { MessageList } from '@presentation/components/chat/MessageList';
 import { MessageInput } from '@presentation/components/chat/MessageInput';
-import { PlanStatusPanel } from '@presentation/components/chat/PlanStatusPanel';
+import { TaskStatusPanel } from '@presentation/components/chat/TaskStatusPanel';
 
 export const AgentSessionPage: React.FC = () => {
   const { id: agentId } = useParams<{ id: string }>();
@@ -43,7 +43,7 @@ export const AgentSessionPage: React.FC = () => {
     isSending,
     isStreaming,
     currentPhase,
-    currentPlan,
+    currentTask,
     error: chatError,
     sendMessage,
     cancelExecution,
@@ -138,7 +138,7 @@ export const AgentSessionPage: React.FC = () => {
           </div>
         )}
 
-        <PlanStatusPanel plan={currentPlan} />
+        <TaskStatusPanel task={currentTask} />
 
         {/* 消息列表 */}
         <MessageList

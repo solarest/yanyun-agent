@@ -1,7 +1,7 @@
 """领域层 - ToolDef 和 ConversationMessage 实体单元测试"""
 
 import pytest
-from src.domain.entities.tool_def import ToolDef, ToolParameter
+from src.domain.entities.tool import ToolDef, ToolParameter
 from src.domain.entities.skill_def import SkillDef, SkillStep
 from src.domain.entities.output_schema import OutputSchema
 from src.domain.entities.conversation import ConversationMessage, MessageGroup, ToolCall
@@ -11,7 +11,7 @@ class TestToolDef:
     """ToolDef 实体测试"""
 
     def test_tool_def_to_prompt_section(self) -> None:
-        """测试工具定义生成为 XML 格式"""
+        """测试工具定义生成工具名称标记"""
         tool = ToolDef(
             name="web_search",
             description="Search the web for information",
@@ -26,15 +26,11 @@ class TestToolDef:
 
         result = tool.to_prompt_section()
 
-        assert '<tool name="web_search">' in result
-        assert '<description>Search the web for information</description>' in result
-        assert '<param name="query" type="string" required="true">Search query</param>' in result
-        assert '<param name="limit" type="number" required="false">Max results</param>' in result
-        assert "<returns>Search results as JSON</returns>" in result
-        assert "</tool>" in result
+        # 现在只返回工具名称，详细信息通过 bind_tools() 传递
+        assert result == "- web_search"
 
     def test_tool_def_with_enum(self) -> None:
-        """测试带枚举值的参数"""
+        """测试带枚举值的参数（不影响 prompt 输出）"""
         tool = ToolDef(
             name="set_config",
             description="Set configuration",
@@ -51,7 +47,8 @@ class TestToolDef:
 
         result = tool.to_prompt_section()
 
-        assert '<enum>dev, prod, test</enum>' in result
+        # 现在只返回工具名称
+        assert result == "- set_config"
 
     def test_tool_def_no_parameters(self) -> None:
         """测试无参数的工具"""
@@ -62,9 +59,63 @@ class TestToolDef:
 
         result = tool.to_prompt_section()
 
-        assert '<tool name="get_time">' in result
-        assert "<parameters>" not in result
-        assert "</tool>" in result
+        # 现在只返回工具名称
+        assert result == "- get_time"
+
+    def test_tool_def_to_llm_schema(self) -> None:
+        """测试生成 LLM API 工具 Schema"""
+        tool = ToolDef(
+            name="web_search",
+            description="Search the web for information",
+            parameters=[
+                ToolParameter(name="query", type="string",
+                              description="Search query", required=True),
+                ToolParameter(name="limit", type="number",
+                              description="Max results", required=False),
+            ],
+            returns="Search results as JSON"
+        )
+
+        schema = tool.to_llm_schema()
+
+        # 验证外层结构
+        assert schema["type"] == "function"
+        assert "function" in schema
+
+        # 验证 function 定义
+        func = schema["function"]
+        assert func["name"] == "web_search"
+        assert func["description"] == "Search the web for information"
+
+        # 验证 parameters
+        params = func["parameters"]
+        assert params["type"] == "object"
+        assert "query" in params["properties"]
+        assert "limit" in params["properties"]
+        assert params["properties"]["query"]["type"] == "string"
+        assert params["properties"]["limit"]["type"] == "number"
+        assert "query" in params["required"]
+        assert "limit" not in params["required"]
+
+    def test_tool_def_llm_schema_with_enum(self) -> None:
+        """测试带枚举值的 LLM Schema"""
+        tool = ToolDef(
+            name="set_config",
+            description="Set configuration",
+            parameters=[
+                ToolParameter(
+                    name="mode",
+                    type="string",
+                    description="Configuration mode",
+                    required=True,
+                    enum=["dev", "prod", "test"],
+                ),
+            ],
+        )
+
+        schema = tool.to_llm_schema()
+        mode_prop = schema["function"]["parameters"]["properties"]["mode"]
+        assert mode_prop["enum"] == ["dev", "prod", "test"]
 
 
 class TestSkillDef:

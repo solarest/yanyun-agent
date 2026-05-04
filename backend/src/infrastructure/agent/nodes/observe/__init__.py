@@ -157,27 +157,6 @@ def extract_final_result(state: AgentState) -> str:
     return ""
 
 
-def mode_c_update(
-    route_hint: str,
-    observation_quality: str,
-    *,
-    empty_retry_count: int = 0,
-    planning_retry_count: int = 0,
-    phase: str = "evaluating",
-    **extra: Any,
-) -> dict:
-    update = {
-        "empty_retry_count": empty_retry_count,
-        "planning_retry_count": planning_retry_count,
-        "route_hint": route_hint,
-        "observe_mode": "llm_output",
-        "observation_quality": observation_quality,
-        "phase": phase,
-    }
-    update.update(extra)
-    return update
-
-
 __all__ = [
     "_DEFAULT_EMPTY_THRESHOLD_CHARS",
     "_DEFAULT_MAX_CONSECUTIVE_EMPTY",
@@ -192,5 +171,4 @@ __all__ = [
     "get_option",
     "is_empty_output",
     "judge_quality",
-    "mode_c_update",
 ]

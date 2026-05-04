@@ -3,7 +3,7 @@
 from typing import Optional
 from src.domain.entities.prompt_template import PromptTemplate, _count_tokens
 from src.domain.entities.prompt_assembly_result import PromptAssemblyResult
-from src.domain.entities.tool_def import ToolDef
+from src.domain.entities.tool import ToolDef
 from src.domain.entities.skill_def import SkillDef
 from src.domain.entities.output_schema import OutputSchema
 
@@ -81,13 +81,10 @@ class PromptAssembleService:
             parts.append("# Universal Behavior\n\n" + universal_behavior)
             layer_info["universal_behavior"] = True
 
-        # Layer 5: 工具定义层（完全由 ToolDef 列表动态生成，不使用 tools_md）
+        # Layer 5: 工具名称列表（详细信息通过 bind_tools() 传递）
         if tools:
-            tools_section = (
-                "# Available Tools\n\n"
-                "<tools>\n"
-                + "\n".join(t.to_prompt_section() for t in tools)
-                + "\n</tools>"
+            tools_section = "# Available Tools\n\n" + "\n".join(
+                t.to_prompt_section() for t in tools
             )
             parts.append(tools_section)
             layer_info["tools_count"] = len(tools)

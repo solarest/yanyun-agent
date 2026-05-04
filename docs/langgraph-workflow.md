@@ -24,9 +24,10 @@ graph TB
     route_loop -->|count=2 压缩上下文| context_compact["context_compact_node<br/>上下文压缩"]
     route_loop -->|count>=3 终止| End1([结束])
     
-    tool_execute --> route_tool{工具执行路由<br/>两分支}
+    tool_execute --> route_tool{工具执行路由<br/>三分支}
     route_tool -->|awaiting_user_input| End2([结束])
-    route_tool -->|否则| loop_detect
+    route_tool -->|无last_executed_tool_call_ids| llm_call
+    route_tool -->|有last_executed_tool_call_ids| loop_detect
 
     stuck_detect --> route_stuck{卡住检测路由<br/>两分支}
     route_stuck -->|count<3 注入反馈| llm_call
@@ -61,6 +62,7 @@ graph TB
 | 卡住检测 | `stuck_detect_node` 内部 | count<3: 注入纠正消息; count≥3: 终止 |
 | 致命错误 | `loop_detect_node` | permission 等致命错误→terminate |
 | 工具质量评估 | `loop_detect_node` | 规则评估质量并记录 → 路由回 llm_call |
+| 无工具执行 | `route_after_tool_execute` | 直接路由回 llm_call,避免死循环 |
 
 ## 系统提示词（System Prompt）
 
@@ -169,7 +171,7 @@ LLM 调用节点的 system prompt 由 **PromptBuilder** 服务构建，底层由
 - **职责**: 检测 Agent 是否进入循环模式 + 评估工具结果质量（吸收原 tool_observe）
 - **触发条件**: 
   - LLM 返回 tool_calls 后（前置守卫）
-  - tool_execute 执行完成后
+  - tool_execute 执行完成后**且有 last_executed_tool_call_ids**
 - **工具结果评估(新增)**:
   - 质量判定: good(成功且非空) / empty(成功但空) / failed(错误)
   - 错误分类: permission / timeout / not_found / network / invalid_args / business_error / unknown
@@ -230,12 +232,13 @@ LLM 调用节点的 system prompt 由 **PromptBuilder** 服务构建，底层由
 | `loop_detection_count=2` | `context_compact` |
 | count<2（已注入反馈） | `llm_call` |
 
-### route_after_tool_execute（两分支）
+### route_after_tool_execute（三分支）
 
 | 条件 | 目标 |
 |------|------|
 | `awaiting_user_input=True` | END |
-| 其他 | `loop_detect`（循环检测前置守卫） |
+| 无 `last_executed_tool_call_ids` | `llm_call`（无需循环检测） |
+| 有 `last_executed_tool_call_ids` | `loop_detect`（循环检测前置守卫） |
 
 ### route_after_stuck_detect（两分支）
 

@@ -122,9 +122,21 @@ def test_route_after_tool_execute_awaiting_user() -> None:
 
 
 def test_route_after_tool_execute_goes_to_loop_detect() -> None:
-    """工具执行后路由到 loop_detect(循环检测前置守卫)"""
-    state = make_state(awaiting_user_input=False)
+    """有工具执行结果时路由到 loop_detect(循环检测前置守卫)"""
+    state = make_state(
+        awaiting_user_input=False,
+        last_executed_tool_call_ids=["call-1", "call-2"],
+    )
     assert route_after_tool_execute(state) == "loop_detect"
+
+
+def test_route_after_tool_execute_no_tools_goes_to_llm_call() -> None:
+    """无工具执行结果时路由到 llm_call(无需循环检测)"""
+    state = make_state(
+        awaiting_user_input=False,
+        last_executed_tool_call_ids=[],
+    )
+    assert route_after_tool_execute(state) == "llm_call"
 
 
 # === route_after_stuck_detect 测试 ===

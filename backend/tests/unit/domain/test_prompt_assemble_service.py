@@ -2,7 +2,7 @@
 
 import pytest
 from src.domain.entities.prompt_template import PromptTemplate
-from src.domain.entities.tool_def import ToolDef, ToolParameter
+from src.domain.entities.tool import ToolDef, ToolParameter
 from src.domain.entities.skill_def import SkillDef, SkillStep
 from src.domain.entities.output_schema import OutputSchema
 from src.domain.services.prompt_assemble_service import PromptAssembleService
@@ -45,7 +45,8 @@ class TestPromptAssembleService:
         assert "Follow coding standards." in result.system_message  # Layer 2 AGENTS
         assert "You are helpful." in result.system_message  # Layer 3 Bootstrap
         assert "CACHE BOUNDARY" in result.system_message
-        assert "<tools>" in result.system_message  # Layer 5
+        assert "# Available Tools" in result.system_message  # Layer 5
+        assert "- search" in result.system_message  # Layer 5 工具名称列表
         assert "/tmp/project" in result.system_message  # Layer 6 Workspace
         assert "darwin" in result.system_message  # Layer 9 Environment
         assert "STATIC SUFFIX" in result.system_message

@@ -49,7 +49,7 @@ def route_after_llm(state: AgentState) -> str:
 
     极简三分支:
     1. should_end → END
-    2. 有 tool_calls → loop_detect(前置守卫)
+    2. 有 tool_calls → loop_detect(先检测循环)
     3. 其他 → stuck_detect(文本评估+卡住检测)
     """
     if state.get("should_end"):
@@ -63,7 +63,7 @@ def route_after_llm(state: AgentState) -> str:
     tool_calls = _extract_tool_calls(last_msg)
 
     if tool_calls:
-        return "loop_detect"
+        return "loop_detect"  # 有 tool_calls，先检测循环
 
     return "stuck_detect"  # 纯文本进入 stuck_detect 评估
 
@@ -90,11 +90,13 @@ def route_after_tool_execute(state: AgentState) -> str:
     """工具执行后路由
 
     - awaiting_user_input → END(等待用户确认)
-    - 其他 → loop_detect(循环检测前置守卫)
+    - 工具执行完毕 → llm_call(继续循环)
     """
     if state.get("awaiting_user_input"):
         return END
-    return "loop_detect"  # 直接回 loop_detect 检测循环
+
+    # 工具执行完毕，回到 llm_call 继续
+    return "llm_call"
 
 
 def route_after_stuck_detect(state: AgentState) -> str:
@@ -144,9 +146,9 @@ class AgentWorkflowBuilder:
             "llm_call",
             route_after_llm,
             {
-                "loop_detect": "loop_detect",
-                "stuck_detect": "stuck_detect",
-                END: END,
+                "loop_detect": "loop_detect",    # 有 tool_calls,先检测循环
+                "stuck_detect": "stuck_detect",   # 纯文本,检测是否卡住
+                END: END,                           # should_end=True
             },
         )
 
@@ -167,8 +169,8 @@ class AgentWorkflowBuilder:
             "tool_execute",
             route_after_tool_execute,
             {
-                "loop_detect": "loop_detect",  # 直接回 loop_detect
-                END: END,
+                "llm_call": "llm_call",         # 工具执行完毕,继续循环
+                END: END,                        # awaiting_user_input
             },
         )
 
