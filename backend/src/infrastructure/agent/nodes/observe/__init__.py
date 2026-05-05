@@ -46,51 +46,6 @@ def exhausted_turn_budget(state: dict) -> bool:
     return state.get("current_turn", 0) >= state.get("max_turns", 100)
 
 
-def get_option(config: RunnableConfig, key: str, default: Any) -> Any:
-    opts = (config.get("configurable") or {}).get("observe_options") or {}
-    return opts.get(key, default)
-
-
-def is_empty_output(output: Any, threshold: int) -> bool:
-    if output is None:
-        return True
-    text = output if isinstance(output, str) else str(output)
-    stripped = text.strip()
-    if len(stripped) <= threshold:
-        return True
-    if stripped.lower() in _EMPTY_PLACEHOLDERS:
-        return True
-    return False
-
-
-def judge_quality(result: Dict[str, Any], empty_threshold: int) -> str:
-    status = result.get("status")
-    if status == "skipped":
-        return "skipped"
-    if status == "error":
-        return "failed"
-    if status != "success":
-        return "failed"
-
-    if is_empty_output(result.get("output"), empty_threshold):
-        return "empty"
-
-    return "good"
-
-
-def aggregate_quality(items: List[Dict[str, Any]]) -> str:
-    qualities = {i["quality"] for i in items if i["quality"] != "skipped"}
-    if not qualities:
-        return "good"
-    if qualities == {"good"}:
-        return "good"
-    if qualities == {"empty"}:
-        return "empty"
-    if qualities == {"failed"}:
-        return "failed"
-    return "mixed"
-
-
 # === 事件发射 ===
 
 
@@ -160,7 +115,6 @@ def extract_final_result(state: AgentState) -> str:
 __all__ = [
     "_DEFAULT_EMPTY_THRESHOLD_CHARS",
     "_DEFAULT_MAX_CONSECUTIVE_EMPTY",
-    "aggregate_quality",
     "emit_decision",
     "emit_phase_safe",
     "emit_safe",
@@ -168,7 +122,4 @@ __all__ = [
     "extract_final_result",
     "extract_text",
     "get_event_emitter",
-    "get_option",
-    "is_empty_output",
-    "judge_quality",
 ]
