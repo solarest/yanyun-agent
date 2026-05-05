@@ -76,6 +76,7 @@ export interface ToolResultPayload extends BaseEventPayload {
   status: 'success' | 'error' | string;
   output?: string;
   error?: string;
+  metadata?: Record<string, unknown>;
 }
 
 /** context-compacting 事件 */

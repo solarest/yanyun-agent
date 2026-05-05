@@ -49,6 +49,7 @@ interface UseChatOptions {
     updater: (msg: SessionMessage) => SessionMessage,
   ) => void;
   onUpdateLastAssistant?: (updater: (msg: SessionMessage) => SessionMessage) => void;
+  onSessionUpdated?: () => void; // 新增：会话更新回调
 }
 
 const INITIAL_STATE: ChatState = {
@@ -61,7 +62,7 @@ const INITIAL_STATE: ChatState = {
   currentTask: null,
 };
 
-const TASK_TOOL_NAMES = new Set(['task_create']);
+const TASK_TOOL_NAMES = new Set(['task_create', 'task_update']);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -105,23 +106,55 @@ const buildTaskFromToolInput = (
 ): TaskProgress | null => {
   if (!TASK_TOOL_NAMES.has(toolName)) return null;
 
-  const incomingSteps = normalizeTaskSteps(input.steps);
-  const previousSteps = new Map(previousTask?.steps.map((step) => [step.id, step]));
-  const steps = incomingSteps.map((step) => ({
-    ...step,
-    status: previousSteps.get(step.id)?.status || step.status,
-    result: previousSteps.get(step.id)?.result || step.result,
-    error: previousSteps.get(step.id)?.error || step.error,
-  }));
+  // task_create: 创建新任务，替换现有任务
+  if (toolName === 'task_create') {
+    // 优先从 metadata 中读取 tasks，如果没有则从 input 中读取
+    const metadata = input.metadata as Record<string, unknown> | undefined;
+    const tasks = input.tasks || metadata?.tasks || input.steps;
+    const incomingSteps = normalizeTaskSteps(tasks);
+    const goal = toStringValue(input.goal) || toStringValue(metadata?.goal) || 'Task';
+    
+    return {
+      goal,
+      steps: incomingSteps,
+      status: 'planning',
+      executionOrder: Array.isArray(input.execution_order)
+        ? input.execution_order
+        : undefined,
+    };
+  }
 
-  return {
-    goal: toStringValue(input.goal) || previousTask?.goal || 'Task',
-    steps,
-    status: 'planning',
-    executionOrder: Array.isArray(input.execution_order)
-      ? input.execution_order
-      : previousTask?.executionOrder,
-  };
+  // task_update: 更新现有任务的状态
+  if (toolName === 'task_update' && previousTask) {
+    const taskId = input.task_id;
+    const status = toStringValue(input.status);
+    const result = toStringValue(input.result);
+
+    if (!previousTask.steps.length) return previousTask;
+
+    const updatedSteps = previousTask.steps.map((step) => {
+      if (step.id !== taskId) return step;
+      return {
+        ...step,
+        status: (status === 'completed' ? 'completed' : status === 'failed' ? 'failed' : step.status) as TaskStepStatus,
+        result: result || step.result,
+      };
+    });
+
+    // 检查是否所有任务都完成了
+    const allCompleted = updatedSteps.every(
+      (s) => s.status === 'completed' || s.status === 'failed'
+    );
+    const hasFailed = updatedSteps.some((s) => s.status === 'failed');
+
+    return {
+      ...previousTask,
+      steps: updatedSteps,
+      status: allCompleted ? (hasFailed ? 'failed' : 'completed') : 'executing',
+    };
+  }
+
+  return previousTask;
 };
 
 const ensureTask = (task: TaskProgress | null): TaskProgress => ({
@@ -177,12 +210,41 @@ export const useChat = ({
   onUpsertMessage,
   onUpdateMessageById,
   onUpdateLastAssistant,
+  onSessionUpdated,
 }: UseChatOptions) => {
   const [state, setState] = useState<ChatState>(INITIAL_STATE);
 
   const streamRef = useRef<AgentEventStream | null>(null);
   const subStreamsRef = useRef<Map<string, AgentEventStream>>(new Map());
   const mainMessageIdRef = useRef<string | null>(null);
+
+  // —— sessionStorage 持久化辅助函数 ——
+  const saveTaskState = (taskId: string) => {
+    try {
+      sessionStorage.setItem('activeTaskId', taskId);
+      sessionStorage.setItem('activeSessionId', sessionId || '');
+      sessionStorage.setItem('taskStateTimestamp', Date.now().toString());
+    } catch (err) {
+      console.warn('[useChat] Failed to save task state to sessionStorage:', err);
+    }
+  };
+
+  const clearTaskState = () => {
+    try {
+      sessionStorage.removeItem('activeTaskId');
+      sessionStorage.removeItem('activeSessionId');
+      sessionStorage.removeItem('taskStateTimestamp');
+    } catch (err) {
+      console.warn('[useChat] Failed to clear task state from sessionStorage:', err);
+    }
+  };
+
+  // 切换会话时重置任务状态
+  useEffect(() => {
+    setState((prev) => ({ ...prev, currentTask: null }));
+    clearTaskState(); // 清除之前的任务状态
+    disconnectAllStreams(); // 断开之前的连接
+  }, [sessionId]);
 
   const updateMessage = useCallback((
     messageId: string | null,
@@ -309,6 +371,315 @@ export const useChat = ({
     }
   }, [updateMessage]);
 
+  // —— 页面刷新后恢复活动任务流 ——
+  const restoreActiveStream = useCallback(() => {
+    const savedTaskId = sessionStorage.getItem('activeTaskId');
+    const savedSessionId = sessionStorage.getItem('activeSessionId');
+    const timestamp = sessionStorage.getItem('taskStateTimestamp');
+
+    if (!savedTaskId || !savedSessionId) return;
+
+    // 检查是否超过5分钟(避免恢复过期的任务)
+    if (Date.now() - parseInt(timestamp || '0') > 5 * 60 * 1000) {
+      clearTaskState();
+      return;
+    }
+
+    // 如果当前已有连接,不重复恢复
+    if (streamRef.current) return;
+
+    console.log('[useChat] Restoring active stream for task:', savedTaskId);
+
+    // 设置状态为流式中
+    setState((prev) => ({
+      ...prev,
+      isStreaming: true,
+      currentTaskId: savedTaskId,
+      currentPhase: 'thinking',
+    }));
+
+    // 创建占位消息
+    const placeholderMsg: SessionMessage = {
+      id: `streaming-${savedTaskId}`,
+      session_id: savedSessionId,
+      task_id: savedTaskId,
+      role: 'assistant',
+      content: '',
+      tool_calls: [],
+      tool_results: [],
+      status: 'streaming',
+      error: null,
+      cost: {},
+      created_at: new Date().toISOString(),
+    };
+    onAppendMessage?.(placeholderMsg);
+
+    // 连接SSE(后端会自动回放所有事件)
+    const stream = new AgentEventStream(window.location.origin, savedTaskId);
+    streamRef.current = stream;
+    mainMessageIdRef.current = placeholderMsg.id;
+
+    // 绑定所有事件监听器(与sendMessage中相同)
+    bindMessageStream(stream, placeholderMsg.id, (chunk) => {
+      setState((prev) => ({
+        ...prev,
+        streamingContent: prev.streamingContent + chunk,
+      }));
+    });
+
+    // —— 阶段变化 ——
+    stream.on('phase:changed', (data) => {
+      setState((prev) => ({
+        ...prev,
+        currentPhase: (data.phase as AgentPhase) || prev.currentPhase,
+      }));
+    });
+
+    // —— 工具调用 ——
+    stream.on('tool:call', (data) => {
+      if (TASK_TOOL_NAMES.has(data.toolName || '')) {
+        setState((prev) => ({
+          ...prev,
+          currentTask: buildTaskFromToolInput(
+            data.toolName || '',
+            data.input || {},
+            prev.currentTask,
+          ),
+        }));
+      }
+    });
+
+    // —— 工具结果 ——
+    stream.on('tool:result', (data) => {
+      if (TASK_TOOL_NAMES.has(data.toolName || '')) {
+        if (data.toolName === 'task_update' && data.metadata) {
+          const metadata = data.metadata as Record<string, unknown>;
+          if (metadata.type === 'task_update') {
+            setState((prev) => ({
+              ...prev,
+              currentTask: buildTaskFromToolInput(
+                'task_update',
+                {
+                  task_id: metadata.task_id,
+                  status: metadata.status,
+                  result: metadata.result,
+                },
+                prev.currentTask,
+              ),
+            }));
+          }
+        } else {
+          setState((prev) => ({
+            ...prev,
+            currentTask: prev.currentTask
+              ? {
+                  ...prev.currentTask,
+                  status: data.status === 'error' ? 'failed' : 'executing',
+                }
+              : prev.currentTask,
+          }));
+        }
+      }
+    });
+
+    stream.on('step:created', (data) => {
+      setState((prev) => ({
+        ...prev,
+        currentTask: {
+          ...ensureTask(prev.currentTask),
+          goal: data.goal || prev.currentTask?.goal || 'Task',
+          status: 'executing',
+          executionOrder: data.execution_order || prev.currentTask?.executionOrder,
+        },
+      }));
+    });
+
+    stream.on('step:started', (data) => {
+      setState((prev) => ({
+        ...prev,
+        currentTask: {
+          ...updateTaskStep(
+            prev.currentTask,
+            data.step_id,
+            (step) => ({ ...step, status: 'running' }),
+            data.description,
+          ),
+          status: 'executing',
+        },
+      }));
+    });
+
+    stream.on('step:completed', (data) => {
+      const status: TaskStepStatus =
+        data.status === 'failed' ? 'failed' : 'completed';
+      setState((prev) => ({
+        ...prev,
+        currentTask: updateTaskStep(
+          {
+            ...ensureTask(prev.currentTask),
+            status: status === 'failed' ? 'failed' : 'executing',
+          },
+          data.step_id,
+          (step) => ({
+            ...step,
+            status,
+            result: data.result || null,
+            error: data.error || null,
+          }),
+        ),
+      }));
+    });
+
+    stream.on('step:parallel_group_started', (data) => {
+      setState((prev) => {
+        const baseTask = ensureTask(prev.currentTask);
+        return {
+          ...prev,
+          currentTask: {
+            ...baseTask,
+            status: 'executing',
+            steps: baseTask.steps.map((step) =>
+              data.step_ids.includes(step.id)
+                ? { ...step, status: 'running' }
+                : step,
+            ),
+          },
+        };
+      });
+    });
+
+    stream.on('step:all_completed', (data) => {
+      setState((prev) => {
+        const baseTask = ensureTask(prev.currentTask);
+        const stepResults = data.step_results || {};
+        const steps = baseTask.steps.map((step) => {
+          const result = stepResults[String(step.id)];
+          if (!result) return step;
+          return {
+            ...step,
+            status: result.status === 'failed' ? 'failed' : 'completed',
+            result: result.result || step.result || null,
+            error: result.error || step.error || null,
+          } satisfies TaskStepProgress;
+        });
+
+        return {
+          ...prev,
+          currentTask: {
+            ...baseTask,
+            status: steps.some((step) => step.status === 'failed')
+              ? 'failed'
+              : 'completed',
+            steps,
+          },
+        };
+      });
+    });
+
+    // —— 最终落库消息:替换占位 ——
+    stream.on('session:message:saved', (data) => {
+      const savedMsg = data.message;
+      if (savedMsg) {
+        onMessageSaved?.(savedMsg);
+        updateMessage(mainMessageIdRef.current, () => savedMsg);
+        mainMessageIdRef.current = savedMsg.id;
+      }
+    });
+
+    stream.on('sub_agent:started', (data) => {
+      if (!data.sub_task_id) return;
+      connectSubAgentStream(
+        data.sub_task_id,
+        data.step_id,
+        data.description,
+      );
+    });
+
+    stream.on('sub_agent:completed', (data) => {
+      if (!data.sub_task_id) return;
+      finalizeSubAgentMessage(
+        data.sub_task_id,
+        'completed',
+        data.result,
+        data.error,
+      );
+    });
+
+    stream.on('sub_agent:failed', (data) => {
+      if (!data.sub_task_id) return;
+      finalizeSubAgentMessage(
+        data.sub_task_id,
+        'error',
+        data.result,
+        data.error,
+      );
+    });
+
+    // —— 任务完成 ——
+    stream.on('task:completed', () => {
+      setState((prev) => ({
+        ...prev,
+        isStreaming: false,
+        currentPhase: 'complete',
+        currentTaskId: null,
+        streamingContent: '',
+      }));
+      mainMessageIdRef.current = null;
+      disconnectAllStreams();
+      clearTaskState();
+    });
+
+    // —— 任务取消 ——
+    stream.on('task:cancelled', () => {
+      const errorMsg = '任务已取消';
+      setState((prev) => ({
+        ...prev,
+        isStreaming: false,
+        currentPhase: 'cancelled',
+        currentTaskId: null,
+      }));
+      updateMessage(mainMessageIdRef.current, (msg) => ({
+        ...msg,
+        status: 'error',
+        error: errorMsg,
+      }));
+      mainMessageIdRef.current = null;
+      disconnectAllStreams();
+      clearTaskState();
+    });
+
+    // —— 任务失败 ——
+    stream.on('task:failed', (data) => {
+      const errorMsg = data.error || '任务执行失败';
+      setState((prev) => ({
+        ...prev,
+        isStreaming: false,
+        currentPhase: 'failed',
+        error: errorMsg,
+        currentTaskId: null,
+      }));
+      updateMessage(mainMessageIdRef.current, (msg) => ({
+        ...msg,
+        status: 'error',
+        error: errorMsg,
+      }));
+      mainMessageIdRef.current = null;
+      disconnectAllStreams();
+      clearTaskState();
+    });
+
+    stream.connect();
+  }, [
+    sessionId,
+    onAppendMessage,
+    onMessageSaved,
+    bindMessageStream,
+    connectSubAgentStream,
+    disconnectAllStreams,
+    finalizeSubAgentMessage,
+    updateMessage,
+  ]);
+
   /**
    * 发送消息
    */
@@ -337,6 +708,12 @@ export const useChat = ({
         // 2. 追加用户消息到列表
         onAppendMessage?.(user_message);
 
+        // 3. 延迟刷新会话列表以获取 LLM 生成的标题
+        // 后端异步生成标题，通常 1-3 秒完成
+        setTimeout(() => {
+          onSessionUpdated?.();
+        }, 2000);
+
         // 3. 创建流式占位 assistant 消息
         const placeholderMsg: SessionMessage = {
           id: `streaming-${task_id}`,
@@ -359,6 +736,9 @@ export const useChat = ({
           isStreaming: true,
           currentTaskId: task_id,
         }));
+
+        // 保存任务状态到 sessionStorage(用于页面刷新后恢复)
+        saveTaskState(task_id);
 
         // 4. 连接 SSE 订阅任务事件
         disconnectAllStreams();
@@ -398,15 +778,35 @@ export const useChat = ({
         // —— 工具结果 —— 追加到 tool_results
         stream.on('tool:result', (data) => {
           if (TASK_TOOL_NAMES.has(data.toolName || '')) {
-            setState((prev) => ({
-              ...prev,
-              currentTask: prev.currentTask
-                ? {
-                    ...prev.currentTask,
-                    status: data.status === 'error' ? 'failed' : 'executing',
-                  }
-                : prev.currentTask,
-            }));
+            // 对于 task_update，从 metadata 中提取更新信息
+            if (data.toolName === 'task_update' && data.metadata) {
+              const metadata = data.metadata as Record<string, unknown>;
+              if (metadata.type === 'task_update') {
+                setState((prev) => ({
+                  ...prev,
+                  currentTask: buildTaskFromToolInput(
+                    'task_update',
+                    {
+                      task_id: metadata.task_id,
+                      status: metadata.status,
+                      result: metadata.result,
+                    },
+                    prev.currentTask,
+                  ),
+                }));
+              }
+            } else {
+              // task_create 或其他工具
+              setState((prev) => ({
+                ...prev,
+                currentTask: prev.currentTask
+                  ? {
+                      ...prev.currentTask,
+                      status: data.status === 'error' ? 'failed' : 'executing',
+                    }
+                  : prev.currentTask,
+              }));
+            }
           }
         });
 
@@ -553,6 +953,7 @@ export const useChat = ({
           }));
           mainMessageIdRef.current = null;
           disconnectAllStreams();
+          clearTaskState();
         });
 
         // —— 任务取消 ——
@@ -571,6 +972,7 @@ export const useChat = ({
           }));
           mainMessageIdRef.current = null;
           disconnectAllStreams();
+          clearTaskState();
         });
 
         // —— 任务失败 ——
@@ -590,6 +992,7 @@ export const useChat = ({
           }));
           mainMessageIdRef.current = null;
           disconnectAllStreams();
+          clearTaskState();
         });
 
         stream.connect();
@@ -642,6 +1045,11 @@ export const useChat = ({
     mainMessageIdRef.current = null;
     disconnectAllStreams();
   }, [sessionId, disconnectAllStreams]);
+
+  // 页面加载时恢复活动任务流
+  useEffect(() => {
+    restoreActiveStream();
+  }, [restoreActiveStream]);
 
   return {
     ...state,

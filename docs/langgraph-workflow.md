@@ -24,10 +24,9 @@ graph TB
     route_loop -->|count=2 压缩上下文| context_compact["context_compact_node<br/>上下文压缩"]
     route_loop -->|count>=3 终止| End1([结束])
     
-    tool_execute --> route_tool{工具执行路由<br/>三分支}
+    tool_execute --> route_tool{工具执行路由<br/>两分支}
     route_tool -->|awaiting_user_input| End2([结束])
-    route_tool -->|无last_executed_tool_call_ids| llm_call
-    route_tool -->|有last_executed_tool_call_ids| loop_detect
+    route_tool -->|工具执行完毕| llm_call
 
     stuck_detect --> route_stuck{卡住检测路由<br/>两分支}
     route_stuck -->|count<3 注入反馈| llm_call
@@ -48,6 +47,7 @@ graph TB
 - **规则替代LLM**: 所有评估逻辑采用规则判断(关键词/正则/阈值),消除 LLM 评估调用
 - **检测内聚**: 反馈注入逻辑内聚到各检测节点(loop_detect/stuck_detect)
 - **Plan 降级**: `plan_execute` 已降级为闭包工具,不再是图节点
+- **工具执行简化**: `route_after_tool_execute` 只有两分支,工具执行后直接回 `llm_call`,由下轮 LLM 返回后再检测循环
 
 ### 反馈机制说明
 
@@ -62,7 +62,7 @@ graph TB
 | 卡住检测 | `stuck_detect_node` 内部 | count<3: 注入纠正消息; count≥3: 终止 |
 | 致命错误 | `loop_detect_node` | permission 等致命错误→terminate |
 | 工具质量评估 | `loop_detect_node` | 规则评估质量并记录 → 路由回 llm_call |
-| 无工具执行 | `route_after_tool_execute` | 直接路由回 llm_call,避免死循环 |
+| 工具执行完毕 | `route_after_tool_execute` | 直接路由回 llm_call,由下轮 LLM 后再检测循环 |
 
 ## 系统提示词（System Prompt）
 
@@ -159,20 +159,21 @@ LLM 调用节点的 system prompt 由 **PromptBuilder** 服务构建，底层由
   4. 发射工具结果事件
   5. 构建 `ToolMessage` 列表
   6. 若某工具标记 `awaiting_user_input`，则设置该状态
+  7. 记录 `last_executed_tool_call_ids` 供后续使用
 - **返回状态**:
   - `messages`: `[ToolMessage(content=..., tool_call_id=...)]`
   - `tool_results`: 结构化结果字典
   - `pending_tool_calls`: `[]`（清空）
   - `awaiting_user_input`: 是否等待用户输入
+  - `last_executed_tool_call_ids`: 最近执行的工具调用ID列表
   - `phase`: "tool_executing"
+- **路由说明**: 工具执行后直接路由回 `llm_call`，由下一轮 LLM 返回后再进入 `loop_detect` 进行循环检测
 
 ### 3. 循环检测节点 (loop_detect_node)
 - **文件**: `backend/src/infrastructure/agent/nodes/loop_detect_node.py`
 - **职责**: 检测 Agent 是否进入循环模式 + 评估工具结果质量（吸收原 tool_observe）
-- **触发条件**: 
-  - LLM 返回 tool_calls 后（前置守卫）
-  - tool_execute 执行完成后**且有 last_executed_tool_call_ids**
-- **工具结果评估(新增)**:
+- **触发条件**: LLM 返回 tool_calls 后（前置守卫）
+- **工具结果评估**:
   - 质量判定: good(成功且非空) / empty(成功但空) / failed(错误)
   - 错误分类: permission / timeout / not_found / network / invalid_args / business_error / unknown
   - 致命错误(permission)直接终止
@@ -232,13 +233,14 @@ LLM 调用节点的 system prompt 由 **PromptBuilder** 服务构建，底层由
 | `loop_detection_count=2` | `context_compact` |
 | count<2（已注入反馈） | `llm_call` |
 
-### route_after_tool_execute（三分支）
+### route_after_tool_execute（两分支）
 
 | 条件 | 目标 |
 |------|------|
 | `awaiting_user_input=True` | END |
-| 无 `last_executed_tool_call_ids` | `llm_call`（无需循环检测） |
-| 有 `last_executed_tool_call_ids` | `loop_detect`（循环检测前置守卫） |
+| 工具执行完毕 | `llm_call`（继续循环，无需循环检测） |
+
+**说明**: 工具执行后直接回到 `llm_call`，由下一轮 LLM 返回后再进入 `loop_detect` 进行循环检测。这种设计避免了重复检测，保持路由逻辑极简。
 
 ### route_after_stuck_detect（两分支）
 

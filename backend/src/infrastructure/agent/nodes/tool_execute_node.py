@@ -83,6 +83,7 @@ async def _execute_single_tool(
                 "toolName": tool_name,
                 "status": status,
                 "output": result.output,
+                "metadata": result.metadata,
             },
         )
         return tool_call_id, result_dict
@@ -110,6 +111,7 @@ async def _execute_single_tool(
                 "toolName": tool_name,
                 "status": "error",
                 "error": str(e),
+                "metadata": {},
             },
         )
         return tool_call_id, result_dict
@@ -166,6 +168,37 @@ async def tool_execute_node(state: AgentState, config: RunnableConfig) -> dict:
     )
 
     if pending_tools:
+        # 优先级过滤逻辑：
+        # 1. 如果存在 clarify 工具，过滤掉其他工具，只保留 clarify
+        # 2. 如果存在 task_create 工具，过滤掉其他工具，只保留 task_create
+        # 优先级 1 > 2
+
+        has_clarify = any(tc.get("name") == "clarify" for tc in pending_tools)
+        has_task_create = any(
+            tc.get("name") == "task_create" for tc in pending_tools)
+
+        if has_clarify:
+            # 优先级 1：只保留 clarify 工具
+            pending_tools = [
+                tc for tc in pending_tools if tc.get("name") == "clarify"]
+            logger.info(
+                "[NODE:tool_execute] PRIORITY_FILTER | task_id=%s | filter_type=clarify | "
+                "kept_count=%d | filtered_out_count=%d",
+                task_id, len(pending_tools),
+                len([tc for tc in state.get("pending_tool_calls", [])
+                    if tc.get("name") != "clarify"])
+            )
+        elif has_task_create:
+            # 优先级 2：只保留 task_create 工具
+            pending_tools = [tc for tc in pending_tools if tc.get(
+                "name") == "task_create"]
+            logger.info(
+                "[NODE:tool_execute] PRIORITY_FILTER | task_id=%s | filter_type=task_create | "
+                "kept_count=%d | filtered_out_count=%d",
+                task_id, len(pending_tools),
+                len([tc for tc in state.get("pending_tool_calls", [])
+                    if tc.get("name") != "task_create"])
+            )
         tasks = [
             _execute_single_tool(
                 tool_registry,

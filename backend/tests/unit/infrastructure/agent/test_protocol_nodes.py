@@ -51,6 +51,36 @@ class FakeLLM:
         yield AIMessageChunk(content=" world")
 
 
+class FakeClassificationLLM:
+    """Mock LLM 分类器"""
+
+    async def ainvoke(self, prompt, **kwargs):
+        # 提取输入文本
+        import re
+        match = re.search(r'输入文本: (.+)$', prompt, re.DOTALL)
+        input_text = match.group(1).strip() if match else ''
+
+        # 根据输入文本内容返回不同的分类结果
+        if not input_text:
+            # 空响应
+            return AIMessage(content='{"category": "empty", "confidence": 1.0}')
+        elif '任务完成' in input_text and ('文件' in input_text or '创建' in input_text or '实现' in input_text):
+            # 完成声明(有实质内容)
+            return AIMessage(content='{"category": "complete", "confidence": 0.95, "reasoning": "明确声明完成,且包含具体的工作成果"}')
+        elif '任务完成' in input_text or 'task complete' in input_text.lower():
+            # 完成声明(缺少实质内容)
+            return AIMessage(content='{"category": "incomplete", "confidence": 0.9, "reasoning": "声称完成但无任何具体成果描述"}')
+        elif input_text.rstrip().endswith(('?', '？')) or '请问' in input_text or '是否' in input_text:
+            # 用户提问
+            return AIMessage(content='{"category": "user_question", "confidence": 0.95}')
+        elif '我将要' in input_text or '步骤如下' in input_text or '计划' in input_text:
+            # 纯规划
+            return AIMessage(content='{"category": "planning_only", "confidence": 0.9, "reasoning": "描述了计划但未执行"}')
+        else:
+            # 实质性文本
+            return AIMessage(content='{"category": "substantive_text", "confidence": 0.95}')
+
+
 def make_state(**overrides):
     state = {
         "messages": [],
@@ -367,49 +397,67 @@ async def test_loop_detect_node_ignores_tool_history_before_current_task() -> No
 @pytest.mark.asyncio
 async def test_stuck_detect_node_emits_stuck_detected_and_phase_change() -> None:
     emitter = RecordingEmitter()
+    classification_llm = FakeClassificationLLM()
 
-    result = await stuck_detect_node(
-        make_state(
-            phase="thinking",
-            current_turn=2,
-            messages=[
-                {"role": "assistant", "content": "thinking 1", "tool_calls": []},
-                {"role": "assistant", "content": "thinking 2", "tool_calls": []},
-                {"role": "assistant", "content": "thinking 3", "tool_calls": []},
-            ],
-        ),
-        {"configurable": {"event_emitter": emitter}},
-    )
+    # 注入到缓存
+    import src.infrastructure.agent.nodes.stuck_detect_node as stuck_module
+    original_cache = stuck_module._classification_llm_cache
+    stuck_module._classification_llm_cache = classification_llm
 
-    assert [event["event_type"] for event in emitter.events] == [
-        "stuck:detected",
-        "phase:changed",
-    ]
-    assert result["stuck_detected"] is True
-    assert result["phase"] == "stuck_recovering"
+    try:
+        result = await stuck_detect_node(
+            make_state(
+                phase="thinking",
+                current_turn=2,
+                messages=[
+                    {"role": "assistant", "content": "thinking 1", "tool_calls": []},
+                    {"role": "assistant", "content": "thinking 2", "tool_calls": []},
+                    {"role": "assistant", "content": "thinking 3", "tool_calls": []},
+                ],
+            ),
+            {"configurable": {"event_emitter": emitter}},
+        )
+
+        assert [event["event_type"] for event in emitter.events] == [
+            "stuck:detected",
+            "phase:changed",
+        ]
+        assert result["stuck_detected"] is True
+        assert result["phase"] == "stuck_recovering"
+    finally:
+        stuck_module._classification_llm_cache = original_cache
 
 
 @pytest.mark.asyncio
 async def test_stuck_detect_node_ignores_text_history_before_current_task() -> None:
     emitter = RecordingEmitter()
+    classification_llm = FakeClassificationLLM()
 
-    result = await stuck_detect_node(
-        make_state(
-            task_start_message_count=3,
-            messages=[
-                {"role": "assistant", "content": "old 1", "tool_calls": []},
-                {"role": "assistant", "content": "old 2", "tool_calls": []},
-                {"role": "assistant", "content": "old 3", "tool_calls": []},
-                {"role": "assistant", "content": "new answer", "tool_calls": []},
-            ],
-        ),
-        {"configurable": {"event_emitter": emitter}},
-    )
+    # 注入到缓存
+    import src.infrastructure.agent.nodes.stuck_detect_node as stuck_module
+    original_cache = stuck_module._classification_llm_cache
+    stuck_module._classification_llm_cache = classification_llm
 
-    # 只有1条新的 assistant消息,不应检测到 stuck
-    assert result.get("stuck_detected") is None or result.get(
-        "stuck_detected") is False
-    assert emitter.events == []
+    try:
+        result = await stuck_detect_node(
+            make_state(
+                task_start_message_count=3,
+                messages=[
+                    {"role": "assistant", "content": "old 1", "tool_calls": []},
+                    {"role": "assistant", "content": "old 2", "tool_calls": []},
+                    {"role": "assistant", "content": "old 3", "tool_calls": []},
+                    {"role": "assistant", "content": "new answer", "tool_calls": []},
+                ],
+            ),
+            {"configurable": {"event_emitter": emitter}},
+        )
+
+        # 只有1条新的 assistant消息,不应检测到 stuck
+        assert result.get("stuck_detected") is None or result.get(
+            "stuck_detected") is False
+        assert emitter.events == []
+    finally:
+        stuck_module._classification_llm_cache = original_cache
 
 
 @pytest.mark.asyncio

@@ -120,9 +120,12 @@ class SendMessageUseCase:
         session = await self.session_repo.get_by_id(session_id)
         if session:
             session.update_metadata(content)
-            # 首条消息自动生成标题
+            # 首条消息自动生成标题 - 使用 LLM 提炼
             if session.message_count == 1:
-                session.auto_title(content)
+                # 异步生成标题，不阻塞主流程
+                asyncio.create_task(
+                    self._generate_session_title(session_id, content)
+                )
             await self.session_repo.update(session)
 
         # 3. 创建 Task
@@ -195,6 +198,57 @@ class SendMessageUseCase:
             }
         }
 
+    async def _generate_session_title(self, session_id: str, user_message: str) -> None:
+        """使用 LLM 生成会话标题
+
+        Args:
+            session_id: 会话 ID
+            user_message: 用户的第一条消息
+        """
+        try:
+            from langchain_core.prompts import PromptTemplate
+            from src.infrastructure.llm.model_factory import create_chat_model
+
+            # 创建 LLM 实例（不绑定工具）
+            llm = create_chat_model()
+
+            # 构建提示词
+            prompt = PromptTemplate.from_template(
+                "请根据用户的消息内容，生成一个简洁的会话标题（不超过15个中文字符或30个英文字符）。\n"
+                "要求：\n"
+                "1. 准确概括用户的核心需求或意图\n"
+                "2. 简洁明了，适合作为会话列表的显示标题\n"
+                "3. 只返回标题文本，不要添加任何解释或其他内容\n\n"
+                "用户消息：{message}\n\n"
+                "标题："
+            )
+
+            # 调用 LLM
+            # 限制输入长度
+            response = await llm.ainvoke(prompt.format(message=user_message[:500]))
+
+            # 提取标题（去除前后空白和可能的引号）
+            title = response.content.strip().strip('"').strip("'")
+
+            # 限制标题长度
+            if len(title) > 30:
+                title = title[:30].rstrip()
+
+            # 更新会话标题
+            session = await self.session_repo.get_by_id(session_id)
+            if session and not session.title:  # 只在还没有标题时更新
+                session.title = title
+                await self.session_repo.update(session)
+                logger.info("Generated session title: %s", title)
+
+        except Exception as e:
+            logger.exception("Failed to generate session title: %s", e)
+            # 如果生成失败，使用默认的截取方式
+            session = await self.session_repo.get_by_id(session_id)
+            if session and not session.title:
+                session.auto_title(user_message)
+                await self.session_repo.update(session)
+
     async def _finalize_terminal_result(
         self,
         *,
@@ -231,15 +285,29 @@ class SendMessageUseCase:
                             }
                         )
 
+        # 合并所有 clarify 工具的结果为一个完整内容，支持前端解析多个问题
+        clarify_outputs = []
         for tool_call_id, tool_result in (result.get("tool_results") or {}).items():
-            all_tool_results.append(
-                {
-                    "tool_name": tool_result.get("tool_name", ""),
-                    "id": tool_call_id,
-                    "status": tool_result.get("status", "success"),
-                    "result": tool_result.get("output") or tool_result.get("error") or "",
-                }
-            )
+            if tool_result.get("tool_name") == "clarify":
+                # clarify 工具的结果不添加到 tool_results，而是合并到 assistant_content
+                output = tool_result.get(
+                    "output") or tool_result.get("error") or ""
+                if output:
+                    clarify_outputs.append(output)
+            else:
+                # 其他工具正常添加到结果列表
+                all_tool_results.append(
+                    {
+                        "tool_name": tool_result.get("tool_name", ""),
+                        "id": tool_call_id,
+                        "status": tool_result.get("status", "success"),
+                        "result": tool_result.get("output") or tool_result.get("error") or "",
+                    }
+                )
+
+        # 如果有多个 clarify，将它们合并到 assistant_content
+        merged_clarify_content = "\n\n".join(
+            clarify_outputs) if clarify_outputs else ""
 
         assistant_content = final_result or error or ""
         if not assistant_content:
@@ -252,6 +320,13 @@ class SendMessageUseCase:
                 if msg_content:
                     assistant_content = msg_content
                     break
+
+        # 如果有多个 clarify 问题，将它们合并到 assistant_content 中
+        if merged_clarify_content:
+            if assistant_content:
+                assistant_content = assistant_content + "\n\n" + merged_clarify_content
+            else:
+                assistant_content = merged_clarify_content
 
         assistant_msg = SessionMessage(
             session_id=session_id,
