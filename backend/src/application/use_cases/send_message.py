@@ -354,7 +354,18 @@ class SendMessageUseCase:
                 if msg.role == SessionMessageRole.USER:
                     messages.append(HumanMessage(content=msg.content))
                 elif msg.role == SessionMessageRole.ASSISTANT:
-                    messages.append(AIMessage(content=msg.content or ""))
+                    # 构建内容：保留原始内容 + 工具使用记录（去重）
+                    content_parts = [msg.content or ""]
+                    if msg.tool_calls:
+                        # 提取工具名称并去重
+                        tool_names = list(dict.fromkeys(
+                            tc.get("name", "") for tc in msg.tool_calls if tc.get("name")
+                        ))
+                        if tool_names:
+                            tools_summary = f"\n\n[Used Tools: {', '.join(tool_names)}]"
+                            content_parts.append(tools_summary)
+
+                    messages.append(AIMessage(content="".join(content_parts)))
                 elif msg.role == SessionMessageRole.TOOL_SUMMARY:
                     messages.append(HumanMessage(
                         content=f"[Tool Results] {msg.content}"))
