@@ -24,21 +24,33 @@ def _setup_logging() -> None:
     - 根 logger 设置为 INFO，输出到 stdout（被 uvicorn/bootstrap 重定向到 backend.log）
     - `llm.call` logger 额外写入独立文件 logs/llm-call.log
     - `tool.call` logger 额外写入独立文件 logs/tool-call.log
+    - `src.infrastructure.agent.nodes` logger 额外写入独立文件 logs/node.log
     """
     root_logger = logging.getLogger()
     if not any(isinstance(h, logging.StreamHandler) for h in root_logger.handlers):
         root_logger.setLevel(logging.INFO)
         stream_handler = logging.StreamHandler()
         stream_handler.setFormatter(
-            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+            logging.Formatter(
+                "%(asctime)s [%(levelname)s] %(name)s: %(message)s")
         )
         root_logger.addHandler(stream_handler)
 
-    log_dir = Path(os.getenv("LLM_LOG_DIR", Path(__file__).resolve().parents[3] / "logs"))
+    log_dir = Path(os.getenv("LLM_LOG_DIR", Path(
+        __file__).resolve().parents[3] / "logs"))
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    _attach_file_handler(logging.getLogger("llm.call"), log_dir / "llm-call.log", tag="_llm_call_tag")
-    _attach_file_handler(logging.getLogger("tool.call"), log_dir / "tool-call.log", tag="_tool_call_tag")
+    _attach_file_handler(
+        logging.getLogger("llm.call"), log_dir / "llm-call.log", tag="_llm_call_tag"
+    )
+    _attach_file_handler(
+        logging.getLogger("tool.call"), log_dir / "tool-call.log", tag="_tool_call_tag"
+    )
+    _attach_file_handler(
+        logging.getLogger("src.infrastructure.agent.nodes"),
+        log_dir / "node.log",
+        tag="_node_log_tag",
+    )
 
 
 def _attach_file_handler(target_logger: logging.Logger, file_path: Path, tag: str) -> None:
@@ -47,9 +59,8 @@ def _attach_file_handler(target_logger: logging.Logger, file_path: Path, tag: st
     if any(getattr(h, tag, False) for h in target_logger.handlers):
         return
     file_handler = logging.FileHandler(file_path, encoding="utf-8")
-    file_handler.setFormatter(
-        logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
-    )
+    file_handler.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(message)s"))
     setattr(file_handler, tag, True)
     target_logger.addHandler(file_handler)
 
@@ -90,7 +101,6 @@ def create_app() -> FastAPI:
 
     # 全局状态
     app.state.running_tasks = {}  # task_id -> asyncio.Task
-    app.state.approval_requests = {}  # task_id -> PendingApprovalContext
 
     @app.get("/health")
     async def health_check():

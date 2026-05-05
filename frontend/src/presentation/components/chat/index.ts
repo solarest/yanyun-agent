@@ -4,4 +4,6 @@ export { MessageList } from './MessageList';
 export { MessageBubble } from './MessageBubble';
 export { MessageInput } from './MessageInput';
 export { ClarifyCard } from './ClarifyCard';
-export { PlanStatusPanel } from './PlanStatusPanel';
+export { MultiClarifyCard } from './MultiClarifyCard';
+export { ToolCallCard } from './ToolCallCard';
+export { TaskPanel } from './TaskPanel';

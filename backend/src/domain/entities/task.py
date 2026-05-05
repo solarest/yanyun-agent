@@ -26,7 +26,6 @@ class TaskConfig:
     max_turns: int = 100
     model: str = "gpt-4"
     temperature: float = 0.7
-    approval_required: bool = True
 
 
 # 模型定价表（每 1K tokens，美元）

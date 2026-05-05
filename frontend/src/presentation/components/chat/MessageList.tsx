@@ -1,10 +1,12 @@
 /**
  * 表现层 - 消息列表
+ * 
+ * 渲染会话消息列表，支持自动滚动和澄清卡片显示。
  */
 import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import type { SessionMessage } from '@domain/entities/session';
 import { MessageBubble } from './MessageBubble';
-import { parseClarifyPrompt } from './ClarifyCard';
+import { parseAllClarifyPrompts } from './MultiClarifyCard';
 
 interface MessageListProps {
   messages: SessionMessage[];
@@ -34,21 +36,15 @@ export const MessageList: React.FC<MessageListProps> = ({
     if (isStreaming || messages.length === 0) return null;
     const lastMessage = messages[messages.length - 1];
     if (lastMessage.role !== 'assistant') return null;
-    const clarifyResult = lastMessage.tool_results.find(
-      (result) => result.tool_name === 'clarify',
-    );
-    const prompt =
-      parseClarifyPrompt(clarifyResult?.result) ||
-      parseClarifyPrompt(lastMessage.content);
-    return prompt ? lastMessage.id : null;
+    
+    // 从 message.content 中解析 clarify 问题（支持单个或多个）
+    const allPrompts = parseAllClarifyPrompts(lastMessage.content);
+    return allPrompts.length > 0 ? lastMessage.id : null;
   }, [isStreaming, messages]);
 
-  // 只在新增消息且用户本来就在底部附近时跟随；流式输出更新不强制滚动。
+  // 自动滚动：仅当新增消息且用户在底部附近时触发
   useEffect(() => {
-    if (
-      messages.length > previousMessageCountRef.current &&
-      shouldAutoScrollRef.current
-    ) {
+    if (messages.length > previousMessageCountRef.current && shouldAutoScrollRef.current) {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
     }
     previousMessageCountRef.current = messages.length;

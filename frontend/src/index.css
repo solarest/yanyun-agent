@@ -95,4 +95,67 @@
   .card {
     @apply rounded-lg border bg-card text-card-foreground shadow-sm;
   }
+
+  .markdown-content {
+    /* 标题 */
+    h1, h2, h3, h4, h5, h6 {
+      @apply font-semibold mt-2 mb-1;
+    }
+    h1 { @apply text-2xl; }
+    h2 { @apply text-xl; }
+    h3 { @apply text-lg; }
+    h4, h5, h6 { @apply text-base; }
+
+    /* 段落和列表 */
+    p { @apply my-1; }
+    ul, ol {
+      @apply my-1 ml-4;
+    }
+    ul { @apply list-disc; }
+    ol { @apply list-decimal; }
+    li { @apply my-0.5; }
+    li > ul, li > ol { @apply ml-4 my-0.5; }
+
+    /* 代码 */
+    code {
+      @apply rounded bg-muted px-1.5 py-0.5 text-sm font-mono;
+    }
+    pre {
+      @apply my-2 rounded-lg bg-muted p-3 overflow-x-auto;
+    }
+    pre code {
+      @apply bg-transparent p-0 text-sm;
+    }
+
+    /* 引用 */
+    blockquote {
+      @apply my-2 border-l-4 border-muted-foreground/30 pl-4 italic;
+    }
+
+    /* 链接 */
+    a {
+      @apply text-primary underline hover:text-primary/80;
+    }
+
+    /* 表格 */
+    table {
+      @apply my-2 w-full border-collapse;
+    }
+    th, td {
+      @apply border border-border px-3 py-2 text-left;
+    }
+    th {
+      @apply bg-muted font-semibold;
+    }
+
+    /* 分割线 */
+    hr {
+      @apply my-3 border-t border-border;
+    }
+
+    /* 图片 */
+    img {
+      @apply max-w-full h-auto my-2 rounded;
+    }
+  }
 }

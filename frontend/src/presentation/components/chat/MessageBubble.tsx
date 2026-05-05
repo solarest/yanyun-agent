@@ -1,9 +1,13 @@
 /**
  * 表现层 - 消息气泡
  */
-import React from 'react';
+import React, { useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import type { SessionMessage } from '@domain/entities/session';
-import { ClarifyCard, parseClarifyPrompt } from './ClarifyCard';
+import { ClarifyCard } from './ClarifyCard';
+import { MultiClarifyCard, parseAllClarifyPrompts } from './MultiClarifyCard';
+import { ToolCallCard } from './ToolCallCard';
 
 interface MessageBubbleProps {
   message: SessionMessage;
@@ -70,22 +74,12 @@ const buildToolTimeline = (
   return items;
 };
 
-const isStaleApprovalText = (text: string): boolean =>
-  /^Tool\s+'[^']+'\s+needs approval before it can run\.$/.test(text.trim());
-
-const buildCompletionFallback = (items: ToolTimelineItem[]): string => {
-  const successfulTools = items
-    .filter((item) => item.status === 'success')
-    .map((item) => item.name);
-  if (successfulTools.length === 0) return '';
-  return `已完成：${successfulTools.join('、')} 执行成功。`;
-};
-
 export const MessageBubble: React.FC<MessageBubbleProps> = ({
   message,
   clarifyDisabled = false,
   onClarifyAnswer,
 }) => {
+  const [clarifySubmitted, setClarifySubmitted] = useState(false);
   const isUser = message.role === 'user';
   const isError = message.status === 'error';
   const isStreaming = message.status === 'streaming';
@@ -93,29 +87,52 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   const visibleToolResults = message.tool_results.filter(
     (result) => !isSpecialTool(result.tool_name),
   );
-  const clarifyResult = message.tool_results.find(
-    (result) => result.tool_name === 'clarify',
-  );
-  const clarifyPrompt =
-    parseClarifyPrompt(clarifyResult?.result) || parseClarifyPrompt(message.content);
-  const contentIsClarifyPrompt = !!parseClarifyPrompt(message.content);
+  
+  // 从 message.content 中解析所有 clarify 问题（后端已将多个 clarify 合并到 content）
+  const allClarifyPrompts = parseAllClarifyPrompts(message.content);
+  const hasMultipleClarify = allClarifyPrompts.length > 1;
+  const hasSingleClarify = allClarifyPrompts.length === 1;
+  
+  const clarifyPrompt = hasSingleClarify ? allClarifyPrompts[0] : null;
+  const contentIsClarifyPrompt = hasSingleClarify || hasMultipleClarify;
   const content = contentIsClarifyPrompt ? '' : message.content;
   const toolTimeline = buildToolTimeline(visibleToolCalls, visibleToolResults);
   const hasVisibleTools = toolTimeline.length > 0;
-  const contentFallback =
-    !isUser && message.status === 'completed' && isStaleApprovalText(content)
-      ? buildCompletionFallback(toolTimeline)
-      : '';
-  const displayContent = contentFallback || content;
+  const displayContent = content;
+  const subAgentLabel = message.meta?.isSubAgent
+    ? `Plan ${message.meta.stepId || '?'}`
+    : null;
 
-  if (!isUser && clarifyPrompt && !content.trim() && !hasVisibleTools) {
+  // 多个 clarify 问题：使用 MultiClarifyCard
+  if (!isUser && hasMultipleClarify && !content.trim() && !hasVisibleTools && !clarifySubmitted) {
+    return (
+      <div className="flex justify-start">
+        <MultiClarifyCard
+          content={message.content}
+          disabled={clarifyDisabled || !onClarifyAnswer}
+          timestamp={message.created_at}
+          onAnswer={(answers: string[]) => {
+            // 将多个答案合并为一条消息发送
+            setClarifySubmitted(true);
+            onClarifyAnswer?.(answers.join('\n'));
+          }}
+        />
+      </div>
+    );
+  }
+  
+  // 单个 clarify 问题：使用 ClarifyCard
+  if (!isUser && clarifyPrompt && !content.trim() && !hasVisibleTools && !clarifySubmitted) {
     return (
       <div className="flex justify-start">
         <ClarifyCard
           prompt={clarifyPrompt}
           disabled={clarifyDisabled || !onClarifyAnswer}
           timestamp={message.created_at}
-          onAnswer={onClarifyAnswer}
+          onAnswer={(answer: string) => {
+            setClarifySubmitted(true);
+            onClarifyAnswer?.(answer);
+          }}
         />
       </div>
     );
@@ -132,59 +149,56 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
               : 'bg-accent text-foreground'
         }`}
       >
+        {!isUser && subAgentLabel && (
+          <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            {subAgentLabel}
+            {message.meta?.title ? ` · ${message.meta.title}` : ' · Sub-agent'}
+          </div>
+        )}
+
         {/* 工具调用摘要 */}
         {!isUser && hasVisibleTools && (
           <div className="mb-2 space-y-2 border-b border-border/50 pb-2">
-            {toolTimeline.map((item, index) => (
-              <div
+            {toolTimeline.map((item) => (
+              <ToolCallCard
                 key={item.key}
-                className="rounded-lg bg-background/60 px-2 py-2"
-              >
-                <div className="flex items-center justify-between gap-3 text-xs">
-                  <div className="flex min-w-0 items-center gap-1.5">
-                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-medium text-muted-foreground">
-                      {index + 1}
-                    </span>
-                    <span className="font-mono text-muted-foreground">&#9881;</span>
-                    <span className="truncate font-medium">{item.name}</span>
-                  </div>
-                  <span
-                    className={
-                      item.status === 'error' || item.status === 'failed'
-                        ? 'shrink-0 text-destructive'
-                        : 'shrink-0 text-muted-foreground'
-                    }
-                  >
-                    {item.status}
-                  </span>
-                </div>
-                {item.result && (
-                  <div className="mt-2 max-h-28 overflow-y-auto whitespace-pre-wrap rounded-md bg-background/70 px-2 py-1.5 text-xs text-muted-foreground">
-                    {item.result}
-                  </div>
-                )}
-              </div>
+                name={item.name}
+                status={item.status}
+                result={item.result}
+                isStreaming={isStreaming}
+              />
             ))}
           </div>
         )}
 
-        {!isUser && clarifyPrompt && (
+        {!isUser && clarifyPrompt && !clarifySubmitted && (
           <div className={hasVisibleTools ? 'mt-2' : ''}>
             <ClarifyCard
               prompt={clarifyPrompt}
               disabled={clarifyDisabled || !onClarifyAnswer}
               timestamp={message.created_at}
-              onAnswer={onClarifyAnswer}
+              onAnswer={(answer: string) => {
+                setClarifySubmitted(true);
+                onClarifyAnswer?.(answer);
+              }}
             />
           </div>
         )}
 
         {/* 消息内容 */}
         {(displayContent.trim() || isStreaming || !clarifyPrompt) && (
-          <div className="whitespace-pre-wrap text-sm leading-relaxed">
-            {displayContent || (isStreaming ? '' : '...')}
-            {isStreaming && !displayContent && (
-              <span className="inline-block h-4 w-1 animate-pulse bg-current" />
+          <div className="markdown-content text-sm leading-relaxed">
+            {displayContent ? (
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {displayContent}
+              </ReactMarkdown>
+            ) : (
+              <>
+                {isStreaming ? '' : '...'}
+                {isStreaming && !displayContent && (
+                  <span className="inline-block h-4 w-1 animate-pulse bg-current" />
+                )}
+              </>
             )}
           </div>
         )}

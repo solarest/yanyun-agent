@@ -5,7 +5,6 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from src.application.dtos.task_dto import (
-    ApprovalDecisionDTO,
     CreateTaskDTO,
     TaskListResponseDTO,
     TaskResponseDTO,
@@ -181,9 +180,6 @@ async def cancel_task(
             detail={"error": {"code": "TASK_NOT_RUNNING", "message": "任务不在可取消状态"}},
         )
 
-    approval_requests: dict = request.app.state.approval_requests
-    approval_requests.pop(task_id, None)
-
     # 从 running_tasks 中取出 asyncio.Task 并取消
     running_tasks: dict = request.app.state.running_tasks
     asyncio_task = running_tasks.get(task_id)
@@ -203,43 +199,3 @@ async def cancel_task(
         await request.app.state.event_service.emit(task_id, "task:cancelled", {})
 
     return {"message": "cancel requested", "task_id": task_id}
-
-
-@router.post(
-    "/{task_id}/approval",
-    status_code=status.HTTP_202_ACCEPTED,
-    summary="审批待执行工具",
-    responses={
-        404: {"description": "审批请求不存在"},
-        409: {"description": "任务当前没有待审批请求"},
-    },
-)
-async def resolve_approval(
-    task_id: str,
-    dto: ApprovalDecisionDTO,
-    request: Request,
-    task_repo: ITaskRepository = Depends(get_task_repository),
-):
-    task = await task_repo.get_by_id(task_id)
-    if not task:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"error": {"code": "TASK_NOT_FOUND", "message": "任务不存在"}},
-        )
-
-    approval_requests: dict = request.app.state.approval_requests
-    approval_context = approval_requests.get(task_id)
-    if approval_context is None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"error": {"code": "APPROVAL_NOT_PENDING", "message": "任务当前没有待审批请求"}},
-        )
-
-    use_case = approval_context.use_case
-    await use_case.resolve_pending_approval(task_id, dto.approved)
-
-    return {
-        "message": "approval resolved",
-        "task_id": task_id,
-        "approved": dto.approved,
-    }

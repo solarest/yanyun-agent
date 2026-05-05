@@ -44,33 +44,65 @@ class ToolDef:
     """工具分类：web_search / file / clarify / plan / mcp / custom"""
 
     def to_prompt_section(self) -> str:
-        """生成为 Prompt 中的工具描述段落（XML 格式）
+        """生成 System Prompt 中的工具名称标记（简短形式）
 
-        使用 XML 格式便于 LLM 解析和处理工具定义。
+        用于 Layer 5 Available Tools 部分，只标记工具名称列表。
+        工具的详细信息通过 to_llm_schema() 生成并传递给 bind_tools()。
 
         Returns:
-            XML 格式的工具描述文本
+            工具名称标记文本，如 "- web_search"
         """
-        parts = [f'<tool name="{self.name}">']
-        parts.append(f"  <description>{self.description}</description>")
+        return f"- {self.name}"
 
-        if self.parameters:
-            parts.append("  <parameters>")
-            for p in self.parameters:
-                req = "true" if p.required else "false"
-                enum_str = ""
-                if p.enum:
-                    enum_values = ", ".join(str(v) for v in p.enum)
-                    enum_str = f"\n          <enum>{enum_values}</enum>"
-                parts.append(
-                    f'    <param name="{p.name}" type="{p.type}" '
-                    f'required="{req}">{p.description}{enum_str}</param>'
-                )
-            parts.append("  </parameters>")
+    def to_llm_schema(self) -> dict:
+        """生成 LLM API 调用时的工具 Schema（详细形式）
 
-        if self.returns:
-            parts.append(f"  <returns>{self.returns}</returns>")
+        用于 bind_tools() 参数，包含完整的工具描述和参数定义。
+        符合 OpenAI Chat Completions API 的 tools 参数格式。
 
-        parts.append("</tool>")
+        Returns:
+            工具 Schema 字典，格式为:
+            {
+                "type": "function",
+                "function": {
+                    "name": "tool_name",
+                    "description": "tool description",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {...},
+                        "required": [...]
+                    }
+                }
+            }
+        """
+        properties = {}
+        required_params = []
 
-        return "\n".join(parts)
+        for param in self.parameters:
+            prop_def = {
+                "type": param.type,
+                "description": param.description,
+            }
+            if param.enum:
+                prop_def["enum"] = param.enum
+            properties[param.name] = prop_def
+
+            if param.required:
+                required_params.append(param.name)
+
+        function_def = {
+            "name": self.name,
+            "description": self.description,
+            "parameters": {
+                "type": "object",
+                "properties": properties,
+            },
+        }
+
+        if required_params:
+            function_def["parameters"]["required"] = required_params
+
+        return {
+            "type": "function",
+            "function": function_def,
+        }

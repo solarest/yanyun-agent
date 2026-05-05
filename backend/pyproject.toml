@@ -1,7 +1,7 @@
 [project]
-name = "ddd-backend"
+name = "wordlight-backend"
 version = "0.1.0"
-description = "DDD Scaffold Backend"
+description = "WordLite Agent Backend"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.104.0,<0.115.0",

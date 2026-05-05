@@ -14,69 +14,80 @@ from src.domain.entities.tool import (
 
 class TestToolParameter:
     def test_required_parameter(self) -> None:
-        p = ToolParameter(name="query", type="string", description="Search query")
+        p = ToolParameter(name="query", type="string",
+                          description="Search query")
         assert p.required is True
         assert p.enum is None
 
     def test_optional_parameter_with_enum(self) -> None:
         p = ToolParameter(
-            name="depth", type="string", description="Search depth",
-            required=False, enum=["basic", "advanced"],
+            name="depth",
+            type="string",
+            description="Search depth",
+            required=False,
+            enum=["basic", "advanced"],
         )
         assert p.required is False
         assert p.enum == ["basic", "advanced"]
 
 
 class TestToolDef:
-    def test_to_prompt_section_generates_xml(self) -> None:
+    def test_to_llm_schema_basic(self) -> None:
+        """测试生成基本 LLM Schema"""
         td = ToolDef(
             name="web_search",
             description="Search the web",
             parameters=[
-                ToolParameter(name="query", type="string", description="Search query"),
+                ToolParameter(name="query", type="string",
+                              description="Search query"),
             ],
             returns="Search results",
             category="web_search",
         )
-        xml = td.to_prompt_section()
-        assert '<tool name="web_search">' in xml
-        assert "<description>Search the web</description>" in xml
-        assert '<param name="query"' in xml
-        assert 'type="string"' in xml
-        assert 'required="true"' in xml
-        assert "<returns>Search results</returns>" in xml
-        assert "</tool>" in xml
+        schema = td.to_llm_schema()
+        assert schema["type"] == "function"
+        assert schema["function"]["name"] == "web_search"
+        assert schema["function"]["description"] == "Search the web"
+        assert "query" in schema["function"]["parameters"]["properties"]
 
-    def test_to_prompt_section_with_enum(self) -> None:
+    def test_to_llm_schema_with_enum(self) -> None:
+        """测试带枚举的 LLM Schema"""
         td = ToolDef(
             name="test",
             description="Test tool",
             parameters=[
                 ToolParameter(
-                    name="mode", type="string", description="Mode",
+                    name="mode",
+                    type="string",
+                    description="Mode",
                     enum=["fast", "slow"],
                 ),
             ],
         )
-        xml = td.to_prompt_section()
-        assert "<enum>fast, slow</enum>" in xml
+        schema = td.to_llm_schema()
+        mode_prop = schema["function"]["parameters"]["properties"]["mode"]
+        assert mode_prop["enum"] == ["fast", "slow"]
 
-    def test_to_prompt_section_no_params(self) -> None:
+    def test_to_llm_schema_no_params(self) -> None:
+        """测试无参数的 LLM Schema"""
         td = ToolDef(name="simple", description="Simple tool")
-        xml = td.to_prompt_section()
-        assert "<parameters>" not in xml
-        assert "<returns>" not in xml
+        schema = td.to_llm_schema()
+        assert schema["function"]["parameters"]["properties"] == {}
 
-    def test_to_prompt_section_optional_param(self) -> None:
+    def test_to_llm_schema_optional_param(self) -> None:
+        """测试可选参数的 LLM Schema"""
         td = ToolDef(
             name="t",
             description="d",
             parameters=[
-                ToolParameter(name="x", type="integer", description="val", required=False),
+                ToolParameter(name="x", type="integer",
+                              description="val", required=False),
             ],
         )
-        xml = td.to_prompt_section()
-        assert 'required="false"' in xml
+        schema = td.to_llm_schema()
+        params = schema["function"]["parameters"]
+        assert "x" in params["properties"]
+        assert "x" not in params.get("required", [])
 
 
 class TestToolResult:
@@ -106,8 +117,11 @@ class TestToolContext:
 
     def test_full_context(self) -> None:
         ctx = ToolContext(
-            task_id="t1", workspace="/tmp", user_id="u1",
-            agent_id="a1", extra={"key": "val"},
+            task_id="t1",
+            workspace="/tmp",
+            user_id="u1",
+            agent_id="a1",
+            extra={"key": "val"},
         )
         assert ctx.workspace == "/tmp"
         assert ctx.extra["key"] == "val"
@@ -118,9 +132,7 @@ class TestToolPolicy:
         p = ToolPolicy()
         assert p.timeout_ms == 30000
         assert p.max_calls_per_minute == 60
-        assert p.requires_approval is False
         assert p.sandboxed is False
-        assert p.risk_level == "low"
 
     def test_frozen(self) -> None:
         p = ToolPolicy()
@@ -129,9 +141,10 @@ class TestToolPolicy:
 
     def test_custom_values(self) -> None:
         p = ToolPolicy(
-            timeout_ms=5000, max_calls_per_minute=10,
-            requires_approval=True, sandboxed=True,
-            allowed_paths=("/workspace",), risk_level="high",
+            timeout_ms=5000,
+            max_calls_per_minute=10,
+            sandboxed=True,
+            allowed_paths=("/workspace",),
         )
         assert p.timeout_ms == 5000
         assert p.allowed_paths == ("/workspace",)
@@ -147,7 +160,8 @@ class TestRegisteredTool:
             description="Search the web",
             func=dummy,
             parameters=[
-                ToolParameter(name="query", type="string", description="q", required=True),
+                ToolParameter(name="query", type="string",
+                              description="q", required=True),
             ],
             returns="Search results",
             category="web_search",
@@ -165,10 +179,13 @@ class TestRegisteredTool:
             return ToolResult(output="ok")
 
         rt = RegisteredTool(
-            name="test_tool", description="A test", func=dummy,
+            name="test_tool",
+            description="A test",
+            func=dummy,
             parameters=[
                 ToolParameter(name="x", type="string", description="input"),
             ],
         )
-        xml = rt.to_tool_def().to_prompt_section()
-        assert '<tool name="test_tool">' in xml
+        result = rt.to_tool_def().to_prompt_section()
+        # 现在只返回工具名称
+        assert result == "- test_tool"

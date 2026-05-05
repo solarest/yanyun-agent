@@ -76,20 +76,7 @@ export interface ToolResultPayload extends BaseEventPayload {
   status: 'success' | 'error' | string;
   output?: string;
   error?: string;
-}
-
-/** approval-requested 事件 */
-export interface ApprovalRequestedPayload extends BaseEventPayload {
-  toolCallId: string;
-  toolName: string;
-  input: Record<string, unknown>;
-  riskLevel: string;
-  message: string;
-}
-
-/** approval-resolved 事件 */
-export interface ApprovalResolvedPayload extends ApprovalRequestedPayload {
-  approved: boolean;
+  metadata?: Record<string, unknown>;
 }
 
 /** context-compacting 事件 */
@@ -112,21 +99,21 @@ export interface StuckDetectedPayload extends BaseEventPayload {
   action: string;
 }
 
-/** plan-created 事件 */
-export interface PlanCreatedPayload extends BaseEventPayload {
+/** step-created 事件（多步骤任务） */
+export interface StepCreatedPayload extends BaseEventPayload {
   plan_id: string;
   goal?: string;
   execution_order?: unknown[];
 }
 
-/** plan-step-started 事件 */
-export interface PlanStepStartedPayload extends BaseEventPayload {
+/** step-started 事件（多步骤任务） */
+export interface StepStartedPayload extends BaseEventPayload {
   step_id: number;
   description?: string;
 }
 
-/** plan-step-completed 事件 */
-export interface PlanStepCompletedPayload extends BaseEventPayload {
+/** step-completed 事件（多步骤任务） */
+export interface StepCompletedPayload extends BaseEventPayload {
   step_id: number;
   status: 'completed' | 'failed' | string;
   result?: string | null;
@@ -134,13 +121,13 @@ export interface PlanStepCompletedPayload extends BaseEventPayload {
   sub_agent_task_id?: string | null;
 }
 
-/** plan-parallel-group-started 事件 */
-export interface PlanParallelGroupStartedPayload extends BaseEventPayload {
+/** step-parallel-group-started 事件（多步骤任务） */
+export interface StepParallelGroupStartedPayload extends BaseEventPayload {
   step_ids: number[];
 }
 
-/** plan-parallel-group-completed 事件 */
-export interface PlanParallelGroupCompletedPayload extends BaseEventPayload {
+/** step-parallel-group-completed 事件（多步骤任务） */
+export interface StepParallelGroupCompletedPayload extends BaseEventPayload {
   step_ids: number[];
   results?: Record<
     string,
@@ -153,8 +140,8 @@ export interface PlanParallelGroupCompletedPayload extends BaseEventPayload {
   >;
 }
 
-/** plan-completed 事件 */
-export interface PlanCompletedPayload extends BaseEventPayload {
+/** step-all-completed 事件（多步骤任务全部完成） */
+export interface StepAllCompletedPayload extends BaseEventPayload {
   plan_id: string;
   summary?: string;
   step_results?: Record<
@@ -174,6 +161,7 @@ export interface SubAgentPayload extends BaseEventPayload {
   step_id?: number;
   description?: string;
   status?: string;
+  result?: string | null;
   error?: string | null;
 }
 
@@ -198,17 +186,15 @@ export interface AgentEventMap {
   'llm:complete': LLMCompletePayload;
   'tool:call': ToolCallPayload;
   'tool:result': ToolResultPayload;
-  'approval:requested': ApprovalRequestedPayload;
-  'approval:resolved': ApprovalResolvedPayload;
   'context:compacting': ContextCompactingPayload;
   'loop:detected': LoopDetectedPayload;
   'stuck:detected': StuckDetectedPayload;
-  'plan:created': PlanCreatedPayload;
-  'plan:step_started': PlanStepStartedPayload;
-  'plan:step_completed': PlanStepCompletedPayload;
-  'plan:parallel_group_started': PlanParallelGroupStartedPayload;
-  'plan:parallel_group_completed': PlanParallelGroupCompletedPayload;
-  'plan:completed': PlanCompletedPayload;
+  'step:created': StepCreatedPayload;
+  'step:started': StepStartedPayload;
+  'step:completed': StepCompletedPayload;
+  'step:parallel_group_started': StepParallelGroupStartedPayload;
+  'step:parallel_group_completed': StepParallelGroupCompletedPayload;
+  'step:all_completed': StepAllCompletedPayload;
   'sub_agent:started': SubAgentPayload;
   'sub_agent:completed': SubAgentPayload;
   'sub_agent:failed': SubAgentPayload;
@@ -235,17 +221,15 @@ export const SSE_EVENT_TYPES: readonly string[] = [
   'llm-complete',
   'tool-call',
   'tool-result',
-  'approval-requested',
-  'approval-resolved',
   'context-compacting',
   'loop-detected',
   'stuck-detected',
-  'plan-created',
-  'plan-step_started',
-  'plan-step_completed',
-  'plan-parallel_group_started',
-  'plan-parallel_group_completed',
-  'plan-completed',
+  'step-created',
+  'step-step_started',
+  'step-step_completed',
+  'step-parallel_group_started',
+  'step-parallel_group_completed',
+  'step-all_completed',
   'sub_agent-started',
   'sub_agent-completed',
   'sub_agent-failed',

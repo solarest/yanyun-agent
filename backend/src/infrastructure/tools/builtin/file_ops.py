@@ -17,7 +17,6 @@ from src.infrastructure.tools.decorator import tool
     category="file",
     returns="文件内容文本",
     timeout_ms=10000,
-    risk_level="low",
 )
 async def file_read(
     path: str,
@@ -72,8 +71,6 @@ async def file_read(
     category="file",
     returns="写入结果确认",
     timeout_ms=10000,
-    requires_approval=True,
-    risk_level="medium",
 )
 async def file_write(
     path: str,
@@ -113,7 +110,6 @@ async def file_write(
     category="file",
     returns="匹配的文件路径列表或包含关键词的行",
     timeout_ms=15000,
-    risk_level="low",
 )
 async def file_search(
     pattern: str,

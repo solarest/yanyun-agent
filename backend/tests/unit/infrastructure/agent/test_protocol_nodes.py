@@ -51,6 +51,36 @@ class FakeLLM:
         yield AIMessageChunk(content=" world")
 
 
+class FakeClassificationLLM:
+    """Mock LLM 分类器"""
+
+    async def ainvoke(self, prompt, **kwargs):
+        # 提取输入文本
+        import re
+        match = re.search(r'输入文本: (.+)$', prompt, re.DOTALL)
+        input_text = match.group(1).strip() if match else ''
+
+        # 根据输入文本内容返回不同的分类结果
+        if not input_text:
+            # 空响应
+            return AIMessage(content='{"category": "empty", "confidence": 1.0}')
+        elif '任务完成' in input_text and ('文件' in input_text or '创建' in input_text or '实现' in input_text):
+            # 完成声明(有实质内容)
+            return AIMessage(content='{"category": "complete", "confidence": 0.95, "reasoning": "明确声明完成,且包含具体的工作成果"}')
+        elif '任务完成' in input_text or 'task complete' in input_text.lower():
+            # 完成声明(缺少实质内容)
+            return AIMessage(content='{"category": "incomplete", "confidence": 0.9, "reasoning": "声称完成但无任何具体成果描述"}')
+        elif input_text.rstrip().endswith(('?', '？')) or '请问' in input_text or '是否' in input_text:
+            # 用户提问
+            return AIMessage(content='{"category": "user_question", "confidence": 0.95}')
+        elif '我将要' in input_text or '步骤如下' in input_text or '计划' in input_text:
+            # 纯规划
+            return AIMessage(content='{"category": "planning_only", "confidence": 0.9, "reasoning": "描述了计划但未执行"}')
+        else:
+            # 实质性文本
+            return AIMessage(content='{"category": "substantive_text", "confidence": 0.95}')
+
+
 def make_state(**overrides):
     state = {
         "messages": [],
@@ -66,9 +96,6 @@ def make_state(**overrides):
         "pending_tool_calls": [],
         "tool_results": {},
         "awaiting_user_input": False,
-        "awaiting_approval": False,
-        "approval_request": None,
-        "approved_tool_call_ids": [],
         "last_executed_tool_call_ids": [],
         "loop_detection_count": 0,
         "loop_detected": False,
@@ -105,6 +132,7 @@ async def test_llm_call_node_emits_phase_chunks_and_completion() -> None:
     assert result["messages"][0].content == "Hello world"
     assert result["phase"] == "thinking"
     assert result["current_turn"] == 1
+    assert result["last_executed_tool_call_ids"] == []
 
 
 @pytest.mark.asyncio
@@ -127,7 +155,8 @@ async def test_tool_execute_node_emits_phase_call_and_result() -> None:
         make_state(
             phase="thinking",
             current_turn=2,
-            pending_tool_calls=[{"id": "call-1", "name": "search", "input": {"q": "hello"}}],
+            pending_tool_calls=[
+                {"id": "call-1", "name": "search", "input": {"q": "hello"}}],
         ),
         {"configurable": {"tool_registry": FakeToolRegistry(), "event_emitter": emitter}},
     )
@@ -166,7 +195,8 @@ async def test_tool_execute_node_marks_awaiting_user_input_for_clarify_like_tool
         make_state(
             phase="thinking",
             current_turn=1,
-            pending_tool_calls=[{"id": "call-clarify", "name": "clarify", "input": {"question": "?"}}],
+            pending_tool_calls=[
+                {"id": "call-clarify", "name": "clarify", "input": {"question": "?"}}],
         ),
         {"configurable": {"tool_registry": FakeToolRegistry(), "event_emitter": emitter}},
     )
@@ -199,7 +229,8 @@ async def test_tool_execute_node_preserves_previous_tool_results() -> None:
                     "metadata": {},
                 }
             },
-            pending_tool_calls=[{"id": "call-new", "name": "search", "input": {"q": "hello"}}],
+            pending_tool_calls=[
+                {"id": "call-new", "name": "search", "input": {"q": "hello"}}],
         ),
         {"configurable": {"tool_registry": FakeToolRegistry(), "event_emitter": emitter}},
     )
@@ -223,103 +254,12 @@ async def test_tool_execute_node_preserves_previous_tool_results() -> None:
 
 
 @pytest.mark.asyncio
-async def test_tool_execute_node_pauses_when_tool_requires_approval() -> None:
-    emitter = RecordingEmitter()
-
-    class FakeToolRegistry:
-        def resolve(self, _tool_name):
-            return SimpleNamespace(
-                policy=SimpleNamespace(requires_approval=True, risk_level="medium")
-            )
-
-        async def execute(self, tool_name, tool_input, context):
-            raise AssertionError("approval-gated tool should not execute before approval")
-
-    result = await tool_execute_node(
-        make_state(
-            phase="thinking",
-            current_turn=2,
-            pending_tool_calls=[{"id": "call-1", "name": "file_write", "input": {"path": "a.txt"}}],
-        ),
-        {"configurable": {"tool_registry": FakeToolRegistry(), "event_emitter": emitter}},
-    )
-
-    assert [event["event_type"] for event in emitter.events] == ["phase:changed"]
-    assert result["awaiting_approval"] is True
-    assert result["approval_request"] == {
-        "toolCallId": "call-1",
-        "toolName": "file_write",
-        "input": {"path": "a.txt"},
-        "riskLevel": "medium",
-        "message": "Tool 'file_write' needs approval before it can run.",
-    }
-    assert result["pending_tool_calls"] == [
-        {"id": "call-1", "name": "file_write", "input": {"path": "a.txt"}}
-    ]
-    assert result["messages"] == []
-    assert result["tool_results"] == {}
-
-
-@pytest.mark.asyncio
-async def test_tool_execute_node_runs_approved_tool_with_approval_context() -> None:
-    emitter = RecordingEmitter()
-
-    class FakeToolRegistry:
-        def resolve(self, _tool_name):
-            return SimpleNamespace(
-                policy=SimpleNamespace(requires_approval=True, risk_level="medium")
-            )
-
-        async def execute(self, tool_name, tool_input, context):
-            assert tool_name == "file_write"
-            assert tool_input == {"path": "a.txt", "content": "hello"}
-            assert context.extra["tool_call_id"] == "call-1"
-            assert context.extra["approved_tool_call_ids"] == ["call-1"]
-            return SimpleNamespace(
-                output="written",
-                success=True,
-                error=None,
-                metadata={},
-            )
-
-    result = await tool_execute_node(
-        make_state(
-            phase="paused",
-            current_turn=2,
-            pending_tool_calls=[
-                {
-                    "id": "call-1",
-                    "name": "file_write",
-                    "input": {"path": "a.txt", "content": "hello"},
-                }
-            ],
-            approved_tool_call_ids=["call-1"],
-        ),
-        {"configurable": {"tool_registry": FakeToolRegistry(), "event_emitter": emitter}},
-    )
-
-    assert [event["event_type"] for event in emitter.events] == [
-        "phase:changed",
-        "tool:call",
-        "tool:result",
-    ]
-    assert result["awaiting_approval"] is False
-    assert result["pending_tool_calls"] == []
-    assert result["messages"][0].content == "written"
-    assert result["tool_results"]["call-1"]["status"] == "success"
-
-
-@pytest.mark.asyncio
-async def test_tool_execute_node_delegates_non_plan_tools_when_plan_is_present() -> None:
+async def test_tool_execute_node_executes_all_tools_uniformly() -> None:
+    """plan 优先级已移除，所有工具统一执行"""
     emitter = RecordingEmitter()
     executed_tools: list[str] = []
 
     class FakeToolRegistry:
-        def resolve(self, _tool_name):
-            return SimpleNamespace(
-                policy=SimpleNamespace(requires_approval=False, risk_level="low")
-            )
-
         async def execute(self, tool_name, tool_input, context):
             executed_tools.append(tool_name)
             return SimpleNamespace(
@@ -337,16 +277,20 @@ async def test_tool_execute_node_delegates_non_plan_tools_when_plan_is_present()
     result = await tool_execute_node(
         make_state(
             pending_tool_calls=[
-                {"id": "call-search", "name": "web_search", "input": {"query": "news"}},
-                {"id": "call-plan", "name": "plan", "input": {"goal": "goal", "steps": ["step"]}},
+                {"id": "call-search", "name": "web_search",
+                    "input": {"query": "news"}},
+                {"id": "call-plan", "name": "plan",
+                    "input": {"goal": "goal", "steps": ["step"]}},
             ],
         ),
         {"configurable": {"tool_registry": FakeToolRegistry(), "event_emitter": emitter}},
     )
 
-    assert executed_tools == ["plan"]
-    assert result["last_executed_tool_call_ids"] == ["call-plan"]
-    assert result["tool_results"]["call-search"]["status"] == "skipped"
+    # 所有工具均被执行（不再有 plan 优先级跳过逻辑）
+    assert executed_tools == ["web_search", "plan"]
+    assert result["last_executed_tool_call_ids"] == [
+        "call-search", "call-plan"]
+    assert result["tool_results"]["call-search"]["status"] == "success"
     assert result["tool_results"]["call-plan"]["status"] == "success"
 
 
@@ -359,9 +303,12 @@ async def test_loop_detect_node_emits_loop_detected_and_phase_change() -> None:
             phase="thinking",
             current_turn=3,
             messages=[
-                {"role": "assistant", "tool_calls": [{"name": "search", "args": {"q": "x"}}]},
-                {"role": "assistant", "tool_calls": [{"name": "search", "args": {"q": "x"}}]},
-                {"role": "assistant", "tool_calls": [{"name": "search", "args": {"q": "x"}}]},
+                {"role": "assistant", "tool_calls": [
+                    {"name": "search", "args": {"q": "x"}}]},
+                {"role": "assistant", "tool_calls": [
+                    {"name": "search", "args": {"q": "x"}}]},
+                {"role": "assistant", "tool_calls": [
+                    {"name": "search", "args": {"q": "x"}}]},
             ],
         ),
         {"configurable": {"event_emitter": emitter}},
@@ -372,6 +319,53 @@ async def test_loop_detect_node_emits_loop_detected_and_phase_change() -> None:
         "phase:changed",
     ]
     assert result["loop_detected"] is True
+    assert result["loop_type"] == "exact_tool_repeat"
+    assert result["phase"] == "loop_correcting"
+
+
+@pytest.mark.asyncio
+async def test_loop_detect_invalid_tool_calls() -> None:
+    """测试无效工具调用检测（缺少 name 或 id）"""
+    emitter = RecordingEmitter()
+
+    result = await loop_detect_node(
+        make_state(
+            pending_tool_calls=[
+                {"id": "", "name": "search", "input": {"q": "x"}},  # 缺少 id
+            ],
+        ),
+        {"configurable": {"event_emitter": emitter}},
+    )
+
+    assert result["loop_detected"] is True
+    assert result["loop_type"] == "invalid_tool_call"
+    assert result["loop_detection_count"] == 1
+    assert result["phase"] == "loop_correcting"
+
+
+@pytest.mark.asyncio
+async def test_loop_detect_alternating_pattern() -> None:
+    """测试 A-B-A-B 交替模式检测"""
+    emitter = RecordingEmitter()
+
+    result = await loop_detect_node(
+        make_state(
+            messages=[
+                {"role": "assistant", "tool_calls": [
+                    {"name": "read_file", "args": {"path": "a.txt"}}]},
+                {"role": "assistant", "tool_calls": [
+                    {"name": "grep_search", "args": {"query": "x"}}]},
+                {"role": "assistant", "tool_calls": [
+                    {"name": "read_file", "args": {"path": "a.txt"}}]},
+                {"role": "assistant", "tool_calls": [
+                    {"name": "grep_search", "args": {"query": "x"}}]},
+            ],
+        ),
+        {"configurable": {"event_emitter": emitter}},
+    )
+
+    assert result["loop_detected"] is True
+    assert result["loop_type"] == "alternating_pattern"
     assert result["phase"] == "loop_correcting"
 
 
@@ -383,10 +377,14 @@ async def test_loop_detect_node_ignores_tool_history_before_current_task() -> No
         make_state(
             task_start_message_count=3,
             messages=[
-                {"role": "assistant", "tool_calls": [{"name": "search", "args": {"q": "x"}}]},
-                {"role": "assistant", "tool_calls": [{"name": "search", "args": {"q": "x"}}]},
-                {"role": "assistant", "tool_calls": [{"name": "search", "args": {"q": "x"}}]},
-                {"role": "assistant", "content": "new run", "tool_calls": [{"name": "search", "args": {"q": "y"}}]},
+                {"role": "assistant", "tool_calls": [
+                    {"name": "search", "args": {"q": "x"}}]},
+                {"role": "assistant", "tool_calls": [
+                    {"name": "search", "args": {"q": "x"}}]},
+                {"role": "assistant", "tool_calls": [
+                    {"name": "search", "args": {"q": "x"}}]},
+                {"role": "assistant", "content": "new run", "tool_calls": [
+                    {"name": "search", "args": {"q": "y"}}]},
             ],
         ),
         {"configurable": {"event_emitter": emitter}},
@@ -399,54 +397,75 @@ async def test_loop_detect_node_ignores_tool_history_before_current_task() -> No
 @pytest.mark.asyncio
 async def test_stuck_detect_node_emits_stuck_detected_and_phase_change() -> None:
     emitter = RecordingEmitter()
+    classification_llm = FakeClassificationLLM()
 
-    result = await stuck_detect_node(
-        make_state(
-            phase="thinking",
-            current_turn=2,
-            messages=[
-                {"role": "assistant", "content": "thinking 1", "tool_calls": []},
-                {"role": "assistant", "content": "thinking 2", "tool_calls": []},
-                {"role": "assistant", "content": "thinking 3", "tool_calls": []},
-            ],
-        ),
-        {"configurable": {"event_emitter": emitter}},
-    )
+    # 注入到缓存
+    import src.infrastructure.agent.nodes.stuck_detect_node as stuck_module
+    original_cache = stuck_module._classification_llm_cache
+    stuck_module._classification_llm_cache = classification_llm
 
-    assert [event["event_type"] for event in emitter.events] == [
-        "stuck:detected",
-        "phase:changed",
-    ]
-    assert result["stuck_detected"] is True
-    assert result["phase"] == "stuck_recovering"
+    try:
+        result = await stuck_detect_node(
+            make_state(
+                phase="thinking",
+                current_turn=2,
+                messages=[
+                    {"role": "assistant", "content": "thinking 1", "tool_calls": []},
+                    {"role": "assistant", "content": "thinking 2", "tool_calls": []},
+                    {"role": "assistant", "content": "thinking 3", "tool_calls": []},
+                ],
+            ),
+            {"configurable": {"event_emitter": emitter}},
+        )
+
+        assert [event["event_type"] for event in emitter.events] == [
+            "stuck:detected",
+            "phase:changed",
+        ]
+        assert result["stuck_detected"] is True
+        assert result["phase"] == "stuck_recovering"
+    finally:
+        stuck_module._classification_llm_cache = original_cache
 
 
 @pytest.mark.asyncio
 async def test_stuck_detect_node_ignores_text_history_before_current_task() -> None:
     emitter = RecordingEmitter()
+    classification_llm = FakeClassificationLLM()
 
-    result = await stuck_detect_node(
-        make_state(
-            task_start_message_count=3,
-            messages=[
-                {"role": "assistant", "content": "old 1", "tool_calls": []},
-                {"role": "assistant", "content": "old 2", "tool_calls": []},
-                {"role": "assistant", "content": "old 3", "tool_calls": []},
-                {"role": "assistant", "content": "new answer", "tool_calls": []},
-            ],
-        ),
-        {"configurable": {"event_emitter": emitter}},
-    )
+    # 注入到缓存
+    import src.infrastructure.agent.nodes.stuck_detect_node as stuck_module
+    original_cache = stuck_module._classification_llm_cache
+    stuck_module._classification_llm_cache = classification_llm
 
-    assert result["stuck_detected"] is False
-    assert emitter.events == []
+    try:
+        result = await stuck_detect_node(
+            make_state(
+                task_start_message_count=3,
+                messages=[
+                    {"role": "assistant", "content": "old 1", "tool_calls": []},
+                    {"role": "assistant", "content": "old 2", "tool_calls": []},
+                    {"role": "assistant", "content": "old 3", "tool_calls": []},
+                    {"role": "assistant", "content": "new answer", "tool_calls": []},
+                ],
+            ),
+            {"configurable": {"event_emitter": emitter}},
+        )
+
+        # 只有1条新的 assistant消息,不应检测到 stuck
+        assert result.get("stuck_detected") is None or result.get(
+            "stuck_detected") is False
+        assert emitter.events == []
+    finally:
+        stuck_module._classification_llm_cache = original_cache
 
 
 @pytest.mark.asyncio
 async def test_context_compact_node_emits_phase_and_compaction_event() -> None:
     emitter = RecordingEmitter()
     # 使用真实 LangChain 消息对象（带 id）以测试 RemoveMessage 逻辑
-    messages = [AIMessage(content=f"msg-{i}", id=f"msg-id-{i}") for i in range(12)]
+    messages = [
+        AIMessage(content=f"msg-{i}", id=f"msg-id-{i}") for i in range(12)]
 
     result = await context_compact_node(
         make_state(messages=messages, phase="thinking", current_turn=4),
@@ -460,4 +479,5 @@ async def test_context_compact_node_emits_phase_and_compaction_event() -> None:
     assert result["phase"] == "context_compacting"
     # 应该删除 messages[1:-10]（即 msg-1），保留第 1 条和最近 10 条
     assert all(isinstance(m, RemoveMessage) for m in result["messages"])
-    assert len(result["messages"]) == 1  # 12 - 1(first) - 10(recent) = 1 to remove
+    # 12 - 1(first) - 10(recent) = 1 to remove
+    assert len(result["messages"]) == 1

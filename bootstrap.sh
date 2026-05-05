@@ -115,6 +115,8 @@ ensure_log_dir() {
 # ==========================================
 
 start_backend() {
+    local debug_mode=${1:-false}
+    
     # 先检查并杀死可能存在的旧服务进程（基于端口）
     kill_existing_service_by_port 8000 "后端"
     
@@ -125,6 +127,9 @@ start_backend() {
     fi
     
     log_info "启动后端服务..."
+    if [ "$debug_mode" = "true" ]; then
+        log_info "调试模式已启用"
+    fi
     cd "$BACKEND_DIR"
     
     # 检查虚拟环境
@@ -135,11 +140,20 @@ start_backend() {
     
     # 启动后端
     ensure_log_dir
-    uv run uvicorn src.presentation.app:app \
-        --host 0.0.0.0 \
-        --port 8000 \
-        --reload \
-        > "$LOG_DIR/backend.log" 2>&1 &
+    if [ "$debug_mode" = "true" ]; then
+        uv run uvicorn src.presentation.app:app \
+            --host 0.0.0.0 \
+            --port 8000 \
+            --reload \
+            --log-level debug \
+            > "$LOG_DIR/backend.log" 2>&1 &
+    else
+        uv run uvicorn src.presentation.app:app \
+            --host 0.0.0.0 \
+            --port 8000 \
+            --reload \
+            > "$LOG_DIR/backend.log" 2>&1 &
+    fi
     
     local pid=$!
     echo $pid > "$BACKEND_PID_FILE"
@@ -328,6 +342,9 @@ usage() {
     echo ""
     echo "命令:"
     echo "  start           启动所有服务"
+    echo "  start-debug     以调试模式启动所有服务"
+    echo "  start-backend   启动后端服务"
+    echo "  start-frontend  启动前端服务"
     echo "  stop            停止所有服务"
     echo "  restart         重启所有服务"
     echo "  status          查看服务状态"
@@ -335,6 +352,9 @@ usage() {
     echo ""
     echo "示例:"
     echo "  ./bootstrap.sh start        # 启动所有服务"
+    echo "  ./bootstrap.sh start-debug  # 以调试模式启动所有服务"
+    echo "  ./bootstrap.sh start-backend  # 启动后端服务"
+    echo "  ./bootstrap.sh start-frontend # 启动前端服务"
     echo "  ./bootstrap.sh stop         # 停止所有服务"
     echo "  ./bootstrap.sh restart      # 重启所有服务"
     echo "  ./bootstrap.sh status       # 查看状态"
@@ -348,7 +368,7 @@ main() {
     case $command in
         start)
             log_info "启动所有服务..."
-            start_backend
+            start_backend false
             start_frontend
             log_info "=========================================="
             log_info "所有服务已启动"
@@ -358,6 +378,42 @@ main() {
             log_info ""
             log_info "停止服务: ./bootstrap.sh stop"
             log_info "查看日志: ./bootstrap.sh logs"
+            ;;
+        start-debug)
+            log_info "以调试模式启动所有服务..."
+            start_backend true
+            start_frontend
+            log_info "=========================================="
+            log_info "所有服务已启动 (调试模式)"
+            log_info "=========================================="
+            log_info "后端: http://localhost:8000 (调试模式)"
+            log_info "前端: http://localhost:3000"
+            log_info ""
+            log_info "停止服务: ./bootstrap.sh stop"
+            log_info "查看日志: ./bootstrap.sh logs"
+            ;;
+        start-backend)
+            log_info "启动后端服务..."
+            start_backend false
+            log_info "=========================================="
+            log_info "后端服务已启动"
+            log_info "=========================================="
+            log_info "后端: http://localhost:8000"
+            log_info "API 文档: http://localhost:8000/docs"
+            log_info ""
+            log_info "停止服务: ./bootstrap.sh stop-backend"
+            log_info "查看日志: ./bootstrap.sh logs backend"
+            ;;
+        start-frontend)
+            log_info "启动前端服务..."
+            start_frontend
+            log_info "=========================================="
+            log_info "前端服务已启动"
+            log_info "=========================================="
+            log_info "前端: http://localhost:3000"
+            log_info ""
+            log_info "停止服务: ./bootstrap.sh stop-frontend"
+            log_info "查看日志: ./bootstrap.sh logs frontend"
             ;;
         stop)
             log_info "停止所有服务..."

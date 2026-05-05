@@ -31,6 +31,13 @@ export interface SessionMessage {
   error: string | null;
   cost: Record<string, unknown>;
   created_at: string;
+  meta?: SessionMessageMeta;
+}
+
+export interface SessionMessageMeta {
+  isSubAgent?: boolean;
+  stepId?: number;
+  title?: string;
 }
 
 export interface ToolCallInfo {
