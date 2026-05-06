@@ -97,7 +97,7 @@ class TestPlanWorkflowIntegration:
             },
         )
 
-        assert route_after_tool_execute(state) == "loop_detect"
+        assert route_after_tool_execute(state) == "llm_call"
 
     def test_route_after_llm_with_regular_tool_calls(self):
         """普通工具调用仍路由到 loop_detect"""

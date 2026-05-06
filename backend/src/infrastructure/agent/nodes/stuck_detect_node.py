@@ -16,6 +16,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.types import RunnableConfig
 
 from src.domain.entities.agent_state import AgentState
+from src.infrastructure.agent.nodes.base_node import BaseNode, NodeContext
 from src.infrastructure.agent.nodes.observe import (
     emit_decision,
     emit_phase_safe,
@@ -600,159 +601,174 @@ async def _detect_monologue(state: AgentState, config: RunnableConfig) -> dict:
 # === 节点入口 ===
 
 
-async def stuck_detect_node(state: AgentState, config: RunnableConfig) -> dict:
-    """Stuck 检测节点(增强版)
+class StuckDetectNode(BaseNode):
+    """Stuck 检测节点(增强版)"""
 
-    职责:
-    1. 评估 LLM 文本输出(新增,原 answer_observe 职责) - 使用 LLM 智能分类
-    2. 检测 monologue 模式(连续无工具调用)
-    3. 内部处理反馈注入与升级策略
+    @property
+    def node_name(self) -> str:
+        return "stuck_detect"
 
-    Args:
-        state: 当前 Agent 状态
-        config: LangGraph 配置
+    @property
+    def default_phase(self) -> str | None:
+        return None  # 此节点内部自行控制 phase
 
-    Returns:
-        状态更新字典
-    """
-    task_id = state.get("task_id", "")
-    current_turn = state.get("current_turn", 0)
-    agent_id = config.get("configurable", {}).get("agent_id", "unknown")
-    event_emitter = get_event_emitter(config)
+    async def execute(self, state: AgentState, config: RunnableConfig, context: NodeContext) -> dict:
+        """执行 Stuck 检测
 
-    # Node 入口日志
-    logger.info(
-        "[NODE:stuck_detect] START | agent_id=%s | task_id=%s | turn=%d | "
-        "phase=%s | empty_retry_count=%d | planning_retry_count=%d | "
-        "stuck_detection_count=%d | loop_detection_count=%d | messages_count=%d",
-        agent_id,
-        task_id,
-        current_turn,
-        state.get("phase", "unknown"),
-        state.get("empty_retry_count", 0),
-        state.get("planning_retry_count", 0),
-        state.get("stuck_detection_count", 0),
-        state.get("loop_detection_count", 0),
-        len(state.get("messages", [])),
-    )
+        职责:
+        1. 评估 LLM 文本输出(新增,原 answer_observe 职责) - 使用 LLM 智能分类
+        2. 检测 monologue 模式(连续无工具调用)
+        3. 内部处理反馈注入与升级策略
 
-    messages = state.get("messages", [])
-    if not messages:
+        Args:
+            state: 当前 Agent 状态
+            config: LangGraph 配置
+            context: 节点执行上下文
+
+        Returns:
+            状态更新字典
+        """
+        task_id = context.task_id
+        current_turn = context.current_turn
+        event_emitter = context.event_emitter
+
+        # Node 入口日志(将由基类自动记录)
         logger.info(
-            "[NODE:stuck_detect] NO_MESSAGES | task_id=%s | turn=%d", task_id, current_turn)
-        return {"phase": "thinking"}
-
-    last_msg = messages[-1]
-    text = extract_text(last_msg)
-
-    # 步骤1: 评估 LLM 文本输出(使用独立的分类 LLM)
-    try:
-        # 使用独立的分类 LLM 实例(不污染 Agent Loop 的主 LLM)
-        classification_llm = _get_classification_llm()
-        text_eval = await _classify_llm_output(text, classification_llm)
-        logger.info(
-            "[NODE:stuck_detect] LLM_CLASSIFY | task_id=%s | turn=%d | "
-            "category=%s | confidence=%.2f | reasoning=%s",
+            "[NODE:stuck_detect] START | agent_id=%s | task_id=%s | turn=%d | "
+            "phase=%s | empty_retry_count=%d | planning_retry_count=%d | "
+            "stuck_detection_count=%d | loop_detection_count=%d | messages_count=%d",
+            context.agent_id,
             task_id,
             current_turn,
-            text_eval["category"],
-            text_eval.get("confidence", 0),
-            text_eval.get("reasoning", ""),
+            state.get("phase", "unknown"),
+            state.get("empty_retry_count", 0),
+            state.get("planning_retry_count", 0),
+            state.get("stuck_detection_count", 0),
+            state.get("loop_detection_count", 0),
+            len(state.get("messages", [])),
         )
-    except Exception as e:
-        logger.warning(
-            "[NODE:stuck_detect] LLM_CLASSIFY_FALLBACK | task_id=%s | turn=%d | error=%s",
-            task_id,
-            current_turn,
-            str(e),
-        )
-        text_eval = _fallback_evaluate_llm_text(text)
+
+        messages = state.get("messages", [])
+        if not messages:
+            logger.info(
+                "[NODE:stuck_detect] NO_MESSAGES | task_id=%s | turn=%d", task_id, current_turn)
+            return {"phase": "thinking"}
+
+        last_msg = messages[-1]
+        text = extract_text(last_msg)
+
+        # 步骤1: 评估 LLM 文本输出(使用独立的分类 LLM)
+        try:
+            # 使用独立的分类 LLM 实例(不污染 Agent Loop 的主 LLM)
+            classification_llm = _get_classification_llm()
+            text_eval = await _classify_llm_output(text, classification_llm)
+            logger.info(
+                "[NODE:stuck_detect] LLM_CLASSIFY | task_id=%s | turn=%d | "
+                "category=%s | confidence=%.2f | reasoning=%s",
+                task_id,
+                current_turn,
+                text_eval["category"],
+                text_eval.get("confidence", 0),
+                text_eval.get("reasoning", ""),
+            )
+        except Exception as e:
+            logger.warning(
+                "[NODE:stuck_detect] LLM_CLASSIFY_FALLBACK | task_id=%s | turn=%d | error=%s",
+                task_id,
+                current_turn,
+                str(e),
+            )
+            text_eval = _fallback_evaluate_llm_text(text)
+            logger.info(
+                "[NODE:stuck_detect] FALLBACK_EVAL | task_id=%s | turn=%d | category=%s | route=%s",
+                task_id,
+                current_turn,
+                text_eval["category"],
+                text_eval["route"],
+            )
+
+        # 处理空响应
+        if text_eval["category"] == "empty":
+            logger.info(
+                "[NODE:stuck_detect] BRANCH:Empty_TEXT | task_id=%s | turn=%d | route=%s",
+                task_id,
+                current_turn,
+                text_eval["route"],
+            )
+            return await _handle_empty_response(state, event_emitter, task_id, current_turn)
+
+        # 处理完成声明(有实质内容)
+        if text_eval["category"] == "complete":
+            logger.info(
+                "[NODE:stuck_detect] BRANCH:COMPLETION_VALIDATED | task_id=%s | turn=%d | "
+                "text_length=%d",
+                task_id,
+                current_turn,
+                len(text),
+            )
+            return await _handle_completion_claim(state, event_emitter, task_id, current_turn, text)
+
+        # 处理完成声明(缺少实质内容)
+        if text_eval["category"] == "incomplete":
+            logger.info(
+                "[NODE:stuck_detect] BRANCH:COMPLETION_INCOMPLETE | task_id=%s | turn=%d | "
+                "text_length=%d",
+                task_id,
+                current_turn,
+                len(text),
+            )
+            return await _handle_incomplete_completion(
+                state, event_emitter, task_id, current_turn, text
+            )
+
+        # 处理用户提问
+        if text_eval["category"] == "user_question":
+            logger.info(
+                "[NODE:stuck_detect] BRANCH:USER_QUESTION | task_id=%s | turn=%d | text_length=%d",
+                task_id,
+                current_turn,
+                len(text),
+            )
+            return await _handle_user_question(event_emitter, task_id, current_turn, text)
+
+        # 处理纯规划
+        if text_eval["category"] == "planning_only":
+            logger.info(
+                "[NODE:stuck_detect] BRANCH:PLANNING_ONLY | task_id=%s | turn=%d | route=%s",
+                task_id,
+                current_turn,
+                text_eval["route"],
+            )
+            return await _handle_planning_only(state, event_emitter, task_id, current_turn)
+
+        # 步骤2: 检测 monologue 模式(连续无工具调用)
+        # (实质性文本且未归类为其他场景)
         logger.info(
-            "[NODE:stuck_detect] FALLBACK_EVAL | task_id=%s | turn=%d | category=%s | route=%s",
+            "[NODE:stuck_detect] BRANCH:SUBSTANTIVE_TEXT | task_id=%s | turn=%d | "
+            "proceeding_to_monologue_detection",
             task_id,
             current_turn,
-            text_eval["category"],
-            text_eval["route"],
         )
+        stuck_result = await _detect_monologue(state, config)
 
-    # 处理空响应
-    if text_eval["category"] == "empty":
+        # 如果未卡住,继续 llm_call
+        if not stuck_result.get("stuck_detected"):
+            logger.info(
+                "[NODE:stuck_detect] BRANCH:CONTINUE | task_id=%s | turn=%d | phase=thinking",
+                task_id,
+                current_turn,
+            )
+            return {"phase": "thinking"}
+
+        # 卡住,返回 stuck 处理结果
         logger.info(
-            "[NODE:stuck_detect] BRANCH:EMPTY_TEXT | task_id=%s | turn=%d | route=%s",
+            "[NODE:stuck_detect] BRANCH:STUCK_RECOVERY | task_id=%s | turn=%d | stuck_type=%s",
             task_id,
             current_turn,
-            text_eval["route"],
+            stuck_result.get("stuck_type"),
         )
-        return await _handle_empty_response(state, event_emitter, task_id, current_turn)
+        return stuck_result
 
-    # 处理完成声明(有实质内容)
-    if text_eval["category"] == "complete":
-        logger.info(
-            "[NODE:stuck_detect] BRANCH:COMPLETION_VALIDATED | task_id=%s | turn=%d | "
-            "text_length=%d",
-            task_id,
-            current_turn,
-            len(text),
-        )
-        return await _handle_completion_claim(state, event_emitter, task_id, current_turn, text)
 
-    # 处理完成声明(缺少实质内容)
-    if text_eval["category"] == "incomplete":
-        logger.info(
-            "[NODE:stuck_detect] BRANCH:COMPLETION_INCOMPLETE | task_id=%s | turn=%d | "
-            "text_length=%d",
-            task_id,
-            current_turn,
-            len(text),
-        )
-        return await _handle_incomplete_completion(
-            state, event_emitter, task_id, current_turn, text
-        )
-
-    # 处理用户提问
-    if text_eval["category"] == "user_question":
-        logger.info(
-            "[NODE:stuck_detect] BRANCH:USER_QUESTION | task_id=%s | turn=%d | text_length=%d",
-            task_id,
-            current_turn,
-            len(text),
-        )
-        return await _handle_user_question(event_emitter, task_id, current_turn, text)
-
-    # 处理纯规划
-    if text_eval["category"] == "planning_only":
-        logger.info(
-            "[NODE:stuck_detect] BRANCH:PLANNING_ONLY | task_id=%s | turn=%d | route=%s",
-            task_id,
-            current_turn,
-            text_eval["route"],
-        )
-        return await _handle_planning_only(state, event_emitter, task_id, current_turn)
-
-    # 步骤2: 检测 monologue 模式(连续无工具调用)
-    # (实质性文本且未归类为其他场景)
-    logger.info(
-        "[NODE:stuck_detect] BRANCH:SUBSTANTIVE_TEXT | task_id=%s | turn=%d | "
-        "proceeding_to_monologue_detection",
-        task_id,
-        current_turn,
-    )
-    stuck_result = await _detect_monologue(state, config)
-
-    # 如果未卡住,继续 llm_call
-    if not stuck_result.get("stuck_detected"):
-        logger.info(
-            "[NODE:stuck_detect] BRANCH:CONTINUE | task_id=%s | turn=%d | phase=thinking",
-            task_id,
-            current_turn,
-        )
-        return {"phase": "thinking"}
-
-    # 卡住,返回 stuck 处理结果
-    logger.info(
-        "[NODE:stuck_detect] BRANCH:STUCK_RECOVERY | task_id=%s | turn=%d | stuck_type=%s",
-        task_id,
-        current_turn,
-        stuck_result.get("stuck_type"),
-    )
-    return stuck_result
+# 保持向后兼容的实例导出
+stuck_detect_node = StuckDetectNode()

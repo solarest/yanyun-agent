@@ -130,7 +130,10 @@ async def test_llm_call_node_emits_phase_chunks_and_completion() -> None:
     ]
     assert isinstance(llm.messages[0], SystemMessage)
     assert result["messages"][0].content == "Hello world"
-    assert result["phase"] == "thinking"
+    # 无 tool_calls 时,标记为 complete
+    assert result["phase"] == "complete"
+    assert result["should_end"] is True
+    assert result["is_complete"] is True
     assert result["current_turn"] == 1
     assert result["last_executed_tool_call_ids"] == []
 

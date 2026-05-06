@@ -19,6 +19,7 @@ from langchain_core.messages import SystemMessage
 from langgraph.types import RunnableConfig
 
 from src.domain.entities.agent_state import AgentState
+from src.infrastructure.agent.nodes.base_node import BaseNode, NodeContext
 from src.infrastructure.agent.nodes.observe import (
     emit_phase_safe,
     emit_safe,
@@ -388,26 +389,42 @@ async def _detect_pattern_loop(state: AgentState, config: RunnableConfig) -> dic
 # === 节点入口 ===
 
 
-async def loop_detect_node(state: AgentState, config: RunnableConfig) -> dict:
-    """Loop 检测节点（前置拦截）
+class LoopDetectNode(BaseNode):
+    """Loop 检测节点(前置拦截)"""
 
-    检测策略（按优先级）：
-    1. 无效工具调用检测（INVALID_TOOL_CALL）
-    2. 精确匹配检测（EXACT_TOOL_REPEAT）
-    3. A-B-A-B 交替检测（ALTERNATING_PATTERN）
+    @property
+    def node_name(self) -> str:
+        return "loop_detect"
 
-    Args:
-        state: 当前 Agent 状态
-        config: LangGraph 配置
+    @property
+    def default_phase(self) -> str | None:
+        return None  # 此节点内部自行控制 phase
 
-    Returns:
-        状态更新字典 (包含 loop_detected、反馈消息等)
-    """
-    # 步骤1: 检测无效工具调用
-    invalid_result = await _detect_invalid_tool_calls(state, config)
-    if invalid_result:
-        return invalid_result
+    async def execute(self, state: AgentState, config: RunnableConfig, context: NodeContext) -> dict:
+        """执行 Loop 检测
 
-    # 步骤2: 检测模式循环（精确匹配 + ABAB 交替）
-    pattern_result = await _detect_pattern_loop(state, config)
-    return pattern_result
+        检测策略(按优先级):
+        1. 无效工具调用检测(INVALID_TOOL_CALL)
+        2. 精确匹配检测(EXACT_TOOL_REPEAT)
+        3. A-B-A-B 交替检测(ALTERNATING_PATTERN)
+
+        Args:
+            state: 当前 Agent 状态
+            config: LangGraph 配置
+            context: 节点执行上下文
+
+        Returns:
+            状态更新字典 (包含 loop_detected、反馈消息等)
+        """
+        # 步骤1: 检测无效工具调用
+        invalid_result = await _detect_invalid_tool_calls(state, config)
+        if invalid_result:
+            return invalid_result
+
+        # 步骤2: 检测模式循环(精确匹配 + ABAB 交替)
+        pattern_result = await _detect_pattern_loop(state, config)
+        return pattern_result
+
+
+# 保持向后兼容的实例导出
+loop_detect_node = LoopDetectNode()
