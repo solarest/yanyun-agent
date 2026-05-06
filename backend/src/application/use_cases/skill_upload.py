@@ -41,7 +41,8 @@ class SkillUploadService:
         """
         # 1. 验证并解压 ZIP
         try:
-            dir_name, skill_md_content = self.storage_service.save_zip(zip_bytes)
+            dir_name, skill_md_content = self.storage_service.save_zip(
+                zip_bytes)
         except SkillStorageError as e:
             raise SkillUploadError(str(e))
 

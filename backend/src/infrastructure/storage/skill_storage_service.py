@@ -16,7 +16,8 @@ MAX_EXTRACTED_SIZE = 100 * 1024 * 1024  # 100 MB
 MAX_FILE_COUNT = 200
 
 # 存储根目录（项目根目录/storage/skills/）
-_PROJECT_ROOT = Path(__file__).resolve().parents[4]  # backend/src/infrastructure/storage -> 项目根
+# backend/src/infrastructure/storage -> 项目根
+_PROJECT_ROOT = Path(__file__).resolve().parents[4]
 SKILLS_STORAGE_ROOT = _PROJECT_ROOT / "storage" / "skills"
 
 
@@ -133,7 +134,8 @@ class SkillStorageService:
         for name in zf.namelist():
             # 根目录文件：没有 / 或者只有一层
             parts = name.split("/")
-            basename = parts[-1] if parts[-1] else (parts[-2] if len(parts) > 1 else "")
+            basename = parts[-1] if parts[-1] else (
+                parts[-2] if len(parts) > 1 else "")
 
             # 精确匹配：SKILL.md 在根目录或一级目录根
             if basename.upper() == "SKILL.MD":

@@ -162,7 +162,8 @@ async def get_skill(
     if skill is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail={"error": {"code": "SKILL_NOT_FOUND", "message": f"Skill '{skill_id}' 不存在"}},
+            detail={"error": {"code": "SKILL_NOT_FOUND",
+                              "message": f"Skill '{skill_id}' 不存在"}},
         )
     return _to_response(skill)
 
@@ -181,7 +182,8 @@ async def delete_skill(
     if not deleted:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail={"error": {"code": "SKILL_NOT_FOUND", "message": f"Skill '{skill_id}' 不存在"}},
+            detail={"error": {"code": "SKILL_NOT_FOUND",
+                              "message": f"Skill '{skill_id}' 不存在"}},
         )
 
 
@@ -199,7 +201,8 @@ async def toggle_skill(
     if skill is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail={"error": {"code": "SKILL_NOT_FOUND", "message": f"Skill '{skill_id}' 不存在"}},
+            detail={"error": {"code": "SKILL_NOT_FOUND",
+                              "message": f"Skill '{skill_id}' 不存在"}},
         )
 
     skill.toggle_enabled()
