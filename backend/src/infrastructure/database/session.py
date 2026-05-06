@@ -9,7 +9,8 @@ SQLALCHEMY_DATABASE_URL = "sqlite:///./app.db"
 SQLALCHEMY_ASYNC_DATABASE_URL = "sqlite+aiosqlite:///./app.db"
 
 # 同步引擎 (用于初始化)
-sync_engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+sync_engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={
+                            "check_same_thread": False})
 
 # 异步引擎 (用于异步操作)
 async_engine = create_async_engine(
@@ -17,7 +18,8 @@ async_engine = create_async_engine(
 )
 
 # Session 工厂 (同步)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=sync_engine)
+SessionLocal = sessionmaker(
+    autocommit=False, autoflush=False, bind=sync_engine)
 AsyncSessionLocal = sessionmaker(
     bind=async_engine,
     class_=AsyncSession,
@@ -69,6 +71,7 @@ def init_db():
         AgentModel,
         SessionModel,
         SessionMessageModel,
+        SkillModel,
     )
 
     Base.metadata.create_all(bind=sync_engine)
@@ -78,6 +81,11 @@ def init_db():
         table="sse_events",
         column="task_seq",
         column_def="INTEGER NOT NULL DEFAULT 0",
+    )
+    _ensure_column(
+        table="skills",
+        column="file_path",
+        column_def="VARCHAR(500) DEFAULT ''",
     )
 
 
@@ -92,5 +100,6 @@ def _ensure_column(table: str, column: str, column_def: str) -> None:
             # 表不存在（理论上 create_all 已建好；这里防御性退出）
             return
         if column not in existing_cols:
-            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {column_def}"))
+            conn.execute(
+                text(f"ALTER TABLE {table} ADD COLUMN {column} {column_def}"))
             conn.commit()

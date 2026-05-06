@@ -7,12 +7,15 @@ interface MessageInputProps {
   onSend: (content: string) => void;
   disabled?: boolean;
   placeholder?: string;
+  /** 左侧操作按钮区域（如 "+" 技能选择按钮） */
+  leftActions?: React.ReactNode;
 }
 
 export const MessageInput: React.FC<MessageInputProps> = ({
   onSend,
   disabled = false,
-  placeholder = 'Type a message...',
+  placeholder = '输入消息...',
+  leftActions,
 }) => {
   const [value, setValue] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -46,6 +49,9 @@ export const MessageInput: React.FC<MessageInputProps> = ({
   return (
     <div className="border-t bg-card px-4 py-3">
       <div className="mx-auto flex max-w-3xl items-end gap-2">
+        {leftActions && (
+          <div className="flex shrink-0 items-center pb-1">{leftActions}</div>
+        )}
         <textarea
           ref={textareaRef}
           value={value}
@@ -66,7 +72,7 @@ export const MessageInput: React.FC<MessageInputProps> = ({
         </button>
       </div>
       <p className="mx-auto mt-1 max-w-3xl text-right text-[10px] text-muted-foreground">
-        Enter to send, Shift+Enter for new line
+        回车发送，Shift+回车换行
       </p>
     </div>
   );

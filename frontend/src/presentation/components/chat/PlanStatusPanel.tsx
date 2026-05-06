@@ -13,17 +13,17 @@ interface PlanStatusPanelProps {
 }
 
 const STATUS_LABELS: Record<PlanStatus, string> = {
-  planning: 'Planning',
-  executing: 'Running',
-  completed: 'Done',
-  failed: 'Failed',
+  planning: '规划中',
+  executing: '执行中',
+  completed: '已完成',
+  failed: '失败',
 };
 
 const STEP_STATUS_LABELS: Record<PlanStepStatus, string> = {
-  pending: 'Pending',
-  running: 'Running',
-  completed: 'Done',
-  failed: 'Failed',
+  pending: '待执行',
+  running: '执行中',
+  completed: '已完成',
+  failed: '失败',
 };
 
 const stepDotClass = (status: PlanStepStatus): string => {

@@ -69,6 +69,7 @@ export interface SendMessageRequest {
   model?: string;
   max_turns?: number;
   workspace?: string;
+  skill_ids?: string[];
 }
 
 export interface SessionListResponse {

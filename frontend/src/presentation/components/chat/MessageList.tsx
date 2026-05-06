@@ -54,9 +54,9 @@ export const MessageList: React.FC<MessageListProps> = ({
     return (
       <div className="flex flex-1 items-center justify-center">
         <div className="text-center">
-          <p className="text-lg text-muted-foreground">Start a conversation</p>
+          <p className="text-lg text-muted-foreground">开始对话</p>
           <p className="mt-1 text-sm text-muted-foreground">
-            Send a message to begin chatting with the agent.
+            发送消息开始与 Agent 对话
           </p>
         </div>
       </div>

@@ -17,6 +17,7 @@ from src.domain.repositories.task_repository import ITaskRepository
 from src.domain.repositories.agent_repository import IAgentRepository
 from src.domain.repositories.session_repository import ISessionRepository
 from src.domain.repositories.session_message_repository import ISessionMessageRepository
+from src.domain.repositories.skill_repository import ISkillRepository
 from src.infrastructure.llm.config import LLMSettings
 from src.infrastructure.repositories.in_memory_repo import InMemoryRepository
 from src.infrastructure.repositories.sqlite_event_repo import SQLiteEventRepository
@@ -26,7 +27,10 @@ from src.infrastructure.repositories.sqlite_session_repo import SQLiteSessionRep
 from src.infrastructure.repositories.sqlite_session_message_repo import (
     SQLiteSessionMessageRepository,
 )
+from src.infrastructure.repositories.sqlite_skill_repo import SQLiteSkillRepository
+from src.infrastructure.storage.skill_storage_service import SkillStorageService
 from src.infrastructure.tools.registry import ToolRegistry
+from src.application.use_cases.skill_upload import SkillUploadService
 
 
 # 创建 Repository 实例(单例模式)
@@ -98,6 +102,26 @@ def get_session_message_repository(
 ) -> ISessionMessageRepository:
     """获取会话消息仓储实例"""
     return SQLiteSessionMessageRepository(db)
+
+
+def get_skill_repository(
+    db: AsyncSession = Depends(get_async_db),
+) -> ISkillRepository:
+    """获取 Skill 仓储实例"""
+    return SQLiteSkillRepository(db)
+
+
+def get_skill_storage_service() -> SkillStorageService:
+    """获取 Skill 存储服务实例"""
+    return SkillStorageService()
+
+
+def get_skill_upload_service(
+    skill_repo: ISkillRepository = Depends(get_skill_repository),
+    storage_service: SkillStorageService = Depends(get_skill_storage_service),
+) -> SkillUploadService:
+    """获取 Skill 上传服务实例"""
+    return SkillUploadService(skill_repo, storage_service)
 
 
 # LLM 依赖注入

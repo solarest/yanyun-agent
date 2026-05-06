@@ -16,11 +16,13 @@ import { ChatHeader } from '@presentation/components/chat/ChatHeader';
 import { MessageList } from '@presentation/components/chat/MessageList';
 import { MessageInput } from '@presentation/components/chat/MessageInput';
 import { TaskPanel } from '@presentation/components/chat';
+import { SkillSelector } from '@presentation/components/chat/SkillSelector';
 
 export const AgentSessionPage: React.FC = () => {
   const { id: agentId } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [isRestoring, setIsRestoring] = React.useState(false);
+  const [selectedSkillIds, setSelectedSkillIds] = React.useState<string[]>([]);
 
   // Agent 信息
   const { currentAgent, fetchAgent } = useAgentManagement();
@@ -114,15 +116,16 @@ export const AgentSessionPage: React.FC = () => {
 
   // 发送消息（无 session 时自动创建）
   const handleSendMessage = useCallback(async (content: string) => {
+    const skillOpts = selectedSkillIds.length > 0 ? { skill_ids: selectedSkillIds } : {};
     if (!currentSession) {
       const session = await createSession();
       if (!session) return;
       // 等待 session 创建完成后发送（useChat 依赖 currentSession）
-      setTimeout(() => sendMessage(content), 50);
+      setTimeout(() => sendMessage(content, skillOpts), 50);
       return;
     }
-    sendMessage(content);
-  }, [currentSession, createSession, sendMessage]);
+    sendMessage(content, skillOpts);
+  }, [currentSession, createSession, sendMessage, selectedSkillIds]);
 
   if (!agentId) return null;
 
@@ -173,14 +176,20 @@ export const AgentSessionPage: React.FC = () => {
         {/* 任务列表面板 */}
         <TaskPanel task={currentTask} />
 
-        {/* 输入框 */}
+        {/* 输入框（含左侧 "+" 技能选择按钮） */}
         <MessageInput
           onSend={handleSendMessage}
           disabled={isSending || isStreaming}
           placeholder={
             !currentSession
-              ? 'Send a message to start a new chat...'
-              : 'Type a message...'
+              ? '发送消息开始新对话...'
+              : '输入消息...'
+          }
+          leftActions={
+            <SkillSelector
+              selectedSkillIds={selectedSkillIds}
+              onSelectionChange={setSelectedSkillIds}
+            />
           }
         />
       </div>

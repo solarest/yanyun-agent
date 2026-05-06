@@ -103,6 +103,27 @@ class SessionModel(Base):
         return f"<SessionModel(id={self.id}, agent_id={self.agent_id})>"
 
 
+class SkillModel(Base):
+    """Skill 数据库模型"""
+
+    __tablename__ = "skills"
+
+    id = Column(String(36), primary_key=True)
+    name = Column(String(100), nullable=False, unique=True, index=True)
+    description = Column(Text, nullable=False, default="")
+    content = Column(Text, nullable=False, default="")
+    file_path = Column(String(500), nullable=True, default="")
+    trigger_keywords = Column(Text, nullable=False, default="[]")  # JSON 数组
+    steps = Column(Text, nullable=False, default="[]")  # JSON 数组
+    category = Column(String(50), nullable=False, default="general")
+    enabled = Column(Integer, nullable=False, default=1)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<SkillModel(id={self.id}, name={self.name}, enabled={self.enabled})>"
+
+
 class SessionMessageModel(Base):
     """会话消息数据库模型"""
 

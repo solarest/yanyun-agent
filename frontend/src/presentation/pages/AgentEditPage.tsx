@@ -114,11 +114,11 @@ export const AgentEditPage: React.FC = () => {
             className="btn btn-ghost"
             onClick={() => navigate('/agents')}
           >
-            &larr; Back
+            &larr; 返回
           </button>
           <div>
             <h1 className="text-xl font-bold">
-              {currentAgent?.name ?? 'Loading...'}
+              {currentAgent?.name ?? '加载中...'}
             </h1>
             {currentAgent?.description && (
               <p className="text-sm text-muted-foreground">
@@ -139,7 +139,7 @@ export const AgentEditPage: React.FC = () => {
             onClick={handleSave}
             disabled={!isDirty || isLoading}
           >
-            {isLoading ? 'Saving...' : 'Save'}
+            {isLoading ? '保存中...' : '保存'}
           </button>
         </div>
       </div>
@@ -181,7 +181,7 @@ export const AgentEditPage: React.FC = () => {
       {/* 未保存提示 */}
       {isDirty && (
         <div className="fixed bottom-4 right-4 rounded-lg border bg-card p-3 text-sm shadow-lg">
-          You have unsaved changes.
+          有未保存的更改
         </div>
       )}
     </div>

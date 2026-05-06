@@ -22,6 +22,7 @@ from src.domain.repositories.session_message_repository import (
     ISessionMessageRepository,
 )
 from src.domain.repositories.session_repository import ISessionRepository
+from src.domain.repositories.skill_repository import ISkillRepository
 from src.domain.repositories.task_repository import ITaskRepository
 from src.domain.services import IEventEmitter
 from src.domain.services.prompt_builder import PromptBuilder
@@ -68,6 +69,7 @@ class SendMessageUseCase:
         task_repo: Optional[ITaskRepository] = None,
         event_emitter: Optional[IEventEmitter] = None,
         tool_registry: Optional[ToolRegistry] = None,
+        skill_repo: Optional[ISkillRepository] = None,
         running_tasks: Optional[dict[str, asyncio.Task]] = None,
     ):
         self.agent_repo = agent_repo
@@ -76,6 +78,7 @@ class SendMessageUseCase:
         self.task_repo = task_repo
         self.event_emitter = event_emitter
         self.tool_registry = tool_registry
+        self.skill_repo = skill_repo
         self.running_tasks = running_tasks if running_tasks is not None else {}
 
     async def execute(
@@ -86,6 +89,7 @@ class SendMessageUseCase:
         model: Optional[str] = None,
         max_turns: int = 100,
         workspace: str = "/tmp/agent-workspace",
+        skill_ids: Optional[list[str]] = None,
     ) -> Dict[str, Any]:
         """执行发送消息流程
 
@@ -103,6 +107,7 @@ class SendMessageUseCase:
             model: LLM 模型名称
             max_turns: 最大轮次
             workspace: 工作目录
+            skill_ids: 选中的 Skill ID 列表
 
         Returns:
             {"user_message": SessionMessage, "task_id": str}
@@ -158,6 +163,7 @@ class SendMessageUseCase:
                     model=model,
                     max_turns=max_turns,
                     workspace=workspace,
+                    skill_ids=skill_ids or [],
                 )
             )
             asyncio_task.add_done_callback(
@@ -378,6 +384,7 @@ class SendMessageUseCase:
         model: str,
         max_turns: int,
         workspace: str,
+        skill_ids: Optional[list[str]] = None,
     ) -> None:
         """后台 Agent Loop Runner"""
         try:
@@ -395,10 +402,15 @@ class SendMessageUseCase:
             if self.tool_registry:
                 tool_defs = self.tool_registry.get_tool_defs()
 
+            # 从 SkillRepository 获取选中的 SkillDef 列表（用于 Layer 8 注入）
+            skill_defs = []
+            if self.skill_repo and skill_ids:
+                skill_defs = await self.skill_repo.get_by_ids(skill_ids)
+
             assembly_result = assemble_service.assemble(
                 template=template,
                 tools=tool_defs,  # 注入工具定义到 Layer 5
-                skills=[],  # Skills 模块待实现
+                skills=skill_defs,  # 注入选中的 Skills 到 Layer 8
                 workspace=workspace,
                 environment={
                     "platform": "darwin",
