@@ -1,4 +1,8 @@
-"""领域层 - Prompt 上下文组装接口"""
+"""领域层 - Prompt 上下文组装接口（SPI）
+
+本接口定义了对话历史管理的契约，由 infrastructure 层的 agent-loop 模块实现。
+遵循 DDD 的依赖倒置原则：领域层定义接口，基础设施层提供实现。
+"""
 
 from abc import ABC, abstractmethod
 from src.domain.entities.conversation import ConversationMessage, MessageGroup

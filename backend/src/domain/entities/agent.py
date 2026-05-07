@@ -26,7 +26,7 @@ class Agent(Entity):
     """Agent 领域实体（OpenClaw 七文件模式）
 
     定义一个 AI Agent 的完整配置，包括基本信息、简化表单字段和七个配置文件。
-    通过 build_full_system_prompt 组装完整的系统提示词。
+    通过 PromptBuilder 领域服务组装系统提示词。
 
     Attributes:
         name: Agent 名称（唯一）
@@ -101,29 +101,3 @@ class Agent(Entity):
             setattr(self, field_name, value)
         self.config_version += 1
         self.updated_at = datetime.now()
-
-    def build_full_system_prompt(self) -> str:
-        """组装完整的系统提示词（定义域内容）
-
-        组装顺序：BOOTSTRAP -> IDENTITY -> AGENTS -> SOUL -> MEMORY -> TOOLS -> USER
-        此顺序确保：系统基础设定在前，身份和规则居中，记忆和工具在后，用户适配最末。
-
-        Returns:
-            组装后的完整系统提示词字符串，空配置文件跳过
-        """
-        sections = [
-            ("Bootstrap", self.bootstrap_md),
-            ("Identity", self.identity_md),
-            ("Agents", self.agents_md),
-            ("Soul", self.soul_md),
-            ("Memory", self.memory_md),
-            ("Tools", self.tools_md),
-            ("User", self.user_md),
-        ]
-
-        parts: list[str] = []
-        for title, content in sections:
-            if content:
-                parts.append(f"# {title}\n{content}")
-
-        return "\n\n".join(parts) if parts else ""

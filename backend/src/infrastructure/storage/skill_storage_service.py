@@ -3,7 +3,6 @@
 负责 ZIP 文件的验证、解压、存储和清理。
 """
 
-import os
 import shutil
 import zipfile
 from pathlib import Path

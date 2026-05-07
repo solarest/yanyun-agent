@@ -1,11 +1,12 @@
 """领域层 - Prompt 组装服务"""
 
 from typing import Optional
-from src.domain.entities.prompt_template import PromptTemplate, _count_tokens
+from src.domain.entities.prompt_template import PromptTemplate
 from src.domain.entities.prompt_assembly_result import PromptAssemblyResult
 from src.domain.entities.tool import ToolDef
 from src.domain.entities.skill_def import SkillDef
 from src.domain.entities.output_schema import OutputSchema
+from src.domain.services.token_utils import count_tokens
 
 
 class PromptAssembleService:
@@ -56,14 +57,13 @@ class PromptAssembleService:
 
         # ==================== 静态前缀（Layer 1-3）====================
         # 顺序：BOOTSTRAP → IDENTITY → AGENTS
-        # 与 Agent.build_full_system_prompt() 对齐
 
-        static_prefix = template.get_static_prefix()
+        static_prefix = self._build_static_prefix(template)
         if static_prefix:
             parts.append(static_prefix)
             layer_info["static_prefix"] = True
 
-        static_prefix_tokens = _count_tokens(static_prefix)
+        static_prefix_tokens = count_tokens(static_prefix)
 
         # ==================== CACHE BOUNDARY ====================
         parts.append("── CACHE BOUNDARY ─────────────────────────────────────")
@@ -125,7 +125,7 @@ class PromptAssembleService:
         # ==================== 静态后缀（Layer 10-11）====================
         # 顺序：SOUL → USER → MEMORY
 
-        static_suffix = template.get_static_suffix()
+        static_suffix = self._build_static_suffix(template)
         if static_suffix:
             parts.append(static_suffix)
             layer_info["static_suffix"] = True
@@ -150,7 +150,7 @@ class PromptAssembleService:
         # ==================== 组装结果 ====================
 
         system_message = "\n\n".join(parts)
-        total_tokens = _count_tokens(system_message)
+        total_tokens = count_tokens(system_message)
 
         return PromptAssemblyResult(
             system_message=system_message,
@@ -208,6 +208,54 @@ class PromptAssembleService:
         # 条件注入：Skill 使用规范（有已加载 Skill 时）
         if skills:
             parts.append(self._SKILL_USAGE)
+
+        return "\n\n".join(parts)
+
+    def _build_static_prefix(self, template: PromptTemplate) -> str:
+        """组装静态前缀层内容（Layer 1-3）
+
+        组装顺序：BOOTSTRAP → IDENTITY → AGENTS
+
+        Args:
+            template: Prompt 模板
+
+        Returns:
+            拼接后的静态前缀字符串
+        """
+        sections = [
+            ("Bootstrap", template.bootstrap_md),
+            ("Identity", template.identity_md),
+            ("Agents", template.agents_md),
+        ]
+
+        parts = []
+        for title, content in sections:
+            if content:
+                parts.append(f"# {title}\n{content}")
+
+        return "\n\n".join(parts)
+
+    def _build_static_suffix(self, template: PromptTemplate) -> str:
+        """组装静态后缀层内容（Layer 10-11）
+
+        组装顺序：SOUL → USER → MEMORY
+
+        Args:
+            template: Prompt 模板
+
+        Returns:
+            拼接后的静态后缀字符串
+        """
+        sections = [
+            ("Soul", template.soul_md),
+            ("User", template.user_md),
+            ("Memory", template.memory_md),
+        ]
+
+        parts = []
+        for title, content in sections:
+            if content:
+                parts.append(f"# {title}\n{content}")
 
         return "\n\n".join(parts)
 

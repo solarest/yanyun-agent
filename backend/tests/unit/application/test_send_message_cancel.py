@@ -40,6 +40,20 @@ class RecordingEmitter:
             {"turn": turn, "text": text, "delta": True},
         )
 
+    async def emit_safe(self, task_id: str, event_type: str, payload: dict) -> None:
+        """安全发射事件（测试实现）"""
+        await self.emit(task_id, event_type, payload)
+
+    async def emit_phase_changed_safe(
+        self,
+        task_id: str,
+        new_phase: str,
+        previous_phase: str,
+        turn: int,
+    ) -> None:
+        """安全发射阶段变更事件（测试实现）"""
+        await self.emit_phase_changed(task_id, new_phase, previous_phase, turn)
+
 
 class FakeAgentRepository:
     async def get_by_id(self, _agent_id: str) -> Agent:

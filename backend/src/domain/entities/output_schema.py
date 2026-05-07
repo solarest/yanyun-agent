@@ -33,5 +33,5 @@ class OutputSchema:
 
     def estimate_tokens(self) -> int:
         """预估 Schema 的 Token 数量"""
-        from .prompt_template import _count_tokens
-        return _count_tokens(self.to_json_string())
+        from src.domain.services.token_utils import count_tokens
+        return count_tokens(self.to_json_string())

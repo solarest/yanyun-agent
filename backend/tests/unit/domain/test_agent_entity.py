@@ -42,7 +42,8 @@ class TestSetVibes:
     def test_set_three_vibes(self) -> None:
         agent = Agent()
         agent.set_vibes(["Professional", "Friendly", "Creative"])
-        assert json.loads(agent.vibes) == ["Professional", "Friendly", "Creative"]
+        assert json.loads(agent.vibes) == [
+            "Professional", "Friendly", "Creative"]
 
     def test_set_empty_vibes(self) -> None:
         agent = Agent()
@@ -102,7 +103,8 @@ class TestUpdateConfig:
 
     def test_ignores_invalid_fields(self) -> None:
         agent = Agent()
-        agent.update_config(invalid_field="should be ignored")  # type: ignore[arg-type]
+        # type: ignore[arg-type]
+        agent.update_config(invalid_field="should be ignored")
         assert not hasattr(agent, "invalid_field") or agent.config_version == 2
 
     def test_ignores_none_values(self) -> None:
@@ -128,57 +130,6 @@ class TestUpdateConfig:
         assert agent.identity_md == "keep"
         assert agent.soul_md == "keep too"
         assert agent.agents_md == "new agents"
-
-
-class TestBuildFullSystemPrompt:
-    """build_full_system_prompt 方法测试"""
-
-    def test_assembly_order(self) -> None:
-        agent = Agent(
-            bootstrap_md="Bootstrap content",
-            identity_md="Identity content",
-            agents_md="Agents content",
-            soul_md="Soul content",
-            memory_md="Memory content",
-            tools_md="Tools content",
-            user_md="User content",
-        )
-        prompt = agent.build_full_system_prompt()
-
-        # 验证顺序：BOOTSTRAP → IDENTITY → AGENTS → SOUL → MEMORY → TOOLS → USER
-        bootstrap_pos = prompt.index("Bootstrap content")
-        identity_pos = prompt.index("Identity content")
-        agents_pos = prompt.index("Agents content")
-        soul_pos = prompt.index("Soul content")
-        memory_pos = prompt.index("Memory content")
-        tools_pos = prompt.index("Tools content")
-        user_pos = prompt.index("User content")
-        assert bootstrap_pos < identity_pos < agents_pos < soul_pos < memory_pos < tools_pos < user_pos
-
-    def test_skips_empty_sections(self) -> None:
-        agent = Agent(
-            bootstrap_md="Bootstrap",
-            identity_md="Identity",
-            memory_md="",  # 空
-        )
-        prompt = agent.build_full_system_prompt()
-        assert "# Bootstrap" in prompt
-        assert "# Identity" in prompt
-        assert "# Memory" not in prompt
-
-    def test_all_empty_returns_empty(self) -> None:
-        agent = Agent()
-        assert agent.build_full_system_prompt() == ""
-
-    def test_section_format(self) -> None:
-        agent = Agent(bootstrap_md="test content")
-        prompt = agent.build_full_system_prompt()
-        assert prompt == "# Bootstrap\ntest content"
-
-    def test_sections_separated_by_double_newline(self) -> None:
-        agent = Agent(bootstrap_md="A", identity_md="B")
-        prompt = agent.build_full_system_prompt()
-        assert "\n\n" in prompt
 
 
 class TestConfigFilesConstant:

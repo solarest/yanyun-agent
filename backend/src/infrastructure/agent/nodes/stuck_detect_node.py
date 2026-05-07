@@ -43,36 +43,6 @@ def _get_event_emitter(config: RunnableConfig) -> Any:
     ).get("event_service")
 
 
-async def _emit_safe(emitter: Any, *args: Any, **kwargs: Any) -> None:
-    """安全地发射事件，忽略异常"""
-    import inspect
-    if emitter is None:
-        return
-    try:
-        method = emitter.emit
-        if inspect.iscoroutinefunction(method):
-            await method(*args, **kwargs)
-        else:
-            method(*args, **kwargs)
-    except Exception as exc:
-        logger.warning("event emit failed: %s", exc)
-
-
-async def _emit_phase_safe(emitter: Any, *args: Any) -> None:
-    """安全地发射阶段变更事件，忽略异常"""
-    import inspect
-    if emitter is None:
-        return
-    try:
-        method = emitter.emit_phase_changed
-        if inspect.iscoroutinefunction(method):
-            await method(*args)
-        else:
-            method(*args)
-    except Exception as exc:
-        logger.warning("phase event failed: %s", exc)
-
-
 def _exhausted_turn_budget(state: AgentState) -> bool:
     """检查是否已耗尽 turn 预算"""
     return state.get("current_turn", 0) >= state.get("max_turns", 100)
@@ -398,8 +368,7 @@ async def _handle_completion_claim(
         current_turn,
         len(text),
     )
-    await _emit_safe(
-        event_emitter,
+    await event_emitter.emit_safe(
         task_id,
         "completion:validated",
         {"turn": current_turn, "quality": "complete", "summary": text[:200]},
@@ -606,8 +575,7 @@ async def _detect_monologue(state: AgentState, config: RunnableConfig) -> dict:
         action,
     )
 
-    await _emit_safe(
-        event_emitter,
+    await event_emitter.emit_safe(
         state["task_id"],
         "stuck:detected",
         {
@@ -616,8 +584,8 @@ async def _detect_monologue(state: AgentState, config: RunnableConfig) -> dict:
             "action": action,
         },
     )
-    await _emit_phase_safe(
-        event_emitter, state["task_id"], "stuck_recovering", previous_phase, current_turn
+    await event_emitter.emit_phase_changed_safe(
+        state["task_id"], "stuck_recovering", previous_phase, current_turn
     )
 
     base_update = {
