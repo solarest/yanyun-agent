@@ -1,12 +1,18 @@
 """基础设施层 - SQLAlchemy 数据库配置"""
 
+from pathlib import Path
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 
+# 数据库文件固定位于 backend/ 目录下，避免相对路径因工作目录不同导致多处生成 db 文件
+# 目录层级：backend/src/infrastructure/database/session.py -> parents[3] = backend/
+_DB_PATH = Path(__file__).resolve().parents[3] / "app.db"
+
 # SQLite 数据库引擎 (同步 - 用于初始化)
-SQLALCHEMY_DATABASE_URL = "sqlite:///./app.db"
-SQLALCHEMY_ASYNC_DATABASE_URL = "sqlite+aiosqlite:///./app.db"
+SQLALCHEMY_DATABASE_URL = f"sqlite:///{_DB_PATH}"
+SQLALCHEMY_ASYNC_DATABASE_URL = f"sqlite+aiosqlite:///{_DB_PATH}"
 
 # 同步引擎 (用于初始化)
 sync_engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={

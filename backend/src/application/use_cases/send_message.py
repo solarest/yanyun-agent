@@ -25,7 +25,6 @@ from src.domain.repositories.session_repository import ISessionRepository
 from src.domain.repositories.skill_repository import ISkillRepository
 from src.domain.repositories.task_repository import ITaskRepository
 from src.domain.services import IEventEmitter
-from src.domain.services.prompt_builder import PromptBuilder
 from src.domain.entities.prompt_template import PromptTemplate
 from src.domain.services.prompt_assemble_service import PromptAssembleService
 from src.infrastructure.llm.model_factory import create_chat_model
@@ -56,6 +55,26 @@ def _build_message_event_payload(message: SessionMessage) -> Dict[str, Any]:
             "created_at": message.created_at.isoformat(),
         }
     }
+
+
+def _tool_output_text(tool_result: Dict[str, Any]) -> str:
+    """统一提取工具结果的文本：优先 output，其次 error，都没有返回空串。"""
+    return tool_result.get("output") or tool_result.get("error") or ""
+
+
+def _extract_last_message_content(messages: list) -> str:
+    """从消息列表倒序查找第一条非空 content，找不到返回空串。
+
+    兼容 dict 和 LangChain Message 对象两种形式。
+    """
+    for msg in reversed(messages):
+        if isinstance(msg, dict):
+            content = msg.get("content", "")
+        else:
+            content = getattr(msg, "content", "") or ""
+        if content:
+            return content
+    return ""
 
 
 class SendMessageUseCase:
@@ -200,7 +219,6 @@ class SendMessageUseCase:
                 "tool_registry": tool_registry,
                 "agent_id": agent_id,
                 "llm_model": model,
-                "send_message_use_case": self,
             }
         }
 
@@ -291,48 +309,41 @@ class SendMessageUseCase:
                             }
                         )
 
-        # 合并所有 clarify 工具的结果为一个完整内容，支持前端解析多个问题
-        clarify_outputs = []
+        # 分离 clarify 输出与普通工具结果：
+        # - clarify 的输出作为 assistant 正文呈现给用户，不进入 tool_results
+        # - 其他工具正常收集到 all_tool_results
+        clarify_outputs: list[str] = []
         for tool_call_id, tool_result in (result.get("tool_results") or {}).items():
+            output = _tool_output_text(tool_result)
             if tool_result.get("tool_name") == "clarify":
-                # clarify 工具的结果不添加到 tool_results，而是合并到 assistant_content
-                output = tool_result.get(
-                    "output") or tool_result.get("error") or ""
                 if output:
                     clarify_outputs.append(output)
-            else:
-                # 其他工具正常添加到结果列表
-                all_tool_results.append(
-                    {
-                        "tool_name": tool_result.get("tool_name", ""),
-                        "id": tool_call_id,
-                        "status": tool_result.get("status", "success"),
-                        "result": tool_result.get("output") or tool_result.get("error") or "",
-                    }
-                )
+                continue
+            all_tool_results.append(
+                {
+                    "tool_name": tool_result.get("tool_name", ""),
+                    "id": tool_call_id,
+                    "status": tool_result.get("status", "success"),
+                    "result": output,
+                }
+            )
 
-        # 如果有多个 clarify，将它们合并到 assistant_content
-        merged_clarify_content = "\n\n".join(
-            clarify_outputs) if clarify_outputs else ""
-
-        assistant_content = final_result or error or ""
-        if not assistant_content:
-            for msg in reversed(result.get("messages", [])):
-                msg_content = ""
-                if isinstance(msg, dict):
-                    msg_content = msg.get("content", "")
-                elif hasattr(msg, "content"):
-                    msg_content = msg.content or ""
-                if msg_content:
-                    assistant_content = msg_content
-                    break
-
-        # 如果有多个 clarify 问题，将它们合并到 assistant_content 中
-        if merged_clarify_content:
-            if assistant_content:
-                assistant_content = assistant_content + "\n\n" + merged_clarify_content
-            else:
-                assistant_content = merged_clarify_content
+        # 计算 assistant 正文：
+        # 1. 优先用终态输出 (final_result 或 error)
+        # 2. 否则回溯取最后一条非空消息内容
+        # 3. 最后将多条 clarify 问题（如有）以空行分隔追加到正文末尾，供前端解析
+        assistant_content = (
+            final_result
+            or error
+            or _extract_last_message_content(result.get("messages", []))
+        )
+        if clarify_outputs:
+            clarify_block = "\n\n".join(clarify_outputs)
+            assistant_content = (
+                f"{assistant_content}\n\n{clarify_block}"
+                if assistant_content
+                else clarify_block
+            )
 
         assistant_msg = SessionMessage(
             session_id=session_id,
@@ -549,235 +560,3 @@ class SendMessageUseCase:
                 await self.event_emitter.emit(
                     task.id, "task:failed", {"error": str(e)}
                 )
-
-    @staticmethod
-    def _build_sub_agent_prompt(
-        *,
-        step: Dict[str, Any],
-        plan_goal: Optional[str],
-        previous_step_results: Optional[Dict[int, Dict[str, Any]]],
-    ) -> str:
-        lines = [
-            "你是主 Agent 创建的子 Agent，只负责执行当前 plan 步骤。",
-            f"主计划目标：{plan_goal or '未提供'}",
-            f"当前步骤 {step.get('id')}: {step.get('description', '')}",
-        ]
-
-        if previous_step_results:
-            lines.append("")
-            lines.append("前序步骤结果：")
-            for step_id, result in sorted(previous_step_results.items()):
-                lines.append(
-                    f"- Step {step_id}: status={result.get('status')}, "
-                    f"result={result.get('result') or result.get('error') or ''}"
-                )
-
-        lines.extend(
-            [
-                "",
-                "执行要求：",
-                "- 只完成当前步骤，不要重新规划整个任务。",
-                "- 需要外部信息时使用可用工具。",
-                "- 如果当前步骤需要写文件，调用 file_write。",
-                "- 完成后直接返回本步骤的关键结果，供主 Agent 更新 plan。",
-            ]
-        )
-        return "\n".join(lines)
-
-    async def _run_sub_agent(
-        self,
-        step: Dict[str, Any],
-        parent_task_id: str,
-        workspace: str,
-        agent_id: str,
-        model: str,
-        plan_goal: Optional[str] = None,
-        previous_step_results: Optional[Dict[int, Dict[str, Any]]] = None,
-    ) -> Dict[str, Any]:
-        """创建并运行子Agent
-
-        与主Agent的区别:
-        1. tool_registry 去掉 plan 和 clarify
-        2. tool_registry 添加 plan_update
-        3. state.is_sub_agent = True
-        4. state.parent_task_id = parent_task_id
-        5. 复用同一个 StateGraph (AgentWorkflowBuilder().build())
-        """
-        from src.domain.entities.agent_state import AgentState
-        from src.application.use_cases.agent_workflow import AgentWorkflowBuilder
-        from langchain_core.messages import HumanMessage
-
-        logger.info(
-            "Creating sub-agent for step %d: %s",
-            step.get("id"),
-            step.get("description"),
-        )
-        step_prompt = self._build_sub_agent_prompt(
-            step=step,
-            plan_goal=plan_goal,
-            previous_step_results=previous_step_results,
-        )
-
-        # 1. 创建子Agent的tool_registry
-        sub_tool_registry = self._create_sub_agent_tool_registry(
-            parent_tool_registry=self.tool_registry,
-            parent_task_id=parent_task_id,
-            step_id=step.get("id", 0),
-        )
-
-        # 2. 构建子Agent的initial_state
-        initial_state: AgentState = {
-            "messages": [
-                HumanMessage(content=step_prompt)
-            ],
-            "task_id": f"sub-{parent_task_id}-{step.get('id', 0)}",
-            "workspace": workspace,
-            "user_message": step_prompt,
-            "task_start_message_count": 1,
-            "current_turn": 0,
-            "max_turns": 50,  # 子Agent最大轮次限制
-            "phase": "idle",
-            "should_end": False,
-            "is_complete": False,
-            "pending_tool_calls": [],
-            "tool_results": {},
-            "awaiting_user_input": False,
-            "last_executed_tool_call_ids": [],
-            "loop_detection_count": 0,
-            "loop_detected": False,
-            "loop_type": None,
-            "stuck_detection_count": 0,
-            "stuck_detected": False,
-            "stuck_type": None,
-            "current_llm_text": "",
-            "empty_retry_count": 0,
-            "planning_retry_count": 0,
-            "system_prompt": "",  # 子Agent使用默认system_prompt
-            "final_result": None,
-            "error": None,
-            "observation_summary": None,
-            "observation_quality": None,
-            "observation_items": [],
-            "consecutive_empty_observations": 0,
-            "last_error_category": None,
-            "route_hint": None,
-            "observe_mode": None,
-            "compression_strategy": None,
-            "is_sub_agent": True,
-            "parent_task_id": parent_task_id,
-        }
-
-        # 3. 创建LLM实例
-        llm = create_chat_model(model=model or None)
-        if sub_tool_registry and sub_tool_registry.tool_count > 0:
-            tool_schemas = _tool_defs_to_openai_functions(sub_tool_registry)
-            llm = llm.bind_tools(tool_schemas)
-
-        # 4. 编译并执行LangGraph
-        graph = AgentWorkflowBuilder().build()
-        graph_config = {
-            "configurable": {
-                "llm": llm,
-                "event_emitter": self.event_emitter,
-                "event_service": self.event_emitter,
-                "tool_registry": sub_tool_registry,
-                "agent_id": agent_id,
-                "llm_model": model,
-                "send_message_use_case": self,  # 传入self以便子Agent回调
-            }
-        }
-
-        # 发射子Agent开始事件
-        await self.event_emitter.emit(
-            parent_task_id,
-            "sub_agent:started",
-            {
-                "sub_task_id": initial_state["task_id"],
-                "step_id": step.get("id"),
-                "description": step.get("description"),
-            },
-        )
-
-        try:
-            result = await graph.ainvoke(initial_state, graph_config)
-
-            sub_agent_failed = bool(result.get("error"))
-            await self.event_emitter.emit(
-                parent_task_id,
-                "sub_agent:failed" if sub_agent_failed else "sub_agent:completed",
-                {
-                    "sub_task_id": initial_state["task_id"],
-                    "step_id": step.get("id"),
-                    "status": "failed" if sub_agent_failed else "completed",
-                    "result": result.get("final_result"),
-                    "error": result.get("error"),
-                },
-            )
-
-            return {
-                "task_id": initial_state["task_id"],
-                "final_result": result.get("final_result"),
-                "error": result.get("error"),
-            }
-
-        except Exception as e:
-            logger.exception("Sub-agent failed for step %d", step.get("id"))
-
-            # 发射子Agent失败事件
-            await self.event_emitter.emit(
-                parent_task_id,
-                "sub_agent:failed",
-                {
-                    "sub_task_id": initial_state["task_id"],
-                    "step_id": step.get("id"),
-                    "error": str(e),
-                },
-            )
-
-            return {
-                "task_id": initial_state["task_id"],
-                "final_result": None,
-                "error": str(e),
-            }
-
-    def _create_sub_agent_tool_registry(
-        self,
-        parent_tool_registry: ToolRegistry,
-        parent_task_id: str,
-        step_id: int,
-    ) -> ToolRegistry:
-        """创建子Agent的工具注册表
-
-        1. 复制父Agent的工具
-        2. 排除 plan, plan_execute 和 clarify
-        3. 添加 plan_update 工具(绑定parent_task_id和step_id)
-        """
-        from src.infrastructure.tools.pipeline import ExecutionPipeline
-        from src.infrastructure.tools.middleware.security import SecurityMiddleware
-        from src.infrastructure.tools.middleware.rate_limit import RateLimitMiddleware
-        from src.infrastructure.tools.middleware.timeout import TimeoutMiddleware
-        from src.infrastructure.tools.middleware.sandbox import SandboxMiddleware
-
-        # 构建中间件管道
-        pipeline = ExecutionPipeline()
-        pipeline.add_middleware(SecurityMiddleware(allowed_tools=None))
-        pipeline.add_middleware(RateLimitMiddleware(global_max_per_minute=300))
-        pipeline.add_middleware(TimeoutMiddleware())
-        pipeline.add_middleware(SandboxMiddleware())
-
-        # 创建新的Registry
-        sub_registry = ToolRegistry(pipeline=pipeline)
-
-        # 复制父Agent的工具(排除plan和clarify)
-        for tool in parent_tool_registry.list_tools():
-            if tool.name in ("plan", "plan_execute", "clarify"):
-                continue
-            sub_registry.register(tool)
-
-        logger.info(
-            "Sub-agent tool registry created: %d tools (step %d)",
-            sub_registry.tool_count,
-            step_id,
-        )
-
-        return sub_registry

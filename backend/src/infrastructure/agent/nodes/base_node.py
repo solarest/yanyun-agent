@@ -4,6 +4,7 @@
 所有 Agent 节点应继承此基类,只需关注核心业务逻辑。
 """
 
+import inspect
 import logging
 import time
 from abc import ABC, abstractmethod
@@ -13,7 +14,6 @@ from typing import Any
 from langgraph.types import RunnableConfig
 
 from src.domain.entities.agent_state import AgentState
-from src.infrastructure.agent.nodes.observe import get_event_emitter
 
 logger = logging.getLogger(__name__)
 
@@ -122,9 +122,70 @@ class BaseNode(ABC):
             agent_id=config.get("configurable", {}).get("agent_id", "unknown"),
             task_id=state.get("task_id", ""),
             current_turn=state.get("current_turn", 0),
-            event_emitter=get_event_emitter(config),
+            event_emitter=self._get_event_emitter(config),
             previous_phase=state.get("phase", "idle"),
         )
+
+    def _get_event_emitter(self, config: RunnableConfig) -> Any:
+        """从配置中获取事件发射器
+
+        Args:
+            config: LangGraph 配置
+
+        Returns:
+            事件发射器实例
+        """
+        return (config.get("configurable") or {}).get("event_emitter") or (
+            config.get("configurable") or {}
+        ).get("event_service")
+
+    async def _emit_safe(self, emitter: Any, *args: Any, **kwargs: Any) -> None:
+        """安全地发射事件，忽略异常
+
+        Args:
+            emitter: 事件发射器
+            *args: 位置参数
+            **kwargs: 关键字参数
+        """
+        if emitter is None:
+            return
+        try:
+            method = emitter.emit
+            if inspect.iscoroutinefunction(method):
+                await method(*args, **kwargs)
+            else:
+                method(*args, **kwargs)
+        except Exception as exc:
+            logger.warning("event emit failed: %s", exc)
+
+    async def _emit_phase_safe(self, emitter: Any, *args: Any) -> None:
+        """安全地发射阶段变更事件，忽略异常
+
+        Args:
+            emitter: 事件发射器
+            *args: 位置参数
+        """
+        if emitter is None:
+            return
+        try:
+            method = emitter.emit_phase_changed
+            if inspect.iscoroutinefunction(method):
+                await method(*args)
+            else:
+                method(*args)
+        except Exception as exc:
+            logger.warning("phase event failed: %s", exc)
+
+    def _exhausted_turn_budget(self, state: AgentState) -> bool:
+        """检查是否已耗尽 turn 预算
+
+        Args:
+            state: 当前 Agent 状态
+
+        Returns:
+            是否已耗尽 turn 预算
+        """
+        return state.get("current_turn", 0) >= state.get("max_turns", 100)
 
     def _log_start(self, context: NodeContext, state: AgentState):
         """统一的入口日志

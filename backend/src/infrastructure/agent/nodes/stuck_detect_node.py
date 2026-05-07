@@ -17,15 +17,6 @@ from langgraph.types import RunnableConfig
 
 from src.domain.entities.agent_state import AgentState
 from src.infrastructure.agent.nodes.base_node import BaseNode, NodeContext
-from src.infrastructure.agent.nodes.observe import (
-    emit_decision,
-    emit_phase_safe,
-    emit_safe,
-    exhausted_turn_budget,
-    extract_final_result,
-    extract_text,
-    get_event_emitter,
-)
 from src.infrastructure.llm.model_factory import create_chat_model
 
 logger = logging.getLogger(__name__)
@@ -42,7 +33,109 @@ CLASSIFICATION_LLM_TEMPERATURE = 0.1  # 低温度保证分类稳定性
 CLASSIFICATION_MAX_TOKENS = 200
 
 
-# === LLM 文本输出评估(原 answer_observe 职责) ===
+# === 节点内部使用的辅助函数 ===
+
+
+def _get_event_emitter(config: RunnableConfig) -> Any:
+    """从配置中获取事件发射器"""
+    return (config.get("configurable") or {}).get("event_emitter") or (
+        config.get("configurable") or {}
+    ).get("event_service")
+
+
+async def _emit_safe(emitter: Any, *args: Any, **kwargs: Any) -> None:
+    """安全地发射事件，忽略异常"""
+    import inspect
+    if emitter is None:
+        return
+    try:
+        method = emitter.emit
+        if inspect.iscoroutinefunction(method):
+            await method(*args, **kwargs)
+        else:
+            method(*args, **kwargs)
+    except Exception as exc:
+        logger.warning("event emit failed: %s", exc)
+
+
+async def _emit_phase_safe(emitter: Any, *args: Any) -> None:
+    """安全地发射阶段变更事件，忽略异常"""
+    import inspect
+    if emitter is None:
+        return
+    try:
+        method = emitter.emit_phase_changed
+        if inspect.iscoroutinefunction(method):
+            await method(*args)
+        else:
+            method(*args)
+    except Exception as exc:
+        logger.warning("phase event failed: %s", exc)
+
+
+def _exhausted_turn_budget(state: AgentState) -> bool:
+    """检查是否已耗尽 turn 预算"""
+    return state.get("current_turn", 0) >= state.get("max_turns", 100)
+
+
+def _extract_text(msg: Any) -> str:
+    """从消息中提取文本内容"""
+    try:
+        if isinstance(msg, dict):
+            return msg.get("content", "") or ""
+        elif hasattr(msg, "content"):
+            return msg.content or ""
+        return ""
+    except Exception as e:
+        logger.warning("Failed to extract text from message: %s", e)
+        return ""
+
+
+def _extract_final_result(state: AgentState) -> str:
+    """提取最终结果"""
+    if state.get("final_result"):
+        return state["final_result"]
+    messages = state.get("messages", [])
+    if messages:
+        return _extract_text(messages[-1])
+    return ""
+
+
+async def _emit_decision(
+    event_emitter: Any,
+    task_id: str,
+    current_turn: int,
+    route_hint: str,
+    reason: str,
+) -> None:
+    """发射决策事件"""
+    if event_emitter is None:
+        return
+    try:
+        import inspect
+        method = event_emitter.emit
+        if inspect.iscoroutinefunction(method):
+            await method(
+                task_id,
+                "observe:decision",
+                {
+                    "turn": current_turn,
+                    "routeHint": route_hint,
+                    "reason": reason,
+                },
+            )
+        else:
+            method(
+                task_id,
+                "observe:decision",
+                {
+                    "turn": current_turn,
+                    "routeHint": route_hint,
+                    "reason": reason,
+                },
+            )
+    except Exception as exc:
+        logger.warning("observe event emit failed: %s", exc)
 
 # 分类 LLM 实例缓存(独立于 Agent Loop 的主 LLM)
 _classification_llm_cache = None
@@ -214,13 +307,13 @@ async def _handle_empty_response(
         correction_total,
         EMPTY_MAX_RETRY,
         GLOBAL_CORRECTION_BUDGET,
-        exhausted_turn_budget(state),
+        _exhausted_turn_budget(state),
     )
 
     if (
         count > EMPTY_MAX_RETRY
         or correction_total >= GLOBAL_CORRECTION_BUDGET
-        or exhausted_turn_budget(state)
+        or _exhausted_turn_budget(state)
     ):
         if correction_total >= GLOBAL_CORRECTION_BUDGET and count <= EMPTY_MAX_RETRY:
             reason = "global_correction_budget_exhausted"
@@ -238,13 +331,13 @@ async def _handle_empty_response(
             correction_total,
             count,
         )
-        await emit_decision(event_emitter, task_id, current_turn, "terminate", f"empty:{reason}")
+        await _emit_decision(event_emitter, task_id, current_turn, "terminate", f"empty:{reason}")
 
         return {
             "empty_retry_count": count,
             "should_end": True,
             "error": "Empty response persists after correction",
-            "final_result": extract_final_result(state),
+            "final_result": _extract_final_result(state),
             "phase": "complete",
         }
 
@@ -254,9 +347,9 @@ async def _handle_empty_response(
         current_turn,
         count,
     )
-    await emit_decision(event_emitter, task_id, current_turn, "llm_call", f"empty:retry_{count}")
+    await _emit_decision(event_emitter, task_id, current_turn, "llm_call", f"empty:retry_{count}")
 
-    final_result = extract_final_result(state)
+    final_result = _extract_final_result(state)
     if final_result:
         logger.warning(
             "[NODE:stuck_detect] EMPTY_HAS_RESULT | task_id=%s | turn=%d | "
@@ -305,13 +398,13 @@ async def _handle_completion_claim(
         current_turn,
         len(text),
     )
-    await emit_safe(
+    await _emit_safe(
         event_emitter,
         task_id,
         "completion:validated",
         {"turn": current_turn, "quality": "complete", "summary": text[:200]},
     )
-    await emit_decision(event_emitter, task_id, current_turn, "complete", "completion_validated")
+    await _emit_decision(event_emitter, task_id, current_turn, "complete", "completion_validated")
 
     return {
         "phase": "complete",
@@ -334,7 +427,7 @@ async def _handle_incomplete_completion(
         len(text),
     )
 
-    if exhausted_turn_budget(state):
+    if _exhausted_turn_budget(state):
         max_turns = state.get("max_turns", 100)
         logger.error(
             "[NODE:stuck_detect] INCOMPLETE_BUDGET_EXHAUSTED | task_id=%s | turn=%d/%d",
@@ -353,7 +446,7 @@ async def _handle_incomplete_completion(
         task_id,
         current_turn,
     )
-    await emit_decision(
+    await _emit_decision(
         event_emitter, task_id, current_turn, "llm_call", "completion_lacks_substance"
     )
 
@@ -382,7 +475,7 @@ async def _handle_user_question(
         current_turn,
         len(text),
     )
-    await emit_decision(event_emitter, task_id, current_turn, "complete", "user_question")
+    await _emit_decision(event_emitter, task_id, current_turn, "complete", "user_question")
     return {
         "phase": "complete",
         "final_result": text,
@@ -404,7 +497,7 @@ async def _handle_planning_only(
         count,
     )
 
-    if count > PLANNING_MAX_RETRY or exhausted_turn_budget(state):
+    if count > PLANNING_MAX_RETRY or _exhausted_turn_budget(state):
         reason = "planning_max_retry" if count > PLANNING_MAX_RETRY else "budget_exhausted"
         max_turns = state.get("max_turns", 100)
         logger.error(
@@ -416,12 +509,12 @@ async def _handle_planning_only(
             count,
             max_turns,
         )
-        await emit_decision(event_emitter, task_id, current_turn, "terminate", f"planning:{reason}")
+        await _emit_decision(event_emitter, task_id, current_turn, "terminate", f"planning:{reason}")
         return {
             "planning_retry_count": count,
             "error": "Planning-only persists after correction",
             "should_end": True,
-            "final_result": extract_final_result(state),
+            "final_result": _extract_final_result(state),
         }
 
     logger.info(
@@ -430,7 +523,7 @@ async def _handle_planning_only(
         current_turn,
         count,
     )
-    await emit_decision(event_emitter, task_id, current_turn, "llm_call", f"planning:retry_{count}")
+    await _emit_decision(event_emitter, task_id, current_turn, "llm_call", f"planning:retry_{count}")
     return {
         "planning_retry_count": count,
         "messages": [
@@ -496,7 +589,7 @@ async def _detect_monologue(state: AgentState, config: RunnableConfig) -> dict:
         return {"stuck_detected": False, "stuck_type": None, "stuck_detection_count": 0}
 
     # === Stuck 检测到:内部处理反馈与升级策略 ===
-    event_emitter = get_event_emitter(config)
+    event_emitter = _get_event_emitter(config)
     previous_phase = state.get("phase", "thinking")
     next_count = state.get("stuck_detection_count", 0) + 1
     stuck_type = "monologue"
@@ -513,7 +606,8 @@ async def _detect_monologue(state: AgentState, config: RunnableConfig) -> dict:
         action,
     )
 
-    await event_emitter.emit(
+    await _emit_safe(
+        event_emitter,
         state["task_id"],
         "stuck:detected",
         {
@@ -522,7 +616,7 @@ async def _detect_monologue(state: AgentState, config: RunnableConfig) -> dict:
             "action": action,
         },
     )
-    await emit_phase_safe(
+    await _emit_phase_safe(
         event_emitter, state["task_id"], "stuck_recovering", previous_phase, current_turn
     )
 
@@ -559,7 +653,7 @@ async def _detect_monologue(state: AgentState, config: RunnableConfig) -> dict:
         base_update["should_end"] = True
         return base_update
 
-    if exhausted_turn_budget(state):
+    if _exhausted_turn_budget(state):
         max_turns = state.get("max_turns", 100)
         logger.error(
             "[NODE:stuck_detect] BUDGET_EXHAUSTED | task_id=%s | turn=%d/%d | "
@@ -655,7 +749,7 @@ class StuckDetectNode(BaseNode):
             return {"phase": "thinking"}
 
         last_msg = messages[-1]
-        text = extract_text(last_msg)
+        text = _extract_text(last_msg)
 
         # 步骤1: 评估 LLM 文本输出(使用独立的分类 LLM)
         try:
