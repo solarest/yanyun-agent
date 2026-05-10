@@ -116,6 +116,23 @@ class StreamEventService(IEventEmitter):
             },
         )
 
+    async def emit_thinking_chunk(
+        self,
+        task_id: str,
+        turn: int,
+        text: str,
+    ) -> None:
+        """发射深度思考流式输出片段。"""
+        await self.emit(
+            task_id,
+            "thinking:chunk",
+            {
+                "turn": turn,
+                "text": text,
+                "delta": True,
+            },
+        )
+
     async def subscribe(self, task_id: str) -> asyncio.Queue:
         """订阅任务事件流
 

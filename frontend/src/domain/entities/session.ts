@@ -25,6 +25,8 @@ export interface SessionMessage {
   task_id: string | null;
   role: SessionMessageRole;
   content: string;
+  thinking_content?: string;  // 深度思考内容
+  has_thinking?: boolean;     // 是否有思考内容
   tool_calls: ToolCallInfo[];
   tool_results: ToolResultInfo[];
   status: MessageStatus;

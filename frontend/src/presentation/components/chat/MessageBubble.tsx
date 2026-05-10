@@ -7,7 +7,8 @@ import remarkGfm from 'remark-gfm';
 import type { SessionMessage } from '@domain/entities/session';
 import { ClarifyCard } from './ClarifyCard';
 import { MultiClarifyCard, parseAllClarifyPrompts } from './MultiClarifyCard';
-import { ToolCallCard } from './ToolCallCard';
+import { ToolCallGroup } from './ToolCallGroup';
+import { ThinkingBlock } from './ThinkingBlock';
 
 interface MessageBubbleProps {
   message: SessionMessage;
@@ -27,6 +28,8 @@ interface ToolTimelineItem {
   name: string;
   status: string;
   result?: string;
+  input?: Record<string, unknown>;
+  args?: Record<string, unknown>;
 }
 
 const buildToolTimeline = (
@@ -58,6 +61,8 @@ const buildToolTimeline = (
       name: call.name,
       status: result?.status || 'running',
       result: result?.result,
+      input: call.input,
+      args: call.args,
     };
   });
 
@@ -83,6 +88,8 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   const isUser = message.role === 'user';
   const isError = message.status === 'error';
   const isStreaming = message.status === 'streaming';
+  const hasThinking = message.has_thinking && message.thinking_content;
+  const isThinking = isStreaming && hasThinking;
   const visibleToolCalls = message.tool_calls.filter((tc) => !isSpecialTool(tc.name));
   const visibleToolResults = message.tool_results.filter(
     (result) => !isSpecialTool(result.tool_name),
@@ -158,17 +165,20 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
 
         {/* 工具调用摘要 */}
         {!isUser && hasVisibleTools && (
-          <div className="mb-2 space-y-2 border-b border-border/50 pb-2">
-            {toolTimeline.map((item) => (
-              <ToolCallCard
-                key={item.key}
-                name={item.name}
-                status={item.status}
-                result={item.result}
-                isStreaming={isStreaming}
-              />
-            ))}
+          <div className="mb-2">
+            <ToolCallGroup
+              items={toolTimeline}
+              isStreaming={isStreaming}
+            />
           </div>
+        )}
+
+        {/* 深度思考内容 */}
+        {!isUser && hasThinking && (
+          <ThinkingBlock
+            content={message.thinking_content || ''}
+            isStreaming={Boolean(isThinking)}
+          />
         )}
 
         {!isUser && clarifyPrompt && !clarifySubmitted && (

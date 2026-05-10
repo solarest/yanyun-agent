@@ -36,6 +36,16 @@ class IEventEmitter(ABC):
         """发射 LLM 流式增量文本。"""
         pass
 
+    @abstractmethod
+    async def emit_thinking_chunk(
+        self,
+        task_id: str,
+        turn: int,
+        text: str,
+    ) -> None:
+        """发射 LLM 深度思考流式增量文本。"""
+        pass
+
     async def emit_safe(self, task_id: str, event_type: str, payload: Dict[str, Any]) -> None:
         """安全地发射事件，忽略异常。
 

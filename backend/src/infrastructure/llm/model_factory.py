@@ -43,8 +43,8 @@ def create_chat_model(
     from src.infrastructure.llm.config import LLMSettings
 
     # 使用 LLMSettings 默认值
+    settings = LLMSettings()
     if model is None:
-        settings = LLMSettings()
         model = settings.default_model
         if provider is None:
             provider = settings.default_provider
@@ -57,6 +57,8 @@ def create_chat_model(
         provider=LLMProvider(provider),
         model=model,
         temperature=temperature,
+        enable_thinking=settings.default_enable_thinking,
+        thinking_budget=settings.default_thinking_budget,
     )
 
     return _build_model_with_middleware(config)

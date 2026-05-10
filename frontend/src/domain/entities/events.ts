@@ -51,10 +51,19 @@ export interface LLMChunkPayload extends BaseEventPayload {
   delta: boolean;
 }
 
+/** thinking-chunk 事件（深度思考流式增量文本） */
+export interface ThinkingChunkPayload extends BaseEventPayload {
+  turn: number;
+  text: string;
+  delta: boolean;
+}
+
 /** llm-complete 事件 */
 export interface LLMCompletePayload extends BaseEventPayload {
   turn: number;
   fullText: string;
+  thinkingText?: string;  // 完整思考内容
+  hasThinking?: boolean;  // 是否有思考内容
   toolCalls: Array<{
     id: string;
     name: string;
@@ -182,6 +191,7 @@ export interface AgentEventMap {
   'task:paused': TaskPausedPayload;
   'task:resumed': TaskResumedPayload;
   'phase:changed': PhaseChangedPayload;
+  'thinking:chunk': ThinkingChunkPayload;
   'llm:chunk': LLMChunkPayload;
   'llm:complete': LLMCompletePayload;
   'tool:call': ToolCallPayload;
@@ -217,6 +227,7 @@ export const SSE_EVENT_TYPES: readonly string[] = [
   'task-paused',
   'task-resumed',
   'phase-changed',
+  'thinking-chunk',
   'llm-chunk',
   'llm-complete',
   'tool-call',

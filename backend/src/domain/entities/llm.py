@@ -36,6 +36,8 @@ class LLMConfig:
         api_base: API 基础 URL
         api_key: API 密钥
         extra: 提供商特有参数
+        enable_thinking: 是否启用深度思考模式（仅部分模型支持）
+        thinking_budget: 思考模式的最大 token 预算（可选）
     """
 
     provider: LLMProvider
@@ -47,3 +49,5 @@ class LLMConfig:
     api_base: Optional[str] = None
     api_key: Optional[str] = None
     extra: dict[str, Any] = field(default_factory=dict)
+    enable_thinking: bool = False
+    thinking_budget: Optional[int] = None

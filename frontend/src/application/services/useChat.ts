@@ -279,6 +279,17 @@ export const useChat = ({
     messageId: string,
     onChunk?: (chunk: string) => void,
   ) => {
+    // 处理思考内容流式输出
+    stream.on('thinking:chunk', (data) => {
+      const chunk = data.text || '';
+      if (!chunk) return;
+      updateMessage(messageId, (msg) => ({
+        ...msg,
+        thinking_content: (msg.thinking_content || '') + chunk,
+        has_thinking: true,
+      }));
+    });
+
     stream.on('llm:chunk', (data) => {
       const chunk = data.text || '';
       if (!chunk) return;
@@ -315,6 +326,15 @@ export const useChat = ({
             result: data.output ?? data.error ?? '',
           },
         ],
+      }));
+    });
+
+    // 处理 LLM 完成事件，保存完整思考内容
+    stream.on('llm:complete', (data) => {
+      updateMessage(messageId, (msg) => ({
+        ...msg,
+        thinking_content: data.thinkingText || msg.thinking_content,
+        has_thinking: data.hasThinking || !!data.thinkingText,
       }));
     });
   }, [updateMessage]);

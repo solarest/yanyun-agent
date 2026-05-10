@@ -6,4 +6,5 @@ export { MessageInput } from './MessageInput';
 export { ClarifyCard } from './ClarifyCard';
 export { MultiClarifyCard } from './MultiClarifyCard';
 export { ToolCallCard } from './ToolCallCard';
+export { ToolCallGroup } from './ToolCallGroup';
 export { TaskPanel } from './TaskPanel';

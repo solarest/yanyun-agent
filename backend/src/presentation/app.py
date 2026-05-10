@@ -99,7 +99,8 @@ def create_app() -> FastAPI:
     from src.application.use_cases.stream_event import StreamEventService
     from src.presentation.dependencies import create_event_repo_factory
 
-    app.state.event_service = StreamEventService(create_event_repo_factory())
+    app.state.event_service = StreamEventService(
+        create_event_repo_factory(), chunk_flush_size=5)
 
     # 全局状态
     app.state.running_tasks = {}  # task_id -> asyncio.Task

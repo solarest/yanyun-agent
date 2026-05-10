@@ -43,6 +43,13 @@ class RecordingEmitter:
             {"turn": turn, "text": text, "delta": True},
         )
 
+    async def emit_thinking_chunk(self, task_id: str, turn: int, text: str) -> None:
+        await self.emit(
+            task_id,
+            "thinking:chunk",
+            {"turn": turn, "text": text, "delta": True},
+        )
+
     async def emit_safe(self, task_id: str, event_type: str, payload: dict) -> None:
         """安全发射事件（测试实现）"""
         await self.emit(task_id, event_type, payload)

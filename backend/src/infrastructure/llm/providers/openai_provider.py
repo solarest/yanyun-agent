@@ -74,6 +74,14 @@ class OpenAICompatibleProvider(ProviderAdapter):
         if api_key:
             kwargs["api_key"] = api_key
 
+        # 深度思考模式参数（通过 extra_body 传递，因为 enable_thinking 非 OpenAI 标准参数）
+        if config.enable_thinking:
+            extra_body = kwargs.get("extra_body", {})
+            extra_body["enable_thinking"] = True
+            if config.thinking_budget:
+                extra_body["thinking_budget"] = config.thinking_budget
+            kwargs["extra_body"] = extra_body
+
         # 合并 extra 参数
         kwargs.update(config.extra)
 

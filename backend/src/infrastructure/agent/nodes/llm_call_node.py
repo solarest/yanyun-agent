@@ -59,6 +59,7 @@ class LLMCallNode(BaseNode):
             )
 
         full_text = ""
+        thinking_text = ""  # 深度思考内容
         # 使用 AIMessageChunk 聚合来正确合并流式 tool_call_chunks
         accumulated: AIMessageChunk | None = None
 
@@ -91,6 +92,20 @@ class LLMCallNode(BaseNode):
         try:
             async with asyncio.timeout(llm_timeout_sec):
                 async for chunk in llm.astream(messages, config=llm_call_config):
+                    # 处理深度思考内容（reasoning_content 字段）
+                    if hasattr(chunk, "additional_kwargs") and chunk.additional_kwargs:
+                        reasoning = chunk.additional_kwargs.get(
+                            "reasoning_content")
+                        if reasoning:
+                            thinking_text += reasoning
+                            # 发射思考内容流式片段
+                            await context.event_emitter.emit_thinking_chunk(
+                                context.task_id,
+                                current_turn,
+                                reasoning,
+                            )
+
+                    # 处理正常回复内容
                     if chunk.content:
                         full_text += chunk.content
                         # 发射流式片段(走 IEventEmitter 抽象,事件名为 llm:chunk)
@@ -152,6 +167,8 @@ class LLMCallNode(BaseNode):
             {
                 "turn": current_turn,
                 "fullText": full_text,
+                "thinkingText": thinking_text,
+                "hasThinking": bool(thinking_text),
                 "toolCalls": tool_calls_list,
             },
         )
