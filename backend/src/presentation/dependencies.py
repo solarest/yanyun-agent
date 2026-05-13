@@ -159,6 +159,7 @@ def create_tool_registry() -> IToolRegistry:
 
     # 导入内置工具模块（触发 @tool 装饰器注册）
     import src.infrastructure.tools.builtin.web_search  # noqa: F401
+    import src.infrastructure.tools.builtin.web_fetch  # noqa: F401
     import src.infrastructure.tools.builtin.file_ops  # noqa: F401
     import src.infrastructure.tools.builtin.clarify  # noqa: F401
     import src.infrastructure.tools.builtin.task_create  # noqa: F401
