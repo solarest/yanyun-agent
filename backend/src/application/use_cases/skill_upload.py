@@ -6,7 +6,7 @@ from uuid import uuid4
 from src.domain.entities.skill_def import SkillDef
 from src.domain.repositories.skill_repository import ISkillRepository
 from src.domain.services.skill_md_parser import parse_skill_md
-from src.infrastructure.storage.skill_storage_service import (
+from src.application.services.skill_storage_service import (
     SkillStorageService,
     SkillStorageError,
 )
@@ -51,9 +51,7 @@ class SkillUploadService:
         if not name:
             # 清理已解压的文件
             self.storage_service.remove(dir_name)
-            raise SkillUploadError(
-                "SKILL.md 中未找到有效的标题（# 标题），请检查文件格式"
-            )
+            raise SkillUploadError("SKILL.md 中未找到有效的标题（# 标题），请检查文件格式")
 
         # 3. 名称唯一性校验
         existing = await self.skill_repo.get_by_name(name)
@@ -96,8 +94,7 @@ class SkillUploadService:
         old_dir = skill.file_path
         try:
             new_dir_name, skill_md_content = self.storage_service.replace_zip(
-                old_dir, zip_bytes
-            )
+                old_dir, zip_bytes)
         except SkillStorageError as e:
             raise SkillUploadError(str(e))
 
@@ -105,9 +102,7 @@ class SkillUploadService:
         name, description = parse_skill_md(skill_md_content)
         if not name:
             self.storage_service.remove(new_dir_name)
-            raise SkillUploadError(
-                "SKILL.md 中未找到有效的标题（# 标题），请检查文件格式"
-            )
+            raise SkillUploadError("SKILL.md 中未找到有效的标题（# 标题），请检查文件格式")
 
         # 4. 名称唯一性校验（如果名称变了）
         if name != skill.name:

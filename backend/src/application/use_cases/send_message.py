@@ -17,6 +17,7 @@ from src.domain.entities.session_message import (
     SessionMessageRole,
 )
 from src.domain.entities.task import Task, TaskConfig, TaskStatus
+from src.domain.interfaces.llm_provider import ILLMProvider
 from src.domain.repositories.agent_repository import IAgentRepository
 from src.domain.repositories.session_message_repository import (
     ISessionMessageRepository,
@@ -24,16 +25,15 @@ from src.domain.repositories.session_message_repository import (
 from src.domain.repositories.session_repository import ISessionRepository
 from src.domain.repositories.skill_repository import ISkillRepository
 from src.domain.repositories.task_repository import ITaskRepository
+from src.domain.repositories.tool_registry import IToolRegistry
 from src.domain.services import IEventEmitter
 from src.domain.entities.prompt_template import PromptTemplate
 from src.domain.services.prompt_assemble_service import PromptAssembleService
-from src.infrastructure.llm.model_factory import create_chat_model
-from src.infrastructure.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
 
-def _tool_defs_to_openai_functions(tool_registry: ToolRegistry) -> list:
+def _tool_defs_to_openai_functions(tool_registry: IToolRegistry) -> list:
     """将工具转换为 OpenAI function schema 格式（供 bind_tools 使用）"""
     return [tool.to_tool_def().to_llm_schema() for tool in tool_registry.list_tools()]
 
@@ -87,8 +87,9 @@ class SendMessageUseCase:
         message_repo: ISessionMessageRepository,
         task_repo: Optional[ITaskRepository] = None,
         event_emitter: Optional[IEventEmitter] = None,
-        tool_registry: Optional[ToolRegistry] = None,
+        tool_registry: Optional[IToolRegistry] = None,
         skill_repo: Optional[ISkillRepository] = None,
+        llm_provider: Optional[ILLMProvider] = None,
         running_tasks: Optional[dict[str, asyncio.Task]] = None,
     ):
         self.agent_repo = agent_repo
@@ -98,6 +99,7 @@ class SendMessageUseCase:
         self.event_emitter = event_emitter
         self.tool_registry = tool_registry
         self.skill_repo = skill_repo
+        self.llm_provider = llm_provider
         self.running_tasks = running_tasks if running_tasks is not None else {}
 
     async def execute(
@@ -195,8 +197,13 @@ class SendMessageUseCase:
             "asyncio_task": asyncio_task if (self.event_emitter and self.tool_registry) else None,
         }
 
-    def _build_llm(self, model: Optional[str], tool_registry: Optional[ToolRegistry], agent_id: str):
-        llm = create_chat_model(model=model or None)
+    def _build_llm(self, model: Optional[str], tool_registry: Optional[IToolRegistry], agent_id: str):
+        # 使用注入的 LLM Provider
+        llm = self.llm_provider.create_chat_model(
+            model=model or None) if self.llm_provider else None
+        if llm is None:
+            raise RuntimeError("LLM Provider is not configured")
+
         if tool_registry and tool_registry.tool_count > 0:
             tool_schemas = _tool_defs_to_openai_functions(tool_registry)
             llm = llm.bind_tools(tool_schemas)
@@ -207,7 +214,7 @@ class SendMessageUseCase:
     def _build_graph_config(
         self,
         llm,
-        tool_registry: Optional[ToolRegistry],
+        tool_registry: Optional[IToolRegistry],
         agent_id: str,
         model: Optional[str],
     ) -> Dict[str, Any]:
@@ -231,10 +238,14 @@ class SendMessageUseCase:
         """
         try:
             from langchain_core.prompts import PromptTemplate
-            from src.infrastructure.llm.model_factory import create_chat_model
+
+            if not self.llm_provider:
+                logger.warning(
+                    "LLM Provider not configured, skipping title generation")
+                return
 
             # 创建 LLM 实例（不绑定工具）
-            llm = create_chat_model()
+            llm = self.llm_provider.create_chat_model()
 
             # 构建提示词
             prompt = PromptTemplate.from_template(

@@ -131,3 +131,24 @@ class CreateUserUseCase:
 - [ ] 在基础设施层实现 Repository
 - [ ] 在表现层添加路由
 - [ ] 确保依赖关系正确（不违反依赖倒置）
+
+### 依赖关系快速检查
+
+在提交代码前，运行以下命令检查依赖违规：
+
+```bash
+# 检查领域层是否依赖其他层（应该无输出）
+cd backend && grep -r "from src\.\(application\|infrastructure\|presentation\)" src/domain/
+
+# 检查应用层是否依赖基础设施层（应该无输出）
+cd backend && grep -r "from src\.infrastructure" src/application/
+
+# 检查基础设施层是否依赖应用层（应该无输出）
+cd backend && grep -r "from src\.application" src/infrastructure/
+```
+
+**如果以上任何命令有输出，说明存在架构违规，必须修复后才能提交。**
+
+### 相关规则
+
+- [DDD Governance & Best Practices](ddd-governance.md) - 架构治理实战指南

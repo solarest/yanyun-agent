@@ -6,27 +6,28 @@ import pytest
 
 from src.application.dtos.event_dto import SSEEventDTO
 from src.application.use_cases.stream_event import StreamEventService
+from src.domain.entities.event import Event
 
 
 class InMemoryEventRepository:
     def __init__(self) -> None:
-        self.events: dict[str, list[SSEEventDTO]] = defaultdict(list)
+        self.events: dict[str, list[Event]] = defaultdict(list)
         self.single_saves = 0
         self.batch_saves = 0
 
-    async def save(self, task_id: str, event: SSEEventDTO) -> None:
+    async def save(self, task_id: str, event: Event) -> None:
         self.single_saves += 1
         self.events[task_id].append(event)
 
-    async def save_batch(self, task_id: str, events: list[SSEEventDTO]) -> None:
+    async def save_batch(self, task_id: str, events: list[Event]) -> None:
         self.batch_saves += 1
         self.events[task_id].extend(events)
 
-    async def get_after(self, task_id: str, last_event_id: str) -> list[SSEEventDTO]:
+    async def get_after(self, task_id: str, last_event_id: str) -> list[Event]:
         last_seq = int(last_event_id)
-        return [event for event in self.events[task_id] if int(event.id) > last_seq]
+        return [event for event in self.events[task_id] if event.sequence > last_seq]
 
-    async def get_by_task_id(self, task_id: str) -> list[SSEEventDTO]:
+    async def get_by_task_id(self, task_id: str) -> list[Event]:
         return list(self.events[task_id])
 
 
@@ -41,7 +42,8 @@ def make_event_repo_factory(repo: InMemoryEventRepository):
 @pytest.mark.asyncio
 async def test_stream_event_service_normalizes_events_and_flushes_on_replay() -> None:
     repo = InMemoryEventRepository()
-    service = StreamEventService(make_event_repo_factory(repo), chunk_flush_size=5)
+    service = StreamEventService(
+        make_event_repo_factory(repo), chunk_flush_size=5)
 
     await service.emit("task-1", "task-started", {})
     await service.emit_llm_chunk("task-1", 1, "Hel")
@@ -65,7 +67,8 @@ async def test_stream_event_service_normalizes_events_and_flushes_on_replay() ->
 @pytest.mark.asyncio
 async def test_non_chunk_event_flushes_chunk_buffer_before_cancelled_terminal_event() -> None:
     repo = InMemoryEventRepository()
-    service = StreamEventService(make_event_repo_factory(repo), chunk_flush_size=10)
+    service = StreamEventService(
+        make_event_repo_factory(repo), chunk_flush_size=10)
 
     await service.emit_llm_chunk("task-2", 2, "A")
     await service.emit_llm_chunk("task-2", 2, "B")

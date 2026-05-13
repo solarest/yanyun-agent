@@ -121,6 +121,12 @@ class BlockingGraph:
 async def test_run_agent_loop_emits_cancelled_terminal_event(monkeypatch) -> None:
     emitter = RecordingEmitter()
     task_repo = FakeTaskRepository()
+
+    # 创建 FakeLLMProvider
+    class FakeLLMProvider:
+        def create_chat_model(self, model=None, temperature=0.7, provider=None):
+            return object()
+
     use_case = SendMessageUseCase(
         agent_repo=FakeAgentRepository(),
         session_repo=FakeSessionRepository(),
@@ -128,6 +134,7 @@ async def test_run_agent_loop_emits_cancelled_terminal_event(monkeypatch) -> Non
         task_repo=task_repo,
         event_emitter=emitter,
         tool_registry=FakeToolRegistry(),
+        llm_provider=FakeLLMProvider(),
     )
     task = Task(
         message="hello",
@@ -139,10 +146,6 @@ async def test_run_agent_loop_emits_cancelled_terminal_event(monkeypatch) -> Non
         session_id="session-1",
     )
 
-    monkeypatch.setattr(
-        "src.application.use_cases.send_message.create_chat_model",
-        lambda model=None: object(),
-    )
     monkeypatch.setattr(
         "src.application.use_cases.send_message.AgentWorkflowBuilder.build",
         lambda self: BlockingGraph(),

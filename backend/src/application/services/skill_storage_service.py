@@ -1,4 +1,4 @@
-"""基础设施层 - Skill 文件存储服务
+"""应用层 - Skill 文件存储服务
 
 负责 ZIP 文件的验证、解压、存储和清理。
 """
@@ -15,8 +15,8 @@ MAX_EXTRACTED_SIZE = 100 * 1024 * 1024  # 100 MB
 MAX_FILE_COUNT = 200
 
 # 存储根目录（项目根目录/storage/skills/）
-# backend/src/infrastructure/storage -> 项目根
-_PROJECT_ROOT = Path(__file__).resolve().parents[4]
+# backend/src/application/services -> 项目根
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SKILLS_STORAGE_ROOT = _PROJECT_ROOT / "storage" / "skills"
 
 
@@ -72,9 +72,7 @@ class SkillStorageService:
             for info in infos:
                 # 路径穿越检测
                 if info.filename.startswith("/") or ".." in info.filename:
-                    raise SkillStorageError(
-                        f"ZIP 包含不安全的路径: {info.filename}"
-                    )
+                    raise SkillStorageError(f"ZIP 包含不安全的路径: {info.filename}")
                 total_size += info.file_size
 
             if total_size > MAX_EXTRACTED_SIZE:
@@ -145,6 +143,5 @@ class SkillStorageService:
                     return content
 
         raise SkillStorageError(
-            "ZIP 根目录中未找到 SKILL.md 文件。"
-            "请确保 ZIP 包的根目录包含 SKILL.md"
+            "ZIP 根目录中未找到 SKILL.md 文件。请确保 ZIP 包的根目录包含 SKILL.md"
         )

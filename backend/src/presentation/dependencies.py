@@ -18,7 +18,10 @@ from src.domain.repositories.agent_repository import IAgentRepository
 from src.domain.repositories.session_repository import ISessionRepository
 from src.domain.repositories.session_message_repository import ISessionMessageRepository
 from src.domain.repositories.skill_repository import ISkillRepository
+from src.domain.repositories.tool_registry import IToolRegistry
+from src.domain.interfaces.llm_provider import ILLMProvider
 from src.infrastructure.llm.config import LLMSettings
+from src.infrastructure.llm.llm_provider_impl import LLMProviderImpl
 from src.infrastructure.repositories.in_memory_repo import InMemoryRepository
 from src.infrastructure.repositories.sqlite_event_repo import SQLiteEventRepository
 from src.infrastructure.repositories.sqlite_task_repo import SQLiteTaskRepository
@@ -28,7 +31,7 @@ from src.infrastructure.repositories.sqlite_session_message_repo import (
     SQLiteSessionMessageRepository,
 )
 from src.infrastructure.repositories.sqlite_skill_repo import SQLiteSkillRepository
-from src.infrastructure.storage.skill_storage_service import SkillStorageService
+from src.application.services.skill_storage_service import SkillStorageService
 from src.infrastructure.tools.registry import ToolRegistry
 from src.application.use_cases.skill_upload import SkillUploadService
 
@@ -72,8 +75,7 @@ def get_agent_repository(
     return SQLiteAgentRepository(db)
 
 
-def get_event_service(
-) -> StreamEventService:
+def get_event_service() -> StreamEventService:
     """获取事件服务实例"""
     return StreamEventService(create_event_repo_factory())
 
@@ -131,10 +133,20 @@ def get_llm_settings() -> LLMSettings:
     return LLMSettings()
 
 
+def get_llm_provider() -> ILLMProvider:
+    """获取 LLM Provider 实例"""
+    return LLMProviderImpl()
+
+
 # === Tool Registry 依赖注入 ===
 
 
-def create_tool_registry() -> ToolRegistry:
+def get_tool_registry() -> IToolRegistry:
+    """获取工具注册表实例"""
+    return create_tool_registry()
+
+
+def create_tool_registry() -> IToolRegistry:
     """创建并配置工具注册表
 
     组装 ExecutionPipeline + 中间件 + 自动注册内置工具。

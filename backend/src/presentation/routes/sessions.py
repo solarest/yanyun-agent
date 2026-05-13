@@ -24,6 +24,7 @@ from src.presentation.dependencies import (
     get_agent_repository,
     get_session_message_repository,
     get_session_repository,
+    get_llm_provider,
 )
 
 router = APIRouter(prefix="/api/agents/{agent_id}/sessions", tags=["sessions"])
@@ -246,6 +247,7 @@ async def send_message(
     # 使用全局共享的 event_service（SSE 订阅需要同一实例）
     bg_event_emitter = request.app.state.event_service
     bg_tool_registry = create_tool_registry()
+    bg_llm_provider = get_llm_provider()
 
     use_case = SendMessageUseCase(
         agent_repo=bg_agent_repo,
@@ -255,6 +257,7 @@ async def send_message(
         event_emitter=bg_event_emitter,
         tool_registry=bg_tool_registry,
         skill_repo=bg_skill_repo,
+        llm_provider=bg_llm_provider,
         running_tasks=request.app.state.running_tasks,
     )
 
