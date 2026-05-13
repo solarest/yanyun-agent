@@ -6,6 +6,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useAgentManagement } from '@application/services/useAgentManagement';
 import { WizardContainer } from '@presentation/components/CreateAgentWizard/WizardContainer';
 import { ConfigEditor } from '@presentation/components/ConfigEditor';
+import { ToolsEditor } from '@presentation/components/ToolsEditor';
 import {
   CONFIG_FILE_LABELS,
   CONFIG_FILE_DESCRIPTIONS,
@@ -170,13 +171,23 @@ export const AgentEditPage: React.FC = () => {
       </div>
 
       {/* 配置编辑器 */}
-      <ConfigEditor
-        key={activeTab}
-        value={editValues[activeTab]}
-        onChange={(v) => handleConfigChange(activeTab, v)}
-        label={CONFIG_FILE_LABELS[activeTab]}
-        description={CONFIG_FILE_DESCRIPTIONS[activeTab]}
-      />
+      {activeTab === 'tools_md' ? (
+        <ToolsEditor
+          key={activeTab}
+          value={editValues[activeTab]}
+          onChange={(v) => handleConfigChange(activeTab, v)}
+          label={CONFIG_FILE_LABELS[activeTab]}
+          description={CONFIG_FILE_DESCRIPTIONS[activeTab]}
+        />
+      ) : (
+        <ConfigEditor
+          key={activeTab}
+          value={editValues[activeTab]}
+          onChange={(v) => handleConfigChange(activeTab, v)}
+          label={CONFIG_FILE_LABELS[activeTab]}
+          description={CONFIG_FILE_DESCRIPTIONS[activeTab]}
+        />
+      )}
 
       {/* 未保存提示 */}
       {isDirty && (
