@@ -21,6 +21,8 @@ class AgentState(TypedDict):
     workspace: str
     user_message: str
     task_start_message_count: int
+    model: str
+    """LLM 模型名称（如 gpt-4, qwen-plus 等）"""
 
     # === 控制流 ===
     current_turn: int

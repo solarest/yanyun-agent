@@ -91,6 +91,7 @@ class SendMessageUseCase:
         skill_repo: Optional[ISkillRepository] = None,
         llm_provider: Optional[ILLMProvider] = None,
         running_tasks: Optional[dict[str, asyncio.Task]] = None,
+        sub_agent_launcher: Optional[Any] = None,
     ):
         self.agent_repo = agent_repo
         self.session_repo = session_repo
@@ -101,6 +102,7 @@ class SendMessageUseCase:
         self.skill_repo = skill_repo
         self.llm_provider = llm_provider
         self.running_tasks = running_tasks if running_tasks is not None else {}
+        self.sub_agent_launcher = sub_agent_launcher
 
     async def execute(
         self,
@@ -217,6 +219,8 @@ class SendMessageUseCase:
         tool_registry: Optional[IToolRegistry],
         agent_id: str,
         model: Optional[str],
+        sub_agent_launcher: Optional[Any] = None,
+        session_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         return {
             "configurable": {
@@ -226,6 +230,8 @@ class SendMessageUseCase:
                 "tool_registry": tool_registry,
                 "agent_id": agent_id,
                 "llm_model": model,
+                "sub_agent_launcher": sub_agent_launcher,
+                "session_id": session_id,
             }
         }
 
@@ -489,6 +495,7 @@ class SendMessageUseCase:
                 "workspace": workspace,
                 "user_message": content,
                 "task_start_message_count": len(messages),
+                "model": model or "gpt-4",
                 "current_turn": 0,
                 "max_turns": max_turns,
                 "phase": "idle",
@@ -525,7 +532,7 @@ class SendMessageUseCase:
             # 步骤 E: 编译并执行 LangGraph
             graph = AgentWorkflowBuilder().build()
             graph_config = self._build_graph_config(
-                llm, self.tool_registry, agent_id, model)
+                llm, self.tool_registry, agent_id, model, self.sub_agent_launcher, session_id)
 
             await self.event_emitter.emit(task.id, "task:started", {})
 

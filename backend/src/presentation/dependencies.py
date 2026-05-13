@@ -165,6 +165,7 @@ def create_tool_registry() -> IToolRegistry:
     import src.infrastructure.tools.builtin.task_create  # noqa: F401
     import src.infrastructure.tools.builtin.task_update  # noqa: F401
     import src.infrastructure.tools.builtin.shell  # noqa: F401
+    import src.infrastructure.tools.builtin.session_spawn  # noqa: F401
 
     # 构建中间件管道
     pipeline = ExecutionPipeline()

@@ -139,7 +139,7 @@ class ToolExecuteNode(BaseNode):
 
         Args:
             state: 当前 Agent 状态
-            config: LangGraph 配置 (包含 tool_registry, event_emitter)
+            config: LangGraph 配置 (包含 tool_registry, event_emitter, sub_agent_launcher)
             context: 节点执行上下文
 
         Returns:
@@ -148,10 +148,22 @@ class ToolExecuteNode(BaseNode):
         tool_registry = config["configurable"]["tool_registry"]
         current_turn = context.current_turn
 
+        # 从 config 获取 sub_agent_launcher（可选）
+        sub_agent_launcher = config["configurable"].get("sub_agent_launcher")
+        session_id = config["configurable"].get("session_id", "")
+
         tool_context = ToolContext(
             task_id=context.task_id,
             workspace=state.get("workspace", ""),
             agent_id=context.agent_id,
+            extra={
+                "sub_agent_launcher": sub_agent_launcher,
+                "parent_state": state,
+                "parent_agent_id": context.agent_id,
+                "parent_session_id": session_id,
+                "parent_task_id": context.task_id,
+                "user_message": state.get("user_message", ""),
+            } if sub_agent_launcher else {},
         )
 
         pending_tools = state.get("pending_tool_calls", [])
