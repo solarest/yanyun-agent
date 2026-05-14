@@ -221,11 +221,11 @@ class SubAgentLauncher:
                 model=effective_model,
                 tool_registry=sub_registry,
                 parent_task_id=parent_task_id,
-                use_proxy_emitter=True,
             )
 
             # 7. 提取结果
-            final_result = result.get("final_result") or result.get("error", "No result")
+            final_result = result.get(
+                "final_result") or result.get("error", "No result")
 
             # 8. 发射 sub_agent:completed 事件
             await self._event_emitter.emit(
@@ -357,7 +357,8 @@ class SubAgentLauncher:
             await event_emitter.emit(task.id, "task:cancelled", {})
             raise
         except Exception as e:
-            logger.exception("Sub-agent loop failed for task %s: %s", task.id, e)
+            logger.exception(
+                "Sub-agent loop failed for task %s: %s", task.id, e)
             task.status = TaskStatus.FAILED
             task.completed_at = datetime.now()
             task.error = str(e)

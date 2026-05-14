@@ -346,20 +346,17 @@ class SendMessageUseCase:
             )
 
         # 计算 assistant 正文：
-        # 1. 优先用终态输出 (final_result 或 error)
-        # 2. 否则回溯取最后一条非空消息内容
-        # 3. 最后将多条 clarify 问题（如有）以空行分隔追加到正文末尾，供前端解析
-        assistant_content = (
-            final_result
-            or error
-            or _extract_last_message_content(result.get("messages", []))
-        )
+        # 1. 如果有 clarify 输出，直接使用 clarify 输出（final_result 已包含 clarify 内容，避免重复）
+        # 2. 否则用终态输出 (final_result 或 error)
+        # 3. 最后回溯取最后一条非空消息内容
         if clarify_outputs:
-            clarify_block = "\n\n".join(clarify_outputs)
+            # clarify 输出已经通过 final_result 设置，直接使用 clarify_outputs 避免重复
+            assistant_content = "\n\n".join(clarify_outputs)
+        else:
             assistant_content = (
-                f"{assistant_content}\n\n{clarify_block}"
-                if assistant_content
-                else clarify_block
+                final_result
+                or error
+                or _extract_last_message_content(result.get("messages", []))
             )
 
         assistant_msg = SessionMessage(

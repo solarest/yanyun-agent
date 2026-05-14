@@ -47,11 +47,14 @@ export const AgentSessionPage: React.FC = () => {
   const {
     isSending,
     isStreaming,
+    isReplaying,
     currentPhase,
     currentTask,
+    currentTaskId,
     error: chatError,
     sendMessage,
     cancelExecution,
+    replayStream,
   } = useChat({
     agentId: agentId || '',
     sessionId: currentSession?.id || null,
@@ -61,6 +64,29 @@ export const AgentSessionPage: React.FC = () => {
     onUpdateLastAssistant: updateLastAssistantMessage,
     onSessionUpdated: fetchSessions, // 刷新会话列表以获取最新标题
   });
+
+  // 手动触发 SSE 重放
+  const handleReplay = useCallback(() => {
+    // 优先使用 currentTaskId，如果没有则从消息列表中获取最后一个 assistant 消息的 task_id
+    const assistantMessages = messages.filter(m => m.role === 'assistant');
+    const lastAssistantMsg = assistantMessages.pop();
+    const taskId = currentTaskId || lastAssistantMsg?.task_id;
+    
+    console.log('[AgentSessionPage] Replay debug:', {
+      currentTaskId,
+      assistantMessagesCount: assistantMessages.length,
+      lastAssistantTaskId: lastAssistantMsg?.task_id,
+      finalTaskId: taskId,
+      messagesCount: messages.length
+    });
+    
+    if (taskId) {
+      console.log('[AgentSessionPage] Replaying task:', taskId);
+      replayStream(true, taskId); // forceReplay = true, 传递 taskId
+    } else {
+      console.warn('[AgentSessionPage] No task to replay');
+    }
+  }, [currentTaskId, messages, replayStream]);
 
   // 初始化：加载 Agent 信息和会话列表
   useEffect(() => {
@@ -150,6 +176,9 @@ export const AgentSessionPage: React.FC = () => {
           isStreaming={isStreaming}
           currentPhase={currentPhase}
           onCancel={cancelExecution}
+          onReplay={handleReplay}
+          isReplaying={isReplaying}
+          canReplay={!isStreaming && messages.length > 0}
         />
 
         {/* 恢复状态提示 */}

@@ -25,6 +25,9 @@ interface ChatHeaderProps {
   isStreaming: boolean;
   currentPhase: AgentPhase;
   onCancel: () => void;
+  onReplay: () => void;
+  isReplaying: boolean;
+  canReplay: boolean;
 }
 
 export const ChatHeader: React.FC<ChatHeaderProps> = ({
@@ -34,6 +37,9 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   isStreaming,
   currentPhase,
   onCancel,
+  onReplay,
+  isReplaying,
+  canReplay,
 }) => {
   return (
     <div className="flex items-center justify-between border-b bg-card px-4 py-3">
@@ -70,6 +76,16 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
               停止
             </button>
           </>
+        )}
+        {canReplay && (
+          <button
+            type="button"
+            onClick={onReplay}
+            disabled={isReplaying}
+            className="btn btn-outline px-3 py-1 text-xs hover:bg-accent"
+          >
+            {isReplaying ? '重新播放中...' : '重新播放'}
+          </button>
         )}
         <Link
           to={`/agents/${agentId}/edit`}

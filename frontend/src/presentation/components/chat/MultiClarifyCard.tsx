@@ -29,6 +29,11 @@ export const parseAllClarifyPrompts = (content: string): ClarifyPrompt[] => {
   const questionBlocks = content.split(/\*\*Question\*\*/i);
   
   for (const block of questionBlocks) {
+    // 跳过空块和纯空白块（防御性措施，避免 split 开头的空字符串）
+    if (!block || !block.trim()) {
+      continue;
+    }
+    
     const prompt = parseClarifyPrompt(`**Question**${block}`);
     if (prompt) {
       prompts.push(prompt);
