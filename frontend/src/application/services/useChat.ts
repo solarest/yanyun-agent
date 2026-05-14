@@ -483,6 +483,9 @@ export const useChat = ({
 
     // 连接 SSE(后端会自动回放所有事件)
     const stream = new AgentEventStream(window.location.origin, savedTaskId);
+    if (forceReplay) {
+      stream.enableReplayMode();
+    }
     streamRef.current = stream;
     mainMessageIdRef.current = placeholderMsg.id;
 

@@ -6,6 +6,7 @@
  * - 自动重连（指数退避）
  * - 断线补发（last-event-id）
  * - 事件 ID 去重（后端回放 + 实时流可能重复）
+ * - 重放模式：事件入队后按固定间隔逐个分发，模拟流式体验
  */
 
 import type { AgentEventMap, AgentEventName } from '@domain/entities/events';
@@ -22,6 +23,15 @@ export interface SSEEvent<T = Record<string, unknown>> {
 /** 强类型事件回调 */
 export type EventCallback<K extends AgentEventName> = (data: AgentEventMap[K]) => void;
 
+/** 事件队列项 */
+interface QueuedEvent {
+  eventType: string;
+  payload: unknown;
+}
+
+/** 默认重放间隔（毫秒） */
+const DEFAULT_REPLAY_INTERVAL_MS = 50;
+
 /**
  * Agent 事件流客户端
  */
@@ -33,10 +43,25 @@ export class AgentEventStream {
   private handlers = new Map<string, Set<(data: unknown) => void>>();
   private processedEventIds = new Set<string>();
 
+  // 重放模式相关
+  private replayMode = false;
+  private replayIntervalMs = DEFAULT_REPLAY_INTERVAL_MS;
+  private eventQueue: QueuedEvent[] = [];
+  private drainTimer: ReturnType<typeof setTimeout> | null = null;
+  private isDraining = false;
+
   constructor(
     private baseUrl: string,
     private taskId: string,
   ) {}
+
+  /**
+   * 启用重放模式：事件不会立即分发，而是入队后按固定间隔逐个消费
+   */
+  enableReplayMode(intervalMs = DEFAULT_REPLAY_INTERVAL_MS): void {
+    this.replayMode = true;
+    this.replayIntervalMs = intervalMs;
+  }
 
   /**
    * 连接到 SSE 事件流
@@ -75,6 +100,8 @@ export class AgentEventStream {
     this.handlers.clear();
     this.processedEventIds.clear();
     this.reconnectAttempts = 0;
+    this.stopDrain();
+    this.eventQueue = [];
   }
 
   private handleEvent = (e: MessageEvent): void => {
@@ -94,7 +121,13 @@ export class AgentEventStream {
     const rawEventType =
       (typeof evt.event_type === 'string' && evt.event_type) || e.type;
     const eventType = this.normalizeEventType(rawEventType);
-    this.dispatch(eventType, evt.data);
+
+    if (this.replayMode) {
+      this.eventQueue.push({ eventType, payload: evt.data });
+      this.scheduleDrain();
+    } else {
+      this.dispatch(eventType, evt.data);
+    }
   };
 
   private normalizeEventType(eventType: string): string {
@@ -112,6 +145,33 @@ export class AgentEventStream {
         console.error(`[EventStream] Handler for ${eventType} threw:`, err);
       }
     });
+  }
+
+  /**
+   * 启动队列消费：按固定间隔逐个分发事件
+   */
+  private scheduleDrain(): void {
+    if (this.isDraining) return;
+    this.isDraining = true;
+    this.drainNext();
+  }
+
+  private drainNext(): void {
+    const item = this.eventQueue.shift();
+    if (!item) {
+      this.isDraining = false;
+      return;
+    }
+    this.dispatch(item.eventType, item.payload);
+    this.drainTimer = setTimeout(() => this.drainNext(), this.replayIntervalMs);
+  }
+
+  private stopDrain(): void {
+    if (this.drainTimer !== null) {
+      clearTimeout(this.drainTimer);
+      this.drainTimer = null;
+    }
+    this.isDraining = false;
   }
 
   private handleError = (): void => {
