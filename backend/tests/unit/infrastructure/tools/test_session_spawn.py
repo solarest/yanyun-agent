@@ -6,24 +6,74 @@
 """
 
 import pytest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from src.domain.entities.tool import ToolContext, ToolResult
+from src.domain.entities.task import Task, TaskStatus
 
 
 @pytest.fixture
-def mock_launcher():
-    """创建模拟的 launcher"""
-    launcher = AsyncMock()
-    launcher.launch_sync = AsyncMock(return_value={
-        "status": "completed",
-        "sub_task_id": "sub-456",
-        "result": "Task completed successfully",
+def mock_use_case():
+    """创建模拟的 SendMessageUseCase"""
+    use_case = AsyncMock()
+    use_case.execute = AsyncMock(return_value={
+        "task_id": "sub-456",
+        "user_message": MagicMock(),
     })
-    return launcher
+    return use_case
 
 
 @pytest.fixture
-def valid_context(mock_launcher):
+def mock_task_repo():
+    """创建模拟的 TaskRepository"""
+    repo = AsyncMock()
+
+    # 模拟 task 创建
+    async def mock_add(task):
+        return task
+    repo.add = AsyncMock(side_effect=mock_add)
+
+    # 模拟 task 查询（第一次返回未完成，第二次返回完成）
+    call_count = {"count": 0}
+
+    async def mock_get_by_id(task_id):
+        call_count["count"] += 1
+        if call_count["count"] <= 2:
+            # 尚未完成
+            task = Task(
+                id=task_id,
+                message="Test",
+                workspace="/tmp",
+                status=TaskStatus.RUNNING,
+            )
+            task.completed_at = None
+            return task
+        else:
+            # 已完成
+            task = Task(
+                id=task_id,
+                message="Test",
+                workspace="/tmp",
+                status=TaskStatus.COMPLETED,
+            )
+            task.completed_at = MagicMock()
+            task.result = "Task completed successfully"
+            task.error = None
+            return task
+
+    repo.get_by_id = AsyncMock(side_effect=mock_get_by_id)
+    return repo
+
+
+@pytest.fixture
+def mock_event_emitter():
+    """创建模拟的 EventEmitter"""
+    emitter = AsyncMock()
+    emitter.emit = AsyncMock()
+    return emitter
+
+
+@pytest.fixture
+def valid_context(mock_use_case, mock_task_repo, mock_event_emitter):
     """创建有效的 context"""
     return ToolContext(
         task_id="task-123",
@@ -31,12 +81,13 @@ def valid_context(mock_launcher):
         user_id="user-1",
         agent_id="agent-1",
         extra={
-            "sub_agent_launcher": mock_launcher,
-            "parent_state": {"system_prompt": "Test prompt", "user_message": "Test"},
+            "send_message_use_case": mock_use_case,
+            "task_repo": mock_task_repo,
+            "event_emitter": mock_event_emitter,
+            "parent_state": {"system_prompt": "Test prompt", "model": "gpt-4"},
             "parent_agent_id": "agent-1",
             "parent_session_id": "session-1",
             "parent_task_id": "task-123",
-            "user_message": "Test user message",
         },
     )
 
@@ -63,8 +114,21 @@ async def call_session_spawn(description: str, context: ToolContext, tools: list
 class TestSessionSpawn:
     """session_spawn 工具测试"""
 
+    def test_tool_definition_guides_parallel_atomic_subtasks(self):
+        """工具定义应明确引导模型拆分为多个并行原子 sub-agent。"""
+        from src.infrastructure.tools.builtin import session_spawn as session_spawn_module
+
+        rt = session_spawn_module.session_spawn._registered_tool
+        assert "一个原子" in rt.description
+        assert "不要把多个日期、多个文件、多个主题或多个查询合并" in rt.description
+        assert "近 10 天天气应创建 10 个 sub-agent" in rt.description
+
+        description_param = next(p for p in rt.parameters if p.name == "description")
+        assert "单个原子子任务" in description_param.description
+        assert "不要写成" in description_param.description
+
     @pytest.mark.asyncio
-    async def test_sync_mode_success(self, valid_context, mock_launcher):
+    async def test_sync_mode_success(self, valid_context, mock_use_case, mock_event_emitter):
         """测试同步模式成功"""
         result = await call_session_spawn(
             description="Process data",
@@ -76,7 +140,14 @@ class TestSessionSpawn:
         assert "Task completed successfully" in result.output
         assert result.metadata["status"] == "completed"
 
-        mock_launcher.launch_sync.assert_called_once()
+        # 验证 use_case.execute 被调用
+        mock_use_case.execute.assert_called_once()
+        call_kwargs = mock_use_case.execute.call_args.kwargs
+        assert call_kwargs["is_sub_agent"] is True
+        assert call_kwargs["sub_agent_description"] == "Process data"
+
+        # 验证事件发射
+        assert mock_event_emitter.emit.call_count >= 2  # started + completed
 
     @pytest.mark.asyncio
     async def test_empty_description_fails(self, valid_context):
@@ -111,8 +182,8 @@ class TestSessionSpawn:
         assert "context is required" in result.output
 
     @pytest.mark.asyncio
-    async def test_missing_launcher_fails(self):
-        """测试缺少 launcher 失败"""
+    async def test_missing_use_case_fails(self, mock_task_repo, mock_event_emitter):
+        """测试缺少 use_case 失败"""
         from src.infrastructure.tools.builtin import session_spawn as session_spawn_module
         original_func = session_spawn_module.session_spawn._registered_tool.func
 
@@ -120,6 +191,8 @@ class TestSessionSpawn:
             task_id="task-123",
             workspace="/tmp",
             extra={
+                "task_repo": mock_task_repo,
+                "event_emitter": mock_event_emitter,
                 "parent_state": {},
                 "parent_agent_id": "agent-1",
                 "parent_session_id": "session-1",
@@ -129,11 +202,11 @@ class TestSessionSpawn:
         result = await original_func({"description": "Test"}, context)
 
         assert result.success is False
-        assert "sub_agent_launcher not available" in result.output
+        assert "send_message_use_case not available" in result.output
 
     @pytest.mark.asyncio
-    async def test_missing_parent_state_fails(self, mock_launcher):
-        """测试缺少 parent_state 失败"""
+    async def test_missing_task_repo_fails(self, mock_use_case, mock_event_emitter):
+        """测试缺少 task_repo 失败"""
         from src.infrastructure.tools.builtin import session_spawn as session_spawn_module
         original_func = session_spawn_module.session_spawn._registered_tool.func
 
@@ -141,7 +214,9 @@ class TestSessionSpawn:
             task_id="task-123",
             workspace="/tmp",
             extra={
-                "sub_agent_launcher": mock_launcher,
+                "send_message_use_case": mock_use_case,
+                "event_emitter": mock_event_emitter,
+                "parent_state": {},
                 "parent_agent_id": "agent-1",
                 "parent_session_id": "session-1",
             },
@@ -150,12 +225,12 @@ class TestSessionSpawn:
         result = await original_func({"description": "Test"}, context)
 
         assert result.success is False
-        assert "parent_state not available" in result.output
+        assert "task_repo not available" in result.output
 
     @pytest.mark.asyncio
-    async def test_launcher_exception_handling(self, valid_context, mock_launcher):
-        """测试 launcher 异常处理"""
-        mock_launcher.launch_sync.side_effect = Exception("Test error")
+    async def test_use_case_exception_handling(self, valid_context, mock_use_case):
+        """测试 use_case 异常处理"""
+        mock_use_case.execute.side_effect = Exception("Test error")
 
         result = await call_session_spawn(
             description="Test",
@@ -166,7 +241,7 @@ class TestSessionSpawn:
         assert "Test error" in result.output
 
     @pytest.mark.asyncio
-    async def test_with_custom_tools_list(self, valid_context, mock_launcher):
+    async def test_with_custom_tools_list(self, valid_context, mock_use_case):
         """测试自定义工具列表"""
         result = await call_session_spawn(
             description="Test",
@@ -175,5 +250,5 @@ class TestSessionSpawn:
         )
 
         assert result.success is True
-        call_args = mock_launcher.launch_sync.call_args
-        assert call_args.kwargs["allowed_tools"] == ["file_read", "file_write"]
+        call_kwargs = mock_use_case.execute.call_args.kwargs
+        assert call_kwargs["allowed_tools"] == ["file_read", "file_write"]

@@ -218,6 +218,7 @@ export const useChat = ({
 
   const streamRef = useRef<AgentEventStream | null>(null);
   const subStreamsRef = useRef<Map<string, AgentEventStream>>(new Map());
+  const subAgentMessagesRef = useRef<Set<string>>(new Set());
   const mainMessageIdRef = useRef<string | null>(null);
 
   // —— sessionStorage 持久化辅助函数 ——
@@ -262,6 +263,7 @@ export const useChat = ({
   const disconnectSubStreams = useCallback(() => {
     subStreamsRef.current.forEach((stream) => stream.disconnect());
     subStreamsRef.current.clear();
+    subAgentMessagesRef.current.clear();
   }, []);
 
   const disconnectStream = useCallback(() => {
@@ -285,7 +287,8 @@ export const useChat = ({
     stream.on('thinking:chunk', (data) => {
       const chunk = data.text || '';
       if (!chunk) return;
-      updateMessage(messageId, (msg) => ({
+      const targetMessageId = data.sub_task_id || messageId;
+      updateMessage(targetMessageId, (msg) => ({
         ...msg,
         thinking_content: (msg.thinking_content || '') + chunk,
         has_thinking: true,
@@ -295,15 +298,19 @@ export const useChat = ({
     stream.on('llm:chunk', (data) => {
       const chunk = data.text || '';
       if (!chunk) return;
-      onChunk?.(chunk);
-      updateMessage(messageId, (msg) => ({
+      const targetMessageId = data.sub_task_id || messageId;
+      if (!data.sub_task_id) {
+        onChunk?.(chunk);
+      }
+      updateMessage(targetMessageId, (msg) => ({
         ...msg,
         content: msg.content + chunk,
       }));
     });
 
     stream.on('tool:call', (data) => {
-      updateMessage(messageId, (msg) => ({
+      const targetMessageId = data.sub_task_id || messageId;
+      updateMessage(targetMessageId, (msg) => ({
         ...msg,
         tool_calls: [
           ...msg.tool_calls,
@@ -317,7 +324,8 @@ export const useChat = ({
     });
 
     stream.on('tool:result', (data) => {
-      updateMessage(messageId, (msg) => ({
+      const targetMessageId = data.sub_task_id || messageId;
+      updateMessage(targetMessageId, (msg) => ({
         ...msg,
         tool_results: [
           ...msg.tool_results,
@@ -333,7 +341,8 @@ export const useChat = ({
 
     // 处理 LLM 完成事件，保存完整思考内容
     stream.on('llm:complete', (data) => {
-      updateMessage(messageId, (msg) => ({
+      const targetMessageId = data.sub_task_id || messageId;
+      updateMessage(targetMessageId, (msg) => ({
         ...msg,
         thinking_content: data.thinkingText || msg.thinking_content,
         has_thinking: data.hasThinking || !!data.thinkingText,
@@ -346,7 +355,7 @@ export const useChat = ({
     stepId?: number,
     description?: string,
   ) => {
-    if (!sessionId || subStreamsRef.current.has(subTaskId)) return;
+    if (!sessionId || subAgentMessagesRef.current.has(subTaskId)) return;
 
     const message: SessionMessage = {
       id: subTaskId,
@@ -367,12 +376,8 @@ export const useChat = ({
       },
     };
     onUpsertMessage?.(message);
-
-    const stream = new AgentEventStream(window.location.origin, subTaskId);
-    subStreamsRef.current.set(subTaskId, stream);
-    bindMessageStream(stream, subTaskId);
-    stream.connect();
-  }, [bindMessageStream, onUpsertMessage, sessionId]);
+    subAgentMessagesRef.current.add(subTaskId);
+  }, [onUpsertMessage, sessionId]);
 
   const finalizeSubAgentMessage = useCallback((
     subTaskId: string,
@@ -391,6 +396,7 @@ export const useChat = ({
       subStream.disconnect();
       subStreamsRef.current.delete(subTaskId);
     }
+    subAgentMessagesRef.current.delete(subTaskId);
   }, [updateMessage]);
 
   // —— 页面刷新后恢复活动任务流 / 手动重放 ——
@@ -499,6 +505,7 @@ export const useChat = ({
 
     // —— 阶段变化 ——
     stream.on('phase:changed', (data) => {
+      if (data.sub_task_id) return;
       setState((prev) => ({
         ...prev,
         currentPhase: (data.phase as AgentPhase) || prev.currentPhase,
@@ -686,7 +693,11 @@ export const useChat = ({
     });
 
     // —— 任务完成 ——
-    stream.on('task:completed', () => {
+    stream.on('task:completed', (data) => {
+      if (data.sub_task_id) {
+        finalizeSubAgentMessage(data.sub_task_id, 'completed', data.result, null);
+        return;
+      }
       setState((prev) => ({
         ...prev,
         isStreaming: false,
@@ -703,7 +714,11 @@ export const useChat = ({
     });
 
     // —— 任务取消 ——
-    stream.on('task:cancelled', () => {
+    stream.on('task:cancelled', (data) => {
+      if (data.sub_task_id) {
+        finalizeSubAgentMessage(data.sub_task_id, 'error', null, '任务已取消');
+        return;
+      }
       const errorMsg = '任务已取消';
       setState((prev) => ({
         ...prev,
@@ -726,6 +741,10 @@ export const useChat = ({
 
     // —— 任务失败 ——
     stream.on('task:failed', (data) => {
+      if (data.sub_task_id) {
+        finalizeSubAgentMessage(data.sub_task_id, 'error', null, data.error);
+        return;
+      }
       const errorMsg = data.error || '任务执行失败';
       setState((prev) => ({
         ...prev,
@@ -836,6 +855,7 @@ export const useChat = ({
 
         // —— 阶段变化 —— 后端字段为 `phase`（非 new_phase）
         stream.on('phase:changed', (data) => {
+          if (data.sub_task_id) return;
           setState((prev) => ({
             ...prev,
             currentPhase: (data.phase as AgentPhase) || prev.currentPhase,
@@ -1025,7 +1045,11 @@ export const useChat = ({
         });
 
         // —— 任务完成 ——
-        stream.on('task:completed', () => {
+        stream.on('task:completed', (data) => {
+          if (data.sub_task_id) {
+            finalizeSubAgentMessage(data.sub_task_id, 'completed', data.result, null);
+            return;
+          }
           setState((prev) => ({
             ...prev,
             isStreaming: false,
@@ -1038,7 +1062,11 @@ export const useChat = ({
         });
 
         // —— 任务取消 ——
-        stream.on('task:cancelled', () => {
+        stream.on('task:cancelled', (data) => {
+          if (data.sub_task_id) {
+            finalizeSubAgentMessage(data.sub_task_id, 'error', null, '任务已取消');
+            return;
+          }
           const errorMsg = '任务已取消';
           setState((prev) => ({
             ...prev,
@@ -1058,6 +1086,10 @@ export const useChat = ({
 
         // —— 任务失败 ——
         stream.on('task:failed', (data) => {
+          if (data.sub_task_id) {
+            finalizeSubAgentMessage(data.sub_task_id, 'error', null, data.error);
+            return;
+          }
           const errorMsg = data.error || '任务执行失败';
           setState((prev) => ({
             ...prev,

@@ -7,6 +7,7 @@ import pytest
 from src.application.dtos.event_dto import SSEEventDTO
 from src.application.use_cases.stream_event import StreamEventService
 from src.domain.entities.event import Event
+from src.domain.services.event_emitter import ProxyEventEmitter
 
 
 class InMemoryEventRepository:
@@ -82,3 +83,52 @@ async def test_non_chunk_event_flushes_chunk_buffer_before_cancelled_terminal_ev
     ]
     assert repo.batch_saves == 1
     assert repo.single_saves == 1
+
+
+class RecordingEmitter:
+    def __init__(self) -> None:
+        self.events = []
+
+    async def emit(self, task_id: str, event_type: str, payload: dict) -> None:
+        self.events.append((task_id, event_type, payload))
+
+    async def emit_phase_changed(
+        self,
+        task_id: str,
+        new_phase: str,
+        previous_phase: str,
+        turn: int,
+    ) -> None:
+        await self.emit(
+            task_id,
+            "phase:changed",
+            {"phase": new_phase, "previousPhase": previous_phase, "turn": turn},
+        )
+
+    async def emit_llm_chunk(self, task_id: str, turn: int, text: str) -> None:
+        await self.emit(task_id, "llm:chunk", {"turn": turn, "text": text})
+
+    async def emit_thinking_chunk(self, task_id: str, turn: int, text: str) -> None:
+        await self.emit(task_id, "thinking:chunk", {"turn": turn, "text": text})
+
+
+@pytest.mark.asyncio
+async def test_proxy_event_emitter_writes_to_parent_stream_with_sub_task_marker() -> None:
+    parent = RecordingEmitter()
+    proxy = ProxyEventEmitter(
+        parent,
+        parent_task_id="parent-task-1",
+        sub_task_id="sub-task-1",
+    )
+
+    await proxy.emit("sub-task-1", "task:started", {})
+    await proxy.emit_llm_chunk("sub-task-1", 1, "hello")
+
+    assert parent.events == [
+        ("parent-task-1", "task:started", {"sub_task_id": "sub-task-1"}),
+        (
+            "parent-task-1",
+            "llm:chunk",
+            {"turn": 1, "text": "hello", "delta": True, "sub_task_id": "sub-task-1"},
+        ),
+    ]

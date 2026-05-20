@@ -11,6 +11,7 @@ import type { AgentPhase } from './task';
 /** 所有事件 payload 都包含的基础字段 */
 export interface BaseEventPayload {
   taskId: string;
+  sub_task_id?: string;
 }
 
 /** task-started 事件 */

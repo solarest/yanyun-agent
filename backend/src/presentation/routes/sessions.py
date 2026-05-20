@@ -249,31 +249,6 @@ async def send_message(
     bg_tool_registry = create_tool_registry()
     bg_llm_provider = get_llm_provider()
 
-    # 创建 Sub-Agent 编排器和启动器
-    from src.domain.services.sub_agent_orchestrator import SubAgentOrchestrator
-    from src.application.use_cases.sub_agent_launcher import SubAgentLauncher
-
-    orchestrator = SubAgentOrchestrator()
-
-    def llm_builder(model, tool_registry, agent_id):
-        """为 sub-agent 构建 LLM 实例"""
-        from src.application.use_cases.send_message import _tool_defs_to_openai_functions
-        llm = bg_llm_provider.create_chat_model(model=model)
-        if llm is None:
-            raise RuntimeError("LLM Provider is not configured")
-        if tool_registry and tool_registry.tool_count > 0:
-            tool_schemas = _tool_defs_to_openai_functions(tool_registry)
-            llm = llm.bind_tools(tool_schemas)
-        return llm
-
-    sub_agent_launcher = SubAgentLauncher(
-        task_repo=bg_task_repo,
-        event_emitter=bg_event_emitter,
-        tool_registry=bg_tool_registry,
-        orchestrator=orchestrator,
-        llm_builder=llm_builder,
-    )
-
     use_case = SendMessageUseCase(
         agent_repo=bg_agent_repo,
         session_repo=bg_session_repo,
@@ -284,7 +259,6 @@ async def send_message(
         skill_repo=bg_skill_repo,
         llm_provider=bg_llm_provider,
         running_tasks=request.app.state.running_tasks,
-        sub_agent_launcher=sub_agent_launcher,
     )
 
     result = await use_case.execute(

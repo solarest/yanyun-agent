@@ -17,6 +17,20 @@ from src.infrastructure.agent.nodes.base_node import BaseNode, NodeContext
 logger = logging.getLogger("tool.call")
 
 
+async def _emit_tool_event(event_emitter, task_id: str, event_type: str, payload: dict) -> None:
+    """工具事件只用于 UI/观测，写入失败不能打断工具执行。"""
+    if not event_emitter:
+        return
+    emit_safe = getattr(event_emitter, "emit_safe", None)
+    try:
+        if callable(emit_safe) and hasattr(type(event_emitter), "emit_safe"):
+            await emit_safe(task_id, event_type, payload)
+        else:
+            await event_emitter.emit(task_id, event_type, payload)
+    except Exception as exc:
+        logger.warning("tool event emit failed: %s", exc)
+
+
 async def _execute_single_tool(
     tool_registry,
     event_emitter,
@@ -46,7 +60,8 @@ async def _execute_single_tool(
         task_id, tool_call_id, tool_name, tool_input
     )
 
-    await event_emitter.emit(
+    await _emit_tool_event(
+        event_emitter,
         task_id,
         "tool:call",
         {
@@ -76,7 +91,8 @@ async def _execute_single_tool(
             task_id, tool_call_id, tool_name, status, output_preview
         )
 
-        await event_emitter.emit(
+        await _emit_tool_event(
+            event_emitter,
             task_id,
             "tool:result",
             {
@@ -104,7 +120,8 @@ async def _execute_single_tool(
             task_id, tool_call_id, tool_name, str(e)
         )
 
-        await event_emitter.emit(
+        await _emit_tool_event(
+            event_emitter,
             task_id,
             "tool:result",
             {
@@ -148,22 +165,28 @@ class ToolExecuteNode(BaseNode):
         tool_registry = config["configurable"]["tool_registry"]
         current_turn = context.current_turn
 
-        # 从 config 获取 sub_agent_launcher（可选）
-        sub_agent_launcher = config["configurable"].get("sub_agent_launcher")
+        # 从 config 获取 sub-agent 相关依赖
+        send_message_use_case = config["configurable"].get(
+            "send_message_use_case")
+        task_repo = config["configurable"].get("task_repo")
+        event_emitter = config["configurable"].get("event_emitter")
         session_id = config["configurable"].get("session_id", "")
 
+        # 构建工具 context
+        # 如果存在 sub-agent 相关依赖，注入到 extra 中
         tool_context = ToolContext(
             task_id=context.task_id,
             workspace=state.get("workspace", ""),
             agent_id=context.agent_id,
             extra={
-                "sub_agent_launcher": sub_agent_launcher,
+                "send_message_use_case": send_message_use_case,
+                "task_repo": task_repo,
+                "event_emitter": event_emitter,
                 "parent_state": state,
                 "parent_agent_id": context.agent_id,
                 "parent_session_id": session_id,
-                "parent_task_id": context.task_id,
-                "user_message": state.get("user_message", ""),
-            } if sub_agent_launcher else {},
+                "parent_task_id": state.get("parent_task_id") or context.task_id,
+            } if send_message_use_case else {},
         )
 
         pending_tools = state.get("pending_tool_calls", [])

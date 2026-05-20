@@ -15,12 +15,17 @@ SQLALCHEMY_DATABASE_URL = f"sqlite:///{_DB_PATH}"
 SQLALCHEMY_ASYNC_DATABASE_URL = f"sqlite+aiosqlite:///{_DB_PATH}"
 
 # 同步引擎 (用于初始化)
-sync_engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={
-                            "check_same_thread": False})
+_SQLITE_CONNECT_ARGS = {"check_same_thread": False, "timeout": 30}
+
+sync_engine = create_engine(
+    SQLALCHEMY_DATABASE_URL,
+    connect_args=_SQLITE_CONNECT_ARGS,
+)
 
 # 异步引擎 (用于异步操作)
 async_engine = create_async_engine(
-    SQLALCHEMY_ASYNC_DATABASE_URL, connect_args={"check_same_thread": False}
+    SQLALCHEMY_ASYNC_DATABASE_URL,
+    connect_args=_SQLITE_CONNECT_ARGS,
 )
 
 # Session 工厂 (同步)

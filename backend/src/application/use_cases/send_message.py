@@ -26,7 +26,7 @@ from src.domain.repositories.session_repository import ISessionRepository
 from src.domain.repositories.skill_repository import ISkillRepository
 from src.domain.repositories.task_repository import ITaskRepository
 from src.domain.repositories.tool_registry import IToolRegistry
-from src.domain.services import IEventEmitter
+from src.domain.services import IEventEmitter, ProxyEventEmitter
 from src.domain.entities.prompt_template import PromptTemplate
 from src.domain.services.prompt_assemble_service import PromptAssembleService
 
@@ -113,6 +113,13 @@ class SendMessageUseCase:
         max_turns: int = 100,
         workspace: str = "/tmp/agent-workspace",
         skill_ids: Optional[list[str]] = None,
+        # Sub-agent 模式参数
+        is_sub_agent: bool = False,
+        parent_task_id: Optional[str] = None,
+        sub_agent_description: Optional[str] = None,
+        parent_system_prompt: Optional[str] = None,
+        sub_task: Optional[Task] = None,
+        allowed_tools: Optional[list[str]] = None,
     ) -> Dict[str, Any]:
         """执行发送消息流程
 
@@ -131,47 +138,63 @@ class SendMessageUseCase:
             max_turns: 最大轮次
             workspace: 工作目录
             skill_ids: 选中的 Skill ID 列表
+            is_sub_agent: 是否为 sub-agent 模式
+            parent_task_id: 父 task ID（sub-agent 模式）
+            sub_agent_description: sub-agent 任务描述（sub-agent 模式）
+            parent_system_prompt: 父 agent 的 system prompt（sub-agent 模式）
+            sub_task: sub-task 实体（sub-agent 模式）
+            allowed_tools: 允许的工具列表（sub-agent 模式）
 
         Returns:
             {"user_message": SessionMessage, "task_id": str}
         """
-        # 1. 保存用户消息
-        user_msg = SessionMessage(
-            session_id=session_id,
-            role=SessionMessageRole.USER,
-            content=content,
-            status=MessageStatus.COMPLETED,
-        )
-        user_msg = await self.message_repo.add(user_msg)
+        persist_session_messages = not is_sub_agent
 
-        # 2. 更新 Session 元数据
-        session = await self.session_repo.get_by_id(session_id)
-        if session:
-            session.update_metadata(content)
-            # 首条消息自动生成标题 - 使用 LLM 提炼
-            if session.message_count == 1:
-                # 异步生成标题，不阻塞主流程
-                asyncio.create_task(
-                    self._generate_session_title(session_id, content)
-                )
-            await self.session_repo.update(session)
+        # 1. 保存用户消息。sub-agent 的中间对话不写入父 session，最终结果通过
+        #    Task.result 和 session_spawn 的 ToolMessage 回到主 agent。
+        user_msg: Optional[SessionMessage] = None
+        if persist_session_messages:
+            user_msg = SessionMessage(
+                session_id=session_id,
+                role=SessionMessageRole.USER,
+                content=content,
+                status=MessageStatus.COMPLETED,
+            )
+            user_msg = await self.message_repo.add(user_msg)
+
+            # 2. 更新 Session 元数据
+            session = await self.session_repo.get_by_id(session_id)
+            if session:
+                session.update_metadata(content)
+                # 首条消息自动生成标题 - 使用 LLM 提炼
+                if session.message_count == 1:
+                    # 异步生成标题，不阻塞主流程
+                    asyncio.create_task(
+                        self._generate_session_title(session_id, content)
+                    )
+                await self.session_repo.update(session)
 
         # 3. 创建 Task
         from src.infrastructure.llm.config import LLMSettings
 
         effective_model = model or LLMSettings().default_model
-        task = Task(
-            message=content,
-            workspace=workspace,
-            status=TaskStatus.RUNNING,
-            model=effective_model,
-            config=TaskConfig(max_turns=max_turns),
-            max_turns=max_turns,
-            agent_id=agent_id,
-            session_id=session_id,
-            started_at=datetime.now(),
-        )
-        if self.task_repo:
+        if sub_task is not None:
+            task = sub_task
+            task.status = TaskStatus.RUNNING
+            task.started_at = task.started_at or datetime.now()
+        else:
+            task = Task(
+                message=content,
+                workspace=workspace,
+                status=TaskStatus.RUNNING,
+                model=effective_model,
+                config=TaskConfig(max_turns=max_turns),
+                max_turns=max_turns,
+                agent_id=agent_id,
+                session_id=session_id,
+                started_at=datetime.now(),
+            )
+        if self.task_repo and sub_task is None:
             task = await self.task_repo.add(task)
 
         # 4. 启动后台 runner
@@ -183,14 +206,24 @@ class SendMessageUseCase:
                     session_id=session_id,
                     task=task,
                     content=content,
-                    model=model,
+                    model=effective_model,
                     max_turns=max_turns,
                     workspace=workspace,
                     skill_ids=skill_ids or [],
+                    is_sub_agent=is_sub_agent,
+                    parent_task_id=parent_task_id,
+                    sub_agent_description=sub_agent_description,
+                    parent_system_prompt=parent_system_prompt,
+                    allowed_tools=allowed_tools,
+                    persist_session_messages=persist_session_messages,
                 )
             )
+            self.running_tasks[task.id] = asyncio_task
             asyncio_task.add_done_callback(
                 lambda t: logger.info("Agent loop task %s finished", task.id)
+            )
+            asyncio_task.add_done_callback(
+                lambda _t: self.running_tasks.pop(task.id, None)
             )
 
         return {
@@ -234,6 +267,86 @@ class SendMessageUseCase:
                 "session_id": session_id,
             }
         }
+
+    def _build_system_prompt(
+        self,
+        is_sub_agent: bool,
+        parent_system_prompt: Optional[str],
+        sub_agent_description: Optional[str],
+        agent_system_prompt: str,
+    ) -> str:
+        """根据模式构建 system prompt
+
+        Args:
+            is_sub_agent: 是否为 sub-agent 模式
+            parent_system_prompt: 父 agent 的 system prompt
+            sub_agent_description: sub-agent 任务描述
+            agent_system_prompt: 当前 agent 的 system prompt（通过 PromptAssembleService 生成）
+
+        Returns:
+            构建后的 system prompt
+        """
+        if not is_sub_agent:
+            return agent_system_prompt
+
+        # Sub-agent 模式：复用父 prompt + 添加任务说明
+        from src.domain.services.sub_agent_orchestrator import SubAgentOrchestrator
+        orchestrator = SubAgentOrchestrator()
+        return orchestrator.build_sub_agent_system_prompt(
+            parent_system_prompt=parent_system_prompt or "",
+            description=sub_agent_description or "",
+        )
+
+    def _build_tool_registry(
+        self,
+        is_sub_agent: bool,
+        allowed_tools: Optional[list[str]] = None,
+    ) -> Optional[IToolRegistry]:
+        """根据模式构建工具注册表
+
+        Args:
+            is_sub_agent: 是否为 sub-agent 模式
+            allowed_tools: 允许的工具列表
+
+        Returns:
+            工具注册表
+        """
+        if not is_sub_agent:
+            return self.tool_registry
+
+        # Sub-agent 模式：排除特定工具
+        from src.domain.services.sub_agent_orchestrator import SubAgentOrchestrator
+        orchestrator = SubAgentOrchestrator()
+        return orchestrator.create_sub_agent_tool_registry(
+            self.tool_registry,
+            allowed_tools=allowed_tools,
+        )
+
+    def _build_event_emitter(
+        self,
+        is_sub_agent: bool,
+        parent_task_id: Optional[str],
+        sub_task_id: Optional[str],
+    ) -> Optional[IEventEmitter]:
+        """根据模式构建事件发射器
+
+        Args:
+            is_sub_agent: 是否为 sub-agent 模式
+            parent_task_id: 父 task ID
+            sub_task_id: 子 task ID
+
+        Returns:
+            事件发射器
+        """
+        if not is_sub_agent:
+            return self.event_emitter
+
+        # Sub-agent 模式：使用代理转发器
+        return ProxyEventEmitter(
+            self.event_emitter,
+            parent_task_id=parent_task_id or "",
+            sub_task_id=sub_task_id or "",
+        )
 
     async def _generate_session_title(self, session_id: str, user_message: str) -> None:
         """使用 LLM 生成会话标题
@@ -296,7 +409,18 @@ class SendMessageUseCase:
         task: Task,
         session_id: str,
         result: Dict[str, Any],
+        event_emitter: Optional[IEventEmitter] = None,
+        persist_session_messages: bool = True,
     ) -> None:
+        """处理终态结果
+
+        Args:
+            task: Task 实体
+            session_id: Session ID
+            result: LangGraph 执行结果
+            event_emitter: 事件发射器（可选，默认使用 self.event_emitter）
+        """
+        emitter = event_emitter or self.event_emitter
         final_result = result.get("final_result")
         error = result.get("error")
         final_turn = result.get("current_turn", task.current_turn)
@@ -359,17 +483,19 @@ class SendMessageUseCase:
                 or _extract_last_message_content(result.get("messages", []))
             )
 
-        assistant_msg = SessionMessage(
-            session_id=session_id,
-            task_id=task.id,
-            role=SessionMessageRole.ASSISTANT,
-            content=assistant_content,
-            tool_calls=all_tool_calls,
-            tool_results=all_tool_results,
-            status=MessageStatus.ERROR if error else MessageStatus.COMPLETED,
-            error=error,
-        )
-        assistant_msg = await self.message_repo.add(assistant_msg)
+        assistant_msg: Optional[SessionMessage] = None
+        if persist_session_messages:
+            assistant_msg = SessionMessage(
+                session_id=session_id,
+                task_id=task.id,
+                role=SessionMessageRole.ASSISTANT,
+                content=assistant_content,
+                tool_calls=all_tool_calls,
+                tool_results=all_tool_results,
+                status=MessageStatus.ERROR if error else MessageStatus.COMPLETED,
+                error=error,
+            )
+            assistant_msg = await self.message_repo.add(assistant_msg)
 
         if self.task_repo:
             task.status = TaskStatus.FAILED if error else TaskStatus.COMPLETED
@@ -379,26 +505,28 @@ class SendMessageUseCase:
             task.error = error
             await self.task_repo.update(task)
 
-        session = await self.session_repo.get_by_id(session_id)
-        if session:
-            session.update_metadata(assistant_content)
-            await self.session_repo.update(session)
+        if persist_session_messages:
+            session = await self.session_repo.get_by_id(session_id)
+            if session:
+                session.update_metadata(assistant_content)
+                await self.session_repo.update(session)
 
-        await self.event_emitter.emit_phase_changed(
+        await emitter.emit_phase_changed(
             task.id,
             "failed" if error else "complete",
             previous_phase,
             final_turn,
         )
-        await self.event_emitter.emit(
-            task.id,
-            "session:message:saved",
-            _build_message_event_payload(assistant_msg),
-        )
+        if assistant_msg is not None:
+            await emitter.emit(
+                task.id,
+                "session:message:saved",
+                _build_message_event_payload(assistant_msg),
+            )
         if error:
-            await self.event_emitter.emit(task.id, "task:failed", {"error": error})
+            await emitter.emit(task.id, "task:failed", {"error": error})
         else:
-            await self.event_emitter.emit(task.id, "task:completed", {"result": final_result})
+            await emitter.emit(task.id, "task:completed", {"result": final_result})
 
     async def _run_agent_loop(
         self,
@@ -406,12 +534,28 @@ class SendMessageUseCase:
         session_id: str,
         task: Task,
         content: str,
-        model: str,
+        model: Optional[str],
         max_turns: int,
         workspace: str,
         skill_ids: Optional[list[str]] = None,
+        # Sub-agent 模式参数
+        is_sub_agent: bool = False,
+        parent_task_id: Optional[str] = None,
+        sub_agent_description: Optional[str] = None,
+        parent_system_prompt: Optional[str] = None,
+        allowed_tools: Optional[list[str]] = None,
+        persist_session_messages: bool = True,
     ) -> None:
         """后台 Agent Loop Runner"""
+        effective_event_emitter = self._build_event_emitter(
+            is_sub_agent=is_sub_agent,
+            parent_task_id=parent_task_id,
+            sub_task_id=task.id,
+        )
+        if model is None:
+            from src.infrastructure.llm.config import LLMSettings
+            model = LLMSettings().default_model
+
         try:
             # 步骤 A: 构建 system_prompt（使用 11 层 Prompt 架构）
             agent = await self.agent_repo.get_by_id(agent_id)
@@ -444,7 +588,15 @@ class SendMessageUseCase:
                 },
                 memory_enabled=bool(template.memory_md),
             )
-            system_prompt = assembly_result.system_message
+            agent_system_prompt = assembly_result.system_message
+
+            # 根据模式构建 system prompt
+            system_prompt = self._build_system_prompt(
+                is_sub_agent=is_sub_agent,
+                parent_system_prompt=parent_system_prompt,
+                sub_agent_description=sub_agent_description,
+                agent_system_prompt=agent_system_prompt,
+            )
 
             logger.info(
                 "[Prompt Assembly] agent=%s | layers=%s | total_tokens=%d | static_prefix_tokens=%d",
@@ -483,7 +635,12 @@ class SendMessageUseCase:
                         content=f"[Tool Results] {msg.content}"))
 
             # 步骤 C: 创建 LLM 实例 + 绑定工具
-            llm = self._build_llm(model, self.tool_registry, agent_id)
+            # 根据模式构建工具注册表
+            effective_tool_registry = self._build_tool_registry(
+                is_sub_agent=is_sub_agent,
+                allowed_tools=allowed_tools,
+            )
+            llm = self._build_llm(model, effective_tool_registry, agent_id)
 
             # 步骤 D: 构建初始 AgentState
             initial_state = {
@@ -492,7 +649,7 @@ class SendMessageUseCase:
                 "workspace": workspace,
                 "user_message": content,
                 "task_start_message_count": len(messages),
-                "model": model or "gpt-4",
+                "model": model,
                 "current_turn": 0,
                 "max_turns": max_turns,
                 "phase": "idle",
@@ -522,16 +679,33 @@ class SendMessageUseCase:
                 "route_hint": None,
                 "observe_mode": None,
                 "compression_strategy": None,
-                "is_sub_agent": False,
-                "parent_task_id": None,
+                "is_sub_agent": is_sub_agent,
+                "parent_task_id": parent_task_id,
             }
 
             # 步骤 E: 编译并执行 LangGraph
             graph = AgentWorkflowBuilder().build()
-            graph_config = self._build_graph_config(
-                llm, self.tool_registry, agent_id, model, self.sub_agent_launcher, session_id)
 
-            await self.event_emitter.emit(task.id, "task:started", {})
+            graph_config = {
+                "configurable": {
+                    "llm": llm,
+                    "event_emitter": effective_event_emitter,
+                    "event_service": effective_event_emitter,
+                    "tool_registry": effective_tool_registry,
+                    "agent_id": agent_id,
+                    "llm_model": model,
+                    "session_id": session_id,
+                    # 注入 context 依赖，供工具使用
+                    "send_message_use_case": self,
+                    "task_repo": self.task_repo,
+                    "parent_state": initial_state,
+                    "parent_agent_id": agent_id,
+                    "parent_session_id": session_id,
+                    "parent_task_id": parent_task_id or task.id,
+                }
+            }
+
+            await effective_event_emitter.emit(task.id, "task:started", {})
 
             result = await graph.ainvoke(initial_state, graph_config)
 
@@ -539,6 +713,8 @@ class SendMessageUseCase:
                 task=task,
                 session_id=session_id,
                 result=result,
+                event_emitter=effective_event_emitter,
+                persist_session_messages=persist_session_messages,
             )
 
         except asyncio.CancelledError:
@@ -548,14 +724,14 @@ class SendMessageUseCase:
                 task.completed_at = datetime.now()
                 task.error = "cancelled"
                 await self.task_repo.update(task)
-            if self.event_emitter:
-                await self.event_emitter.emit_phase_changed(
+            if effective_event_emitter:
+                await effective_event_emitter.emit_phase_changed(
                     task.id,
                     "cancelled",
                     "thinking",
                     task.current_turn,
                 )
-                await self.event_emitter.emit(
+                await effective_event_emitter.emit(
                     task.id, "task:cancelled", {}
                 )
         except Exception as e:
@@ -565,13 +741,13 @@ class SendMessageUseCase:
                 task.completed_at = datetime.now()
                 task.error = str(e)
                 await self.task_repo.update(task)
-            if self.event_emitter:
-                await self.event_emitter.emit_phase_changed(
+            if effective_event_emitter:
+                await effective_event_emitter.emit_phase_changed(
                     task.id,
                     "failed",
                     "thinking",
                     task.current_turn,
                 )
-                await self.event_emitter.emit(
+                await effective_event_emitter.emit(
                     task.id, "task:failed", {"error": str(e)}
                 )
