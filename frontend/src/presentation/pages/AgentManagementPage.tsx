@@ -44,14 +44,14 @@ export const AgentManagementPage: React.FC = () => {
       {/* 头部 */}
       <div className="mb-6 flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Agent Management</h1>
+          <h1 className="text-2xl font-bold">Agent 管理</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Manage your AI agents and their configurations
+            管理你的 AI Agent 及其配置
           </p>
         </div>
         {agents.length > 0 && (
           <Link to="/agents/new" className="btn btn-primary">
-            + New Agent
+            + 新建 Agent
           </Link>
         )}
       </div>
@@ -66,7 +66,7 @@ export const AgentManagementPage: React.FC = () => {
       {/* 加载状态 */}
       {isLoading && agents.length === 0 && (
         <div className="flex items-center justify-center py-20">
-          <p className="text-muted-foreground">Loading...</p>
+          <p className="text-muted-foreground">加载中...</p>
         </div>
       )}
 
@@ -74,10 +74,10 @@ export const AgentManagementPage: React.FC = () => {
       {!isLoading && agents.length === 0 && (
         <div className="flex flex-col items-center justify-center py-20">
           <p className="mb-4 text-lg text-muted-foreground">
-            No agents yet
+            暂无 Agent
           </p>
           <Link to="/agents/new" className="btn btn-primary">
-            Create your first Agent
+            创建第一个 Agent
           </Link>
         </div>
       )}
@@ -133,20 +133,20 @@ export const AgentManagementPage: React.FC = () => {
                   to={`/agents/${agent.id}/chat`}
                   className="btn btn-primary px-3 py-1 text-xs"
                 >
-                  Chat
+                  对话
                 </Link>
                 <Link
                   to={`/agents/${agent.id}/edit`}
                   className="btn btn-outline px-3 py-1 text-xs"
                 >
-                  Edit
+                  编辑
                 </Link>
                 <button
                   type="button"
                   className="btn btn-outline px-3 py-1 text-xs text-destructive hover:bg-destructive/10"
                   onClick={() => setDeleteTarget(agent)}
                 >
-                  Delete
+                  删除
                 </button>
               </div>
             </div>

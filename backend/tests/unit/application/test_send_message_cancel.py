@@ -40,6 +40,27 @@ class RecordingEmitter:
             {"turn": turn, "text": text, "delta": True},
         )
 
+    async def emit_thinking_chunk(self, task_id: str, turn: int, text: str) -> None:
+        await self.emit(
+            task_id,
+            "thinking:chunk",
+            {"turn": turn, "text": text, "delta": True},
+        )
+
+    async def emit_safe(self, task_id: str, event_type: str, payload: dict) -> None:
+        """安全发射事件（测试实现）"""
+        await self.emit(task_id, event_type, payload)
+
+    async def emit_phase_changed_safe(
+        self,
+        task_id: str,
+        new_phase: str,
+        previous_phase: str,
+        turn: int,
+    ) -> None:
+        """安全发射阶段变更事件（测试实现）"""
+        await self.emit_phase_changed(task_id, new_phase, previous_phase, turn)
+
 
 class FakeAgentRepository:
     async def get_by_id(self, _agent_id: str) -> Agent:
@@ -100,6 +121,12 @@ class BlockingGraph:
 async def test_run_agent_loop_emits_cancelled_terminal_event(monkeypatch) -> None:
     emitter = RecordingEmitter()
     task_repo = FakeTaskRepository()
+
+    # 创建 FakeLLMProvider
+    class FakeLLMProvider:
+        def create_chat_model(self, model=None, temperature=0.7, provider=None):
+            return object()
+
     use_case = SendMessageUseCase(
         agent_repo=FakeAgentRepository(),
         session_repo=FakeSessionRepository(),
@@ -107,6 +134,7 @@ async def test_run_agent_loop_emits_cancelled_terminal_event(monkeypatch) -> Non
         task_repo=task_repo,
         event_emitter=emitter,
         tool_registry=FakeToolRegistry(),
+        llm_provider=FakeLLMProvider(),
     )
     task = Task(
         message="hello",
@@ -118,10 +146,6 @@ async def test_run_agent_loop_emits_cancelled_terminal_event(monkeypatch) -> Non
         session_id="session-1",
     )
 
-    monkeypatch.setattr(
-        "src.application.use_cases.send_message.create_chat_model",
-        lambda model=None: object(),
-    )
     monkeypatch.setattr(
         "src.application.use_cases.send_message.AgentWorkflowBuilder.build",
         lambda self: BlockingGraph(),

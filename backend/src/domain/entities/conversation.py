@@ -85,7 +85,7 @@ class ConversationMessage:
 
     def estimate_tokens(self) -> int:
         """预估消息的 Token 数量"""
-        from .prompt_template import _count_tokens
+        from src.domain.services.token_utils import count_tokens
         text = self.content
         if self.tool_calls:
             text += json.dumps(
@@ -93,7 +93,7 @@ class ConversationMessage:
                     for tc in self.tool_calls],
                 ensure_ascii=False
             )
-        return _count_tokens(text)
+        return count_tokens(text)
 
 
 @dataclass

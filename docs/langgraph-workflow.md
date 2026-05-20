@@ -2,9 +2,11 @@
 
 ## 概述
 
-本文档描述了基于 LangGraph 的 Agent 工作流架构。工作流由 **5 个核心节点** 组成,所有评估逻辑采用规则判断,消除 LLM 评估调用。
+本文档描述了基于 LangGraph 的 Agent 工作流架构。工作流由 **4 个核心节点** 组成，所有评估逻辑采用规则判断，消除 LLM 评估调用。
 
-**核心节点**: `llm_call` / `tool_execute` / `loop_detect` / `stuck_detect` / `context_compact`
+**核心节点**: `llm_call` / `tool_execute` / `loop_detect` / `context_compact`
+
+> **注意**: `stuck_detect_node` 代码已存在但当前**未注册到工作流中**（预留实现）。LLM 返回纯文本/空响应时直接走 `route_after_llm` → END 终止。
 
 ## 工作流流程图
 
@@ -12,11 +14,10 @@
 graph TB
     Start([开始]) --> llm_call["llm_call_node<br/>LLM调用"]
     
-    llm_call --> route_after_llm{LLM后路由<br/>三元判定}
+    llm_call --> route_after_llm{LLM后路由<br/>双分支}
     
-    route_after_llm -->|should_end| End0([结束])
+    route_after_llm -->|should_end 或无tool_calls| End0([结束])
     route_after_llm -->|有tool_calls| loop_detect["loop_detect_node<br/>循环检测+工具评估"]
-    route_after_llm -->|纯文本/空响应| stuck_detect["stuck_detect_node<br/>卡住检测+文本评估"]
     
     loop_detect --> route_loop{循环检测路由<br/>四分支}
     route_loop -->|无循环| tool_execute["tool_execute_node<br/>工具执行"]
@@ -28,94 +29,39 @@ graph TB
     route_tool -->|awaiting_user_input| End2([结束])
     route_tool -->|工具执行完毕| llm_call
 
-    stuck_detect --> route_stuck{卡住检测路由<br/>两分支}
-    route_stuck -->|count<3 注入反馈| llm_call
-    route_stuck -->|count>=3 终止| End3([结束])
-    
     context_compact --> llm_call
     
     style llm_call fill:#e1f5fe
     style tool_execute fill:#f3e5f5
     style loop_detect fill:#fff3e0
     style context_compact fill:#fce4ec
-    style stuck_detect fill:#f1f8e9
 ```
 
 ### 设计原则
 
-- **极简路由**: `route_after_llm` 只做 "有无 tool_calls" 的三元判断,纯文本直接进入 `stuck_detect`
-- **规则替代LLM**: 所有评估逻辑采用规则判断(关键词/正则/阈值),消除 LLM 评估调用
-- **检测内聚**: 反馈注入逻辑内聚到各检测节点(loop_detect/stuck_detect)
-- **Plan 降级**: `plan_execute` 已降级为闭包工具,不再是图节点
-- **工具执行简化**: `route_after_tool_execute` 只有两分支,工具执行后直接回 `llm_call`,由下轮 LLM 返回后再检测循环
+- **极简路由**: `route_after_llm` 只做 "有无 tool_calls" 的双分支判断，有 tool_calls → `loop_detect`，否则 → END
+- **规则替代LLM**: 所有评估逻辑采用规则判断(关键词/正则/阈值)，消除 LLM 评估调用
+- **检测内聚**: 反馈注入逻辑内聚到 `loop_detect_node`
+- **Plan 降级**: `plan_execute` 已降级为闭包工具，不再是图节点
+- **工具执行简化**: `route_after_tool_execute` 只有两分支，工具执行后直接回 `llm_call`，由下轮 LLM 返回后再检测循环
+- **stuck_detect 未注册**: `stuck_detect_node` 代码存在但未接入工作流，LLM 返回纯文本时直接终止
 
 ### 反馈机制说明
 
 | 检测场景 | 处理位置 | 反馈策略 |
 |---------|---------|----------|
-| 空响应 | `stuck_detect_node` | 重试 ≤1 次注入提示,超限终止 |
-| 纯规划 | `stuck_detect_node` | 重试 ≤2 次注入提示,超限终止 |
-| 完成声明 | `stuck_detect_node` | 规则检查 + 实质性验证,通过→complete,不通过→llm_call |
-| 用户提问 | `stuck_detect_node` | 识别为完成→complete |
-| 循环检测 | `loop_detect_node` 内部 | count=1: 警告; count=2: context_compact; count≥3: 终止 |
-| 空结果循环 | `loop_detect_node` 内部 | 工具连续空结果,同样遵循 3 级升级策略 |
-| 卡住检测 | `stuck_detect_node` 内部 | count<3: 注入纠正消息; count≥3: 终止 |
-| 致命错误 | `loop_detect_node` | permission 等致命错误→terminate |
-| 工具质量评估 | `loop_detect_node` | 规则评估质量并记录 → 路由回 llm_call |
-| 工具执行完毕 | `route_after_tool_execute` | 直接路由回 llm_call,由下轮 LLM 后再检测循环 |
+| 循环检测 | `loop_detect_node` 内部 | count=1: 注入警告; count=2: context_compact; count≥3: 终止 |
+| 空结果循环 | `loop_detect_node` 内部 | 工具连续空结果，同样遵循 3 级升级策略 |
+| 致命错误 | `loop_detect_node` | permission 等致命错误 → terminate |
+| 工具质量评估 | `loop_detect_node` | 规则评估质量并记录 → 路由回 tool_execute |
+| 工具执行完毕 | `route_after_tool_execute` | 直接路由回 `llm_call`，由下轮 LLM 后再检测循环 |
+| 无 tool_calls | `route_after_llm` | 直接 END 终止（stuck_detect 尚未接入） |
 
 ## 系统提示词（System Prompt）
 
-LLM 调用节点的 system prompt 由 **PromptBuilder** 服务构建，底层由 Agent 实体的 `build_full_system_prompt()` 组装。
+LLM 调用节点的 system prompt 由 **PromptAssembleService** 组装，采用 **11 层 Prompt 架构**。
 
-当前实现版本采用 **7 文件直接组装** 模式（BOOTSTRAP → IDENTITY → AGENTS → SOUL → MEMORY → TOOLS → USER），设计文档中规划的 11 层结构（含 Universal Behavior、Tooling Section、Environment 等动态层）作为后续迭代方向。
-
-### 当前实现：7 文件组装模式
-
-```
-完整 System Prompt =
-  # Bootstrap
-  {{bootstrap_md}}
-
-  # Identity
-  {{identity_md}}
-
-  # Agents
-  {{agents_md}}
-
-  # Soul
-  {{soul_md}}
-
-  # Memory
-  {{memory_md}}
-
-  # Tools
-  {{tools_md}}
-
-  # User
-  {{user_md}}
-```
-
-**组装规则：**
-- 顺序：BOOTSTRAP → IDENTITY → AGENTS → SOUL → MEMORY → TOOLS → USER
-- 空配置自动跳过（通过 `if content:` 判断）
-- 各节以 `# {Section}` 标题 + 内容形式拼接，节之间用双换行（`\n\n`）分隔
-- 配置文件最大长度：50000 字符/个
-- 组装代码位置：`backend/src/domain/entities/agent.py` → `build_full_system_prompt()`
-
-### 各配置文件含义与提示词示例
-
-| 配置文件 | 用途 | 注入时机 | 提示词示例片段 |
-|----------|------|----------|----------------|
-| `bootstrap_md` | 初始化序列与核心系统提示词 | Agent 创建时 | `# 初始化配置\n\n## 系统约束\n- 遵守安全边界，不执行危险操作\n- 保护用户隐私，不泄露敏感信息` |
-| `identity_md` | 身份定义与系统边界约束 | Agent 创建时 | `# 小助手\n\n## 身份\n你是小助手，帮助你管理日程和提醒的智能助手。` |
-| `agents_md` | 调度规则与标准作业程序 | Agent 创建时 | `# 调度规则与标准作业程序\n\n## 任务处理流程\n1. 接收用户请求\n2. 分析任务类型和优先级` |
-| `soul_md` | 响应语气、行为特征及输出格式 | Agent 创建时 | `# 人格定义\n\n## 性格特征\n严谨、专业、可靠` |
-| `memory_md` | 长期上下文数据与既定规则 | 运行时可更新 | 初始为空，运行时由 memory 系统填充 |
-| `tools_md` | 工具授权注册表及调用参数 | Agent 创建时 | `# 工具授权\n\n## 可用工具\n（待配置）` |
-| `user_md` | 用户画像数据与交互限制 | Agent 创建时 | `# 用户画像\n\n## 目标用户\n使用小助手的用户` |
-
-### LLM 调用时的完整输入
+详见: `backend/src/domain/services/prompt_assemble_service.py`
 
 在 `llm_call_node` 中，LLM 接收的 messages 数组为：
 
@@ -142,6 +88,7 @@ LLM 调用节点的 system prompt 由 **PromptBuilder** 服务构建，底层由
   4. 使用 `AIMessageChunk` 聚合流式输出
   5. 从聚合消息中提取 `tool_calls` 并转为 `pending_tool_calls`
   6. 发射 LLM 完成事件（`llm:complete`）
+  7. 更新 `current_llm_text` 和 `current_turn`
 - **返回状态**:
   - `messages`: `[AIMessage(content=full_text, tool_calls=...)]`
   - `pending_tool_calls`: 待执行工具列表
@@ -203,6 +150,8 @@ LLM 调用节点的 system prompt 由 **PromptBuilder** 服务构建，底层由
   - count≥3 或全局纠正预算熔断: 设置 `error`/`should_end=True` → 终止
 - **返回状态**: `stuck_detected` / `stuck_detection_count` / `stuck_type` / `messages`
 
+> **注意**: `stuck_detect_node` 代码已实现但**未注册到工作流**，LLM 返回纯文本时由 `route_after_llm` 直接 END 终止。
+
 ### 5. 上下文压缩节点 (context_compact_node)
 - **文件**: `backend/src/infrastructure/agent/nodes/context_compact_node.py`
 - **职责**: 当上下文消息过多时压缩对话历史
@@ -216,13 +165,12 @@ LLM 调用节点的 system prompt 由 **PromptBuilder** 服务构建，底层由
 
 ## 路由逻辑
 
-### route_after_llm（三分支）
+### route_after_llm（双分支）
 
 | 条件 | 目标 |
 |------|------|
-| `should_end=True` | END |
+| `should_end=True` **或** 无 `tool_calls`（纯文本/空响应） | END |
 | 有 `tool_calls` | `loop_detect`（前置守卫） |
-| 其他（纯文本/空响应） | `stuck_detect`（文本评估+卡住检测） |
 
 ### route_after_loop_detect（四分支）
 
@@ -242,6 +190,8 @@ LLM 调用节点的 system prompt 由 **PromptBuilder** 服务构建，底层由
 
 **说明**: 工具执行后直接回到 `llm_call`，由下一轮 LLM 返回后再进入 `loop_detect` 进行循环检测。这种设计避免了重复检测，保持路由逻辑极简。
 
+删除以下已废弃的路由段：
+
 ### route_after_stuck_detect（两分支）
 
 | 条件 | 目标 |
@@ -255,12 +205,13 @@ LLM 调用节点的 system prompt 由 **PromptBuilder** 服务构建，底层由
 
 ## Plan 执行（闭包工具）
 
-Plan 执行不再是图节点，而是在 `SendMessageUseCase._create_plan_execute_tool()` 中创建的闭包工具：
+Plan 执行不再是图节点，而是在 `SendMessageUseCase` 中创建的闭包工具：
 
-- **注册时机**: `_run_agent_loop()` 启动时注册到 `tool_registry`
+- **注册时机**: `_run_agent_loop` 启动时注册到 `tool_registry`
 - **执行方式**: LLM 调用 `plan_execute` 工具 → `tool_execute_node` 统一执行 → 闭包内部创建 `PlanExecutor` → 同步等待所有子 Agent 完成
 - **子 Agent 限制**: 子 Agent 不注册 `plan_execute` 工具（避免嵌套 plan）
-- **工具定义位置**: `backend/src/application/use_cases/send_message.py` → `_create_plan_execute_tool()`
+- **工具定义位置**: `backend/src/application/use_cases/send_message.py`（通过 `_build_graph_config` 传入 `tool_registry`）
+- **子 Agent 状态**: `send_message.py` 中的子 Agent 相关方法已删除（`_run_sub_agent` / `_create_sub_agent_tool_registry` 等），子 Agent 机制当前未启用
 
 ## 状态管理
 
@@ -285,12 +236,12 @@ Agent 状态定义在 `backend/src/domain/entities/agent_state.py` 中，继承 
 | `loop_detection_count` | `int` | 循环检测连续次数 |
 | `loop_detected` | `bool` | 本轮是否检测到循环 |
 | `loop_type` | `Optional[str]` | 循环类型 |
-| `stuck_detection_count` | `int` | 卡住检测连续次数 |
-| `stuck_detected` | `bool` | 本轮是否检测到卡住 |
-| `stuck_type` | `Optional[str]` | 卡住类型 |
+| `stuck_detection_count` | `int` | 卡住检测连续次数（预留，未接入工作流） |
+| `stuck_detected` | `bool` | 本轮是否检测到卡住（预留，未接入工作流） |
+| `stuck_type` | `Optional[str]` | 卡住类型（预留，未接入工作流） |
 | `current_llm_text` | `str` | 当前 LLM 输出文本 |
-| `empty_retry_count` | `int` | 空响应重试计数 |
-| `planning_retry_count` | `int` | 纯规划重试计数 |
+| `empty_retry_count` | `int` | 空响应重试计数（预留） |
+| `planning_retry_count` | `int` | 纯规划重试计数（预留） |
 | `system_prompt` | `str` | 系统提示词 |
 | `final_result` | `Optional[str]` | 最终结果 |
 | `error` | `Optional[str]` | 错误信息 |
@@ -303,6 +254,8 @@ Agent 状态定义在 `backend/src/domain/entities/agent_state.py` 中，继承 
 | `last_error_category` | `Optional[str]` | 最近一次错误分类 |
 | `compression_strategy` | `Optional[str]` | 压缩策略（trim/summarize） |
 
+> **注意**: `stuck_detection_count` / `stuck_detected` / `stuck_type` / `empty_retry_count` / `planning_retry_count` 字段当前**未被工作流使用**，为 `stuck_detect_node` 预留。
+
 ## 维护说明
 
 **重要**: 每次修改工作流逻辑时，必须同步更新本文档：
@@ -310,3 +263,4 @@ Agent 状态定义在 `backend/src/domain/entities/agent_state.py` 中，继承 
 2. 更新节点说明（如修改节点职责或功能）
 3. 更新路由逻辑（如修改路由条件）
 4. 更新状态管理（如修改状态结构）
+5. **确认新节点是否注册**: 代码中写好的节点未必接入工作流，需检查 `agent_workflow.py` 中的 `workflow.add_node()` 和 `add_conditional_edges()` 调用

@@ -13,9 +13,9 @@ import {
 import type { CreateAgentRequest } from '@domain/entities/agent';
 
 const WIZARD_STEPS = [
-  { id: 'identity', label: 'Identity & Model' },
-  { id: 'tools', label: 'Tools' },
-  { id: 'review', label: 'Review & Create' },
+  { id: 'identity', label: '身份与模型' },
+  { id: 'tools', label: '工具' },
+  { id: 'review', label: '预览与创建' },
 ];
 
 interface WizardContainerProps {
@@ -85,7 +85,7 @@ export const WizardContainer: React.FC<WizardContainerProps> = ({
     <div className="flex h-full flex-col">
       {/* 头部：步骤指示器 */}
       <div className="border-b px-6 py-4">
-        <h2 className="mb-3 text-xl font-semibold">Create Agent</h2>
+        <h2 className="mb-3 text-xl font-semibold">创建 Agent</h2>
         <StepIndicator steps={WIZARD_STEPS} currentStep={currentStep} />
       </div>
 
@@ -114,7 +114,7 @@ export const WizardContainer: React.FC<WizardContainerProps> = ({
 
         {currentStep === 2 && generated && (
           <div className="space-y-4">
-            <h3 className="text-lg font-medium">Review Generated Config</h3>
+            <h3 className="text-lg font-medium">预览生成的配置</h3>
             <p className="text-sm text-muted-foreground">
               以下配置文件已根据你的输入自动生成，创建后可在编辑页面进一步修改。
             </p>
@@ -142,7 +142,7 @@ export const WizardContainer: React.FC<WizardContainerProps> = ({
           onClick={handleBack}
           disabled={isLoading}
         >
-          {currentStep === 0 ? 'Cancel' : 'Back'}
+          {currentStep === 0 ? '取消' : '上一步'}
         </button>
         <div>
           {currentStep === 0 && (
@@ -152,7 +152,7 @@ export const WizardContainer: React.FC<WizardContainerProps> = ({
               onClick={handleNext}
               disabled={!canProceed}
             >
-              Next: Tools
+              下一步：工具
             </button>
           )}
           {currentStep === 1 && (
@@ -161,7 +161,7 @@ export const WizardContainer: React.FC<WizardContainerProps> = ({
               className="btn btn-primary"
               onClick={handleNext}
             >
-              Next: Review
+              下一步：预览
             </button>
           )}
           {currentStep === 2 && (
@@ -171,7 +171,7 @@ export const WizardContainer: React.FC<WizardContainerProps> = ({
               onClick={handleSubmit}
               disabled={isLoading || !generated}
             >
-              {isLoading ? 'Creating...' : 'Create Agent'}
+              {isLoading ? '创建中...' : '创建 Agent'}
             </button>
           )}
         </div>

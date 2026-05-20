@@ -23,10 +23,9 @@ export const DeleteAgentDialog: React.FC<DeleteAgentDialogProps> = ({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
       <div className="w-full max-w-md rounded-lg border bg-card p-6 shadow-lg">
-        <h3 className="mb-2 text-lg font-semibold">Delete Agent</h3>
+        <h3 className="mb-2 text-lg font-semibold">删除 Agent</h3>
         <p className="mb-6 text-sm text-muted-foreground">
-          Are you sure you want to delete <strong>{agentName}</strong>? This
-          action cannot be undone.
+          确定要删除 <strong>{agentName}</strong> 吗？此操作无法撤销。
         </p>
         <div className="flex justify-end gap-2">
           <button
@@ -35,7 +34,7 @@ export const DeleteAgentDialog: React.FC<DeleteAgentDialogProps> = ({
             onClick={onCancel}
             disabled={isLoading}
           >
-            Cancel
+            取消
           </button>
           <button
             type="button"
@@ -43,7 +42,7 @@ export const DeleteAgentDialog: React.FC<DeleteAgentDialogProps> = ({
             onClick={onConfirm}
             disabled={isLoading}
           >
-            {isLoading ? 'Deleting...' : 'Delete'}
+            {isLoading ? '删除中...' : '删除'}
           </button>
         </div>
       </div>

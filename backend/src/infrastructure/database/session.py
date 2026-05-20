@@ -1,23 +1,36 @@
 """基础设施层 - SQLAlchemy 数据库配置"""
 
+from pathlib import Path
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 
+# 数据库文件固定位于 backend/ 目录下，避免相对路径因工作目录不同导致多处生成 db 文件
+# 目录层级：backend/src/infrastructure/database/session.py -> parents[3] = backend/
+_DB_PATH = Path(__file__).resolve().parents[3] / "app.db"
+
 # SQLite 数据库引擎 (同步 - 用于初始化)
-SQLALCHEMY_DATABASE_URL = "sqlite:///./app.db"
-SQLALCHEMY_ASYNC_DATABASE_URL = "sqlite+aiosqlite:///./app.db"
+SQLALCHEMY_DATABASE_URL = f"sqlite:///{_DB_PATH}"
+SQLALCHEMY_ASYNC_DATABASE_URL = f"sqlite+aiosqlite:///{_DB_PATH}"
 
 # 同步引擎 (用于初始化)
-sync_engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+_SQLITE_CONNECT_ARGS = {"check_same_thread": False, "timeout": 30}
+
+sync_engine = create_engine(
+    SQLALCHEMY_DATABASE_URL,
+    connect_args=_SQLITE_CONNECT_ARGS,
+)
 
 # 异步引擎 (用于异步操作)
 async_engine = create_async_engine(
-    SQLALCHEMY_ASYNC_DATABASE_URL, connect_args={"check_same_thread": False}
+    SQLALCHEMY_ASYNC_DATABASE_URL,
+    connect_args=_SQLITE_CONNECT_ARGS,
 )
 
 # Session 工厂 (同步)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=sync_engine)
+SessionLocal = sessionmaker(
+    autocommit=False, autoflush=False, bind=sync_engine)
 AsyncSessionLocal = sessionmaker(
     bind=async_engine,
     class_=AsyncSession,
@@ -69,6 +82,7 @@ def init_db():
         AgentModel,
         SessionModel,
         SessionMessageModel,
+        SkillModel,
     )
 
     Base.metadata.create_all(bind=sync_engine)
@@ -78,6 +92,11 @@ def init_db():
         table="sse_events",
         column="task_seq",
         column_def="INTEGER NOT NULL DEFAULT 0",
+    )
+    _ensure_column(
+        table="skills",
+        column="file_path",
+        column_def="VARCHAR(500) DEFAULT ''",
     )
 
 
@@ -92,5 +111,6 @@ def _ensure_column(table: str, column: str, column_def: str) -> None:
             # 表不存在（理论上 create_all 已建好；这里防御性退出）
             return
         if column not in existing_cols:
-            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {column_def}"))
+            conn.execute(
+                text(f"ALTER TABLE {table} ADD COLUMN {column} {column_def}"))
             conn.commit()

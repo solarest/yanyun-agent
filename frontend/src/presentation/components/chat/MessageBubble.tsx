@@ -7,7 +7,8 @@ import remarkGfm from 'remark-gfm';
 import type { SessionMessage } from '@domain/entities/session';
 import { ClarifyCard } from './ClarifyCard';
 import { MultiClarifyCard, parseAllClarifyPrompts } from './MultiClarifyCard';
-import { ToolCallCard } from './ToolCallCard';
+import { ToolCallGroup } from './ToolCallGroup';
+import { ThinkingBlock } from './ThinkingBlock';
 
 interface MessageBubbleProps {
   message: SessionMessage;
@@ -27,6 +28,8 @@ interface ToolTimelineItem {
   name: string;
   status: string;
   result?: string;
+  input?: Record<string, unknown>;
+  args?: Record<string, unknown>;
 }
 
 const buildToolTimeline = (
@@ -58,6 +61,8 @@ const buildToolTimeline = (
       name: call.name,
       status: result?.status || 'running',
       result: result?.result,
+      input: call.input,
+      args: call.args,
     };
   });
 
@@ -80,9 +85,13 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   onClarifyAnswer,
 }) => {
   const [clarifySubmitted, setClarifySubmitted] = useState(false);
+  const [isSubAgentExpanded, setIsSubAgentExpanded] = useState(false);
   const isUser = message.role === 'user';
   const isError = message.status === 'error';
   const isStreaming = message.status === 'streaming';
+  const hasThinking = message.has_thinking && message.thinking_content;
+  const isThinking = isStreaming && hasThinking;
+  const isSubAgent = Boolean(message.meta?.isSubAgent);
   const visibleToolCalls = message.tool_calls.filter((tc) => !isSpecialTool(tc.name));
   const visibleToolResults = message.tool_results.filter(
     (result) => !isSpecialTool(result.tool_name),
@@ -99,9 +108,13 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   const toolTimeline = buildToolTimeline(visibleToolCalls, visibleToolResults);
   const hasVisibleTools = toolTimeline.length > 0;
   const displayContent = content;
-  const subAgentLabel = message.meta?.isSubAgent
-    ? `Plan ${message.meta.stepId || '?'}`
+  const subAgentLabel = isSubAgent
+    ? message.meta?.stepId
+      ? `Plan ${message.meta.stepId}`
+      : 'Sub-agent'
     : null;
+  const showSubAgentBody = !isSubAgent || isSubAgentExpanded;
+  const subAgentStatusLabel = isStreaming ? '运行中' : isError ? '失败' : '完成';
 
   // 多个 clarify 问题：使用 MultiClarifyCard
   if (!isUser && hasMultipleClarify && !content.trim() && !hasVisibleTools && !clarifySubmitted) {
@@ -150,28 +163,51 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
         }`}
       >
         {!isUser && subAgentLabel && (
-          <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-            {subAgentLabel}
-            {message.meta?.title ? ` · ${message.meta.title}` : ' · Sub-agent'}
-          </div>
+          <button
+            type="button"
+            onClick={() => setIsSubAgentExpanded((prev) => !prev)}
+            className="mb-2 flex w-full items-center gap-2 text-left text-[11px] font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:text-foreground"
+            aria-expanded={isSubAgentExpanded}
+          >
+            <span className="min-w-0 flex-1 truncate">
+              {subAgentLabel}
+              {message.meta?.title ? ` · ${message.meta.title}` : ' · Sub-agent'}
+            </span>
+            <span className="shrink-0 normal-case tracking-normal">
+              {subAgentStatusLabel}
+            </span>
+            <svg
+              className={`h-4 w-4 shrink-0 transition-transform duration-200 ${
+                isSubAgentExpanded ? 'rotate-180' : ''
+              }`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
         )}
 
         {/* 工具调用摘要 */}
-        {!isUser && hasVisibleTools && (
-          <div className="mb-2 space-y-2 border-b border-border/50 pb-2">
-            {toolTimeline.map((item) => (
-              <ToolCallCard
-                key={item.key}
-                name={item.name}
-                status={item.status}
-                result={item.result}
-                isStreaming={isStreaming}
-              />
-            ))}
+        {!isUser && showSubAgentBody && hasVisibleTools && (
+          <div className="mb-2">
+            <ToolCallGroup
+              items={toolTimeline}
+              isStreaming={isStreaming}
+            />
           </div>
         )}
 
-        {!isUser && clarifyPrompt && !clarifySubmitted && (
+        {/* 深度思考内容 */}
+        {!isUser && showSubAgentBody && hasThinking && (
+          <ThinkingBlock
+            content={message.thinking_content || ''}
+            isStreaming={Boolean(isThinking)}
+          />
+        )}
+
+        {!isUser && showSubAgentBody && clarifyPrompt && !clarifySubmitted && (
           <div className={hasVisibleTools ? 'mt-2' : ''}>
             <ClarifyCard
               prompt={clarifyPrompt}
@@ -186,7 +222,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
         )}
 
         {/* 消息内容 */}
-        {(displayContent.trim() || isStreaming || !clarifyPrompt) && (
+        {showSubAgentBody && (displayContent.trim() || isStreaming || !clarifyPrompt) && (
           <div className="markdown-content text-sm leading-relaxed">
             {displayContent ? (
               <ReactMarkdown remarkPlugins={[remarkGfm]}>
@@ -204,7 +240,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
         )}
 
         {/* 错误信息 */}
-        {isError && message.error && (
+        {showSubAgentBody && isError && message.error && (
           <div className="mt-2 border-t border-destructive/30 pt-2 text-xs text-destructive">
             {message.error}
           </div>

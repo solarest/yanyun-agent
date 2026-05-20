@@ -12,6 +12,7 @@ interface ToolsStepProps {
 
 const CATEGORY_LABELS: Record<string, string> = {
   web_search: '网络搜索',
+  web_fetch: '网页获取',
   file: '文件操作',
   clarify: '澄清提问',
   plan: '任务规划',

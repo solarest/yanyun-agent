@@ -43,6 +43,27 @@ class RecordingEmitter:
             {"turn": turn, "text": text, "delta": True},
         )
 
+    async def emit_thinking_chunk(self, task_id: str, turn: int, text: str) -> None:
+        await self.emit(
+            task_id,
+            "thinking:chunk",
+            {"turn": turn, "text": text, "delta": True},
+        )
+
+    async def emit_safe(self, task_id: str, event_type: str, payload: dict) -> None:
+        """安全发射事件（测试实现）"""
+        await self.emit(task_id, event_type, payload)
+
+    async def emit_phase_changed_safe(
+        self,
+        task_id: str,
+        new_phase: str,
+        previous_phase: str,
+        turn: int,
+    ) -> None:
+        """安全发射阶段变更事件（测试实现）"""
+        await self.emit_phase_changed(task_id, new_phase, previous_phase, turn)
+
 
 class FakeLLM:
     async def astream(self, messages, **kwargs):
@@ -130,7 +151,10 @@ async def test_llm_call_node_emits_phase_chunks_and_completion() -> None:
     ]
     assert isinstance(llm.messages[0], SystemMessage)
     assert result["messages"][0].content == "Hello world"
-    assert result["phase"] == "thinking"
+    # 无 tool_calls 时,标记为 complete
+    assert result["phase"] == "complete"
+    assert result["should_end"] is True
+    assert result["is_complete"] is True
     assert result["current_turn"] == 1
     assert result["last_executed_tool_call_ids"] == []
 

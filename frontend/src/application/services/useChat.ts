@@ -31,6 +31,7 @@ export interface TaskProgress {
 export interface ChatState {
   isSending: boolean;
   isStreaming: boolean;
+  isReplaying: boolean;
   streamingContent: string;
   currentPhase: AgentPhase;
   currentTaskId: string | null;
@@ -55,6 +56,7 @@ interface UseChatOptions {
 const INITIAL_STATE: ChatState = {
   isSending: false,
   isStreaming: false,
+  isReplaying: false,
   streamingContent: '',
   currentPhase: 'idle',
   currentTaskId: null,
@@ -216,6 +218,7 @@ export const useChat = ({
 
   const streamRef = useRef<AgentEventStream | null>(null);
   const subStreamsRef = useRef<Map<string, AgentEventStream>>(new Map());
+  const subAgentMessagesRef = useRef<Set<string>>(new Set());
   const mainMessageIdRef = useRef<string | null>(null);
 
   // —— sessionStorage 持久化辅助函数 ——
@@ -260,6 +263,7 @@ export const useChat = ({
   const disconnectSubStreams = useCallback(() => {
     subStreamsRef.current.forEach((stream) => stream.disconnect());
     subStreamsRef.current.clear();
+    subAgentMessagesRef.current.clear();
   }, []);
 
   const disconnectStream = useCallback(() => {
@@ -279,18 +283,34 @@ export const useChat = ({
     messageId: string,
     onChunk?: (chunk: string) => void,
   ) => {
+    // 处理思考内容流式输出
+    stream.on('thinking:chunk', (data) => {
+      const chunk = data.text || '';
+      if (!chunk) return;
+      const targetMessageId = data.sub_task_id || messageId;
+      updateMessage(targetMessageId, (msg) => ({
+        ...msg,
+        thinking_content: (msg.thinking_content || '') + chunk,
+        has_thinking: true,
+      }));
+    });
+
     stream.on('llm:chunk', (data) => {
       const chunk = data.text || '';
       if (!chunk) return;
-      onChunk?.(chunk);
-      updateMessage(messageId, (msg) => ({
+      const targetMessageId = data.sub_task_id || messageId;
+      if (!data.sub_task_id) {
+        onChunk?.(chunk);
+      }
+      updateMessage(targetMessageId, (msg) => ({
         ...msg,
         content: msg.content + chunk,
       }));
     });
 
     stream.on('tool:call', (data) => {
-      updateMessage(messageId, (msg) => ({
+      const targetMessageId = data.sub_task_id || messageId;
+      updateMessage(targetMessageId, (msg) => ({
         ...msg,
         tool_calls: [
           ...msg.tool_calls,
@@ -304,7 +324,8 @@ export const useChat = ({
     });
 
     stream.on('tool:result', (data) => {
-      updateMessage(messageId, (msg) => ({
+      const targetMessageId = data.sub_task_id || messageId;
+      updateMessage(targetMessageId, (msg) => ({
         ...msg,
         tool_results: [
           ...msg.tool_results,
@@ -317,6 +338,16 @@ export const useChat = ({
         ],
       }));
     });
+
+    // 处理 LLM 完成事件，保存完整思考内容
+    stream.on('llm:complete', (data) => {
+      const targetMessageId = data.sub_task_id || messageId;
+      updateMessage(targetMessageId, (msg) => ({
+        ...msg,
+        thinking_content: data.thinkingText || msg.thinking_content,
+        has_thinking: data.hasThinking || !!data.thinkingText,
+      }));
+    });
   }, [updateMessage]);
 
   const connectSubAgentStream = useCallback((
@@ -324,7 +355,7 @@ export const useChat = ({
     stepId?: number,
     description?: string,
   ) => {
-    if (!sessionId || subStreamsRef.current.has(subTaskId)) return;
+    if (!sessionId || subAgentMessagesRef.current.has(subTaskId)) return;
 
     const message: SessionMessage = {
       id: subTaskId,
@@ -345,12 +376,8 @@ export const useChat = ({
       },
     };
     onUpsertMessage?.(message);
-
-    const stream = new AgentEventStream(window.location.origin, subTaskId);
-    subStreamsRef.current.set(subTaskId, stream);
-    bindMessageStream(stream, subTaskId);
-    stream.connect();
-  }, [bindMessageStream, onUpsertMessage, sessionId]);
+    subAgentMessagesRef.current.add(subTaskId);
+  }, [onUpsertMessage, sessionId]);
 
   const finalizeSubAgentMessage = useCallback((
     subTaskId: string,
@@ -369,31 +396,64 @@ export const useChat = ({
       subStream.disconnect();
       subStreamsRef.current.delete(subTaskId);
     }
+    subAgentMessagesRef.current.delete(subTaskId);
   }, [updateMessage]);
 
-  // —— 页面刷新后恢复活动任务流 ——
-  const restoreActiveStream = useCallback(() => {
-    const savedTaskId = sessionStorage.getItem('activeTaskId');
-    const savedSessionId = sessionStorage.getItem('activeSessionId');
-    const timestamp = sessionStorage.getItem('taskStateTimestamp');
+  // —— 页面刷新后恢复活动任务流 / 手动重放 ——
+  const restoreActiveStream = useCallback((forceReplay = false, taskId?: string) => {
+    console.log('[useChat] restoreActiveStream called:', {
+      forceReplay,
+      taskId,
+      stateCurrentTaskId: state.currentTaskId,
+      sessionId,
+    });
+    
+    const savedTaskId = forceReplay 
+      ? (taskId || state.currentTaskId) 
+      : sessionStorage.getItem('activeTaskId');
+    const savedSessionId = forceReplay ? sessionId : sessionStorage.getItem('activeSessionId');
+    const timestamp = forceReplay ? Date.now().toString() : sessionStorage.getItem('taskStateTimestamp');
 
-    if (!savedTaskId || !savedSessionId) return;
+    console.log('[useChat] Restore/replay details:', {
+      savedTaskId,
+      savedSessionId,
+      timestamp,
+    });
 
-    // 检查是否超过5分钟(避免恢复过期的任务)
-    if (Date.now() - parseInt(timestamp || '0') > 5 * 60 * 1000) {
+    if (!savedTaskId || !savedSessionId) {
+      console.warn('[useChat] No active task to replay', {
+        savedTaskId,
+        savedSessionId,
+      });
+      return;
+    }
+
+    // 非强制重放时，检查是否超过5分钟(避免恢复过期的任务)
+    if (!forceReplay && Date.now() - parseInt(timestamp || '0') > 5 * 60 * 1000) {
+      console.warn('[useChat] Task state expired');
       clearTaskState();
       return;
     }
 
-    // 如果当前已有连接,不重复恢复
-    if (streamRef.current) return;
+    // 如果已有连接且不是强制重放，不重复恢复
+    if (streamRef.current && !forceReplay) {
+      console.log('[useChat] Stream already connected, skipping restore');
+      return;
+    }
 
-    console.log('[useChat] Restoring active stream for task:', savedTaskId);
+    console.log('[useChat] Restoring/replaying stream for task:', savedTaskId);
+
+    // 断开之前的连接
+    if (streamRef.current) {
+      streamRef.current.disconnect();
+      streamRef.current = null;
+    }
 
     // 设置状态为流式中
     setState((prev) => ({
       ...prev,
       isStreaming: true,
+      isReplaying: true,
       currentTaskId: savedTaskId,
       currentPhase: 'thinking',
     }));
@@ -407,15 +467,31 @@ export const useChat = ({
       content: '',
       tool_calls: [],
       tool_results: [],
+      thinking_content: '',
+      has_thinking: false,
       status: 'streaming',
       error: null,
       cost: {},
       created_at: new Date().toISOString(),
     };
-    onAppendMessage?.(placeholderMsg);
+    
+    if (forceReplay) {
+      // 手动重放：将最后一条 assistant 消息替换为占位消息（包括 ID），
+      // 确保后续 updateMessageById 能通过 placeholderMsg.id 找到目标
+      onUpdateLastAssistant?.((msg) => ({
+        ...placeholderMsg,
+        session_id: msg.session_id, // 保留原始 session 信息
+      }));
+    } else {
+      // 页面恢复：追加新消息
+      onAppendMessage?.(placeholderMsg);
+    }
 
-    // 连接SSE(后端会自动回放所有事件)
+    // 连接 SSE(后端会自动回放所有事件)
     const stream = new AgentEventStream(window.location.origin, savedTaskId);
+    if (forceReplay) {
+      stream.enableReplayMode();
+    }
     streamRef.current = stream;
     mainMessageIdRef.current = placeholderMsg.id;
 
@@ -429,6 +505,7 @@ export const useChat = ({
 
     // —— 阶段变化 ——
     stream.on('phase:changed', (data) => {
+      if (data.sub_task_id) return;
       setState((prev) => ({
         ...prev,
         currentPhase: (data.phase as AgentPhase) || prev.currentPhase,
@@ -616,25 +693,37 @@ export const useChat = ({
     });
 
     // —— 任务完成 ——
-    stream.on('task:completed', () => {
+    stream.on('task:completed', (data) => {
+      if (data.sub_task_id) {
+        finalizeSubAgentMessage(data.sub_task_id, 'completed', data.result, null);
+        return;
+      }
       setState((prev) => ({
         ...prev,
         isStreaming: false,
+        isReplaying: false,
         currentPhase: 'complete',
         currentTaskId: null,
         streamingContent: '',
       }));
       mainMessageIdRef.current = null;
       disconnectAllStreams();
-      clearTaskState();
+      if (!forceReplay) {
+        clearTaskState();
+      }
     });
 
     // —— 任务取消 ——
-    stream.on('task:cancelled', () => {
+    stream.on('task:cancelled', (data) => {
+      if (data.sub_task_id) {
+        finalizeSubAgentMessage(data.sub_task_id, 'error', null, '任务已取消');
+        return;
+      }
       const errorMsg = '任务已取消';
       setState((prev) => ({
         ...prev,
         isStreaming: false,
+        isReplaying: false,
         currentPhase: 'cancelled',
         currentTaskId: null,
       }));
@@ -645,15 +734,22 @@ export const useChat = ({
       }));
       mainMessageIdRef.current = null;
       disconnectAllStreams();
-      clearTaskState();
+      if (!forceReplay) {
+        clearTaskState();
+      }
     });
 
     // —— 任务失败 ——
     stream.on('task:failed', (data) => {
+      if (data.sub_task_id) {
+        finalizeSubAgentMessage(data.sub_task_id, 'error', null, data.error);
+        return;
+      }
       const errorMsg = data.error || '任务执行失败';
       setState((prev) => ({
         ...prev,
         isStreaming: false,
+        isReplaying: false,
         currentPhase: 'failed',
         error: errorMsg,
         currentTaskId: null,
@@ -665,14 +761,18 @@ export const useChat = ({
       }));
       mainMessageIdRef.current = null;
       disconnectAllStreams();
-      clearTaskState();
+      if (!forceReplay) {
+        clearTaskState();
+      }
     });
 
     stream.connect();
   }, [
     sessionId,
+    state.currentTaskId,
     onAppendMessage,
     onMessageSaved,
+    onUpdateLastAssistant,
     bindMessageStream,
     connectSubAgentStream,
     disconnectAllStreams,
@@ -755,6 +855,7 @@ export const useChat = ({
 
         // —— 阶段变化 —— 后端字段为 `phase`（非 new_phase）
         stream.on('phase:changed', (data) => {
+          if (data.sub_task_id) return;
           setState((prev) => ({
             ...prev,
             currentPhase: (data.phase as AgentPhase) || prev.currentPhase,
@@ -944,7 +1045,11 @@ export const useChat = ({
         });
 
         // —— 任务完成 ——
-        stream.on('task:completed', () => {
+        stream.on('task:completed', (data) => {
+          if (data.sub_task_id) {
+            finalizeSubAgentMessage(data.sub_task_id, 'completed', data.result, null);
+            return;
+          }
           setState((prev) => ({
             ...prev,
             isStreaming: false,
@@ -957,7 +1062,11 @@ export const useChat = ({
         });
 
         // —— 任务取消 ——
-        stream.on('task:cancelled', () => {
+        stream.on('task:cancelled', (data) => {
+          if (data.sub_task_id) {
+            finalizeSubAgentMessage(data.sub_task_id, 'error', null, '任务已取消');
+            return;
+          }
           const errorMsg = '任务已取消';
           setState((prev) => ({
             ...prev,
@@ -977,6 +1086,10 @@ export const useChat = ({
 
         // —— 任务失败 ——
         stream.on('task:failed', (data) => {
+          if (data.sub_task_id) {
+            finalizeSubAgentMessage(data.sub_task_id, 'error', null, data.error);
+            return;
+          }
           const errorMsg = data.error || '任务执行失败';
           setState((prev) => ({
             ...prev,
@@ -1055,5 +1168,6 @@ export const useChat = ({
     ...state,
     sendMessage,
     cancelExecution,
+    replayStream: restoreActiveStream,
   };
 };

@@ -24,6 +24,7 @@ from src.presentation.dependencies import (
     get_agent_repository,
     get_session_message_repository,
     get_session_repository,
+    get_llm_provider,
 )
 
 router = APIRouter(prefix="/api/agents/{agent_id}/sessions", tags=["sessions"])
@@ -69,7 +70,8 @@ async def create_session(
     dto: CreateSessionDTO,
     agent_repo: IAgentRepository = Depends(get_agent_repository),
     session_repo: ISessionRepository = Depends(get_session_repository),
-    message_repo: ISessionMessageRepository = Depends(get_session_message_repository),
+    message_repo: ISessionMessageRepository = Depends(
+        get_session_message_repository),
 ):
     # 验证 Agent 存在
     agent = await agent_repo.get_by_id(agent_id)
@@ -96,7 +98,8 @@ async def list_sessions(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     session_repo: ISessionRepository = Depends(get_session_repository),
-    message_repo: ISessionMessageRepository = Depends(get_session_message_repository),
+    message_repo: ISessionMessageRepository = Depends(
+        get_session_message_repository),
 ):
     use_case = SessionManagementUseCase(session_repo, message_repo)
     offset = (page - 1) * page_size
@@ -116,7 +119,8 @@ async def get_session(
     agent_id: str,
     session_id: str,
     session_repo: ISessionRepository = Depends(get_session_repository),
-    message_repo: ISessionMessageRepository = Depends(get_session_message_repository),
+    message_repo: ISessionMessageRepository = Depends(
+        get_session_message_repository),
 ):
     session = await session_repo.get_by_id(session_id)
     if not session or session.agent_id != agent_id:
@@ -142,7 +146,8 @@ async def update_session(
     session_id: str,
     dto: UpdateSessionDTO,
     session_repo: ISessionRepository = Depends(get_session_repository),
-    message_repo: ISessionMessageRepository = Depends(get_session_message_repository),
+    message_repo: ISessionMessageRepository = Depends(
+        get_session_message_repository),
 ):
     session = await session_repo.get_by_id(session_id)
     if not session or session.agent_id != agent_id:
@@ -167,7 +172,8 @@ async def delete_session(
     agent_id: str,
     session_id: str,
     session_repo: ISessionRepository = Depends(get_session_repository),
-    message_repo: ISessionMessageRepository = Depends(get_session_message_repository),
+    message_repo: ISessionMessageRepository = Depends(
+        get_session_message_repository),
 ):
     session = await session_repo.get_by_id(session_id)
     if not session or session.agent_id != agent_id:
@@ -193,7 +199,8 @@ async def send_message(
     request: Request,
     agent_repo: IAgentRepository = Depends(get_agent_repository),
     session_repo: ISessionRepository = Depends(get_session_repository),
-    message_repo: ISessionMessageRepository = Depends(get_session_message_repository),
+    message_repo: ISessionMessageRepository = Depends(
+        get_session_message_repository),
 ):
     """发送消息并触发 Agent Loop 执行。
 
@@ -229,15 +236,18 @@ async def send_message(
     from src.infrastructure.repositories.sqlite_session_message_repo import (
         SQLiteSessionMessageRepository,
     )
+    from src.infrastructure.repositories.sqlite_skill_repo import SQLiteSkillRepository
 
     bg_db = SAAsyncSession(async_engine)
     bg_task_repo = SQLiteTaskRepository(bg_db)
     bg_agent_repo = SQLiteAgentRepository(bg_db)
     bg_session_repo = SQLiteSessionRepository(bg_db)
     bg_message_repo = SQLiteSessionMessageRepository(bg_db)
+    bg_skill_repo = SQLiteSkillRepository(bg_db)
     # 使用全局共享的 event_service（SSE 订阅需要同一实例）
     bg_event_emitter = request.app.state.event_service
     bg_tool_registry = create_tool_registry()
+    bg_llm_provider = get_llm_provider()
 
     use_case = SendMessageUseCase(
         agent_repo=bg_agent_repo,
@@ -246,6 +256,8 @@ async def send_message(
         task_repo=bg_task_repo,
         event_emitter=bg_event_emitter,
         tool_registry=bg_tool_registry,
+        skill_repo=bg_skill_repo,
+        llm_provider=bg_llm_provider,
         running_tasks=request.app.state.running_tasks,
     )
 
@@ -256,6 +268,7 @@ async def send_message(
         model=dto.model,
         max_turns=dto.max_turns or 100,
         workspace=dto.workspace or "/tmp/agent-workspace",
+        skill_ids=dto.skill_ids,
     )
 
     # 将 asyncio.Task 存储到 app.state.running_tasks 以支持 cancel
@@ -264,7 +277,8 @@ async def send_message(
     if asyncio_task is not None:
         running_tasks: dict = request.app.state.running_tasks
         running_tasks[task_id] = asyncio_task
-        asyncio_task.add_done_callback(lambda _: running_tasks.pop(task_id, None))
+        asyncio_task.add_done_callback(
+            lambda _: running_tasks.pop(task_id, None))
 
     return SendMessageResponseDTO(
         user_message=_to_message_response(result["user_message"]),

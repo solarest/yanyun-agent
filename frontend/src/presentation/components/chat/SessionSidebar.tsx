@@ -30,7 +30,7 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
           onClick={onNewSession}
           className="btn btn-primary w-full text-sm"
         >
-          + New Chat
+          + 新对话
         </button>
       </div>
 
@@ -38,13 +38,13 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
       <div className="flex-1 overflow-y-auto">
         {isLoading && sessions.length === 0 && (
           <div className="p-4 text-center text-sm text-muted-foreground">
-            Loading...
+            加载中...
           </div>
         )}
 
         {!isLoading && sessions.length === 0 && (
           <div className="p-4 text-center text-sm text-muted-foreground">
-            No conversations yet
+            暂无对话
           </div>
         )}
 
@@ -57,7 +57,7 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
             onClick={() => onSelectSession(session.id)}
           >
             <div className="truncate text-sm font-medium">
-              {session.title || 'Untitled'}
+              {session.title || '未命名'}
             </div>
             {session.last_message_preview && (
               <div className="mt-0.5 truncate text-xs text-muted-foreground">
@@ -76,7 +76,7 @@ export const SessionSidebar: React.FC<SessionSidebarProps> = ({
                   onDeleteSession(session.id);
                 }}
               >
-                Delete
+                删除
               </button>
             </div>
           </div>

@@ -1,4 +1,8 @@
-"""领域层 - PromptTemplate 实体"""
+"""领域层 - PromptTemplate 值对象
+
+表示 Prompt 模板的静态配置，从 Agent 实体提取。
+组装逻辑由 PromptAssembleService 负责。
+"""
 
 from __future__ import annotations
 
@@ -12,7 +16,7 @@ if TYPE_CHECKING:
 
 @dataclass
 class PromptTemplate:
-    """Prompt 模板领域实体
+    """Prompt 模板值对象
 
     定义 Prompt 的静态分层内容，字段直接对应 Agent 的 OpenClaw 7 文件结构。
     工具清单（Layer 5）、技能指令（Layer 8）等动态内容由调用方在组装时提供。
@@ -97,69 +101,3 @@ class PromptTemplate:
             tools_md=agent.tools_md,
             description=agent.description,
         )
-
-    # ==================== 业务规则 ====================
-
-    def get_static_prefix(self) -> str:
-        """组装静态前缀层内容（Layer 1-3）
-
-        组装顺序：BOOTSTRAP → IDENTITY → AGENTS
-        与 Agent.build_full_system_prompt() 的前半段顺序对齐。
-
-        Returns:
-            拼接后的静态前缀字符串
-        """
-        sections = [
-            ("Bootstrap", self.bootstrap_md),
-            ("Identity", self.identity_md),
-            ("Agents", self.agents_md),
-        ]
-
-        parts = []
-        for title, content in sections:
-            if content:
-                parts.append(f"# {title}\n{content}")
-
-        return "\n\n".join(parts)
-
-    def get_static_suffix(self) -> str:
-        """组装静态后缀层内容（Layer 10-11）
-
-        组装顺序：SOUL → USER → MEMORY
-        与 Agent.build_full_system_prompt() 的后半段顺序对齐。
-
-        Returns:
-            拼接后的静态后缀字符串
-        """
-        sections = [
-            ("Soul", self.soul_md),
-            ("User", self.user_md),
-            ("Memory", self.memory_md),
-        ]
-
-        parts = []
-        for title, content in sections:
-            if content:
-                parts.append(f"# {title}\n{content}")
-
-        return "\n\n".join(parts)
-
-    def estimate_static_tokens(self) -> int:
-        """预估静态部分（前缀 + 后缀）的 Token 数量
-
-        不含动态内容（Layer 4-9）和对话历史。
-        """
-        text = self.get_static_prefix() + self.get_static_suffix()
-        return _count_tokens(text)
-
-
-def _count_tokens(text: str) -> int:
-    """简单 Token 计数
-
-    估算规则：
-    - 中文字符：1.5 tokens/字符
-    - 其他字符：0.25 tokens/字符
-    """
-    chinese_chars = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
-    other_chars = len(text) - chinese_chars
-    return int(chinese_chars * 1.5 + other_chars * 0.25)

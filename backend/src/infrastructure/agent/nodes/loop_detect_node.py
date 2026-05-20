@@ -13,24 +13,33 @@ LangGraph Node: loop_detect_node
 import hashlib
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from langchain_core.messages import SystemMessage
 from langgraph.types import RunnableConfig
 
 from src.domain.entities.agent_state import AgentState
-from src.infrastructure.agent.nodes.observe import (
-    emit_phase_safe,
-    emit_safe,
-    exhausted_turn_budget,
-    extract_final_result,
-    get_event_emitter,
-)
+from src.infrastructure.agent.nodes.base_node import BaseNode, NodeContext
 
 logger = logging.getLogger(__name__)
 
 # 全局纠正预算:空响应/循环/卡住计数累计达到此阈值即终止
 GLOBAL_CORRECTION_BUDGET = 3
+
+
+# === 辅助函数 ===
+
+
+def _get_event_emitter(config: RunnableConfig) -> Any:
+    """从配置中获取事件发射器"""
+    return (config.get("configurable") or {}).get("event_emitter") or (
+        config.get("configurable") or {}
+    ).get("event_service")
+
+
+def _exhausted_turn_budget(state: AgentState) -> bool:
+    """检查是否已耗尽 turn 预算"""
+    return state.get("current_turn", 0) >= state.get("max_turns", 100)
 
 
 # === 辅助函数 ===
@@ -74,7 +83,7 @@ async def _detect_invalid_tool_calls(state: AgentState, config: RunnableConfig) 
     # 检测到无效工具调用
     task_id = state.get("task_id", "")
     current_turn = state.get("current_turn", 0)
-    event_emitter = get_event_emitter(config)
+    event_emitter = _get_event_emitter(config)
     previous_phase = state.get("phase", "thinking")
     next_count = state.get("loop_detection_count", 0) + 1
 
@@ -93,8 +102,7 @@ async def _detect_invalid_tool_calls(state: AgentState, config: RunnableConfig) 
         task_id, current_turn, next_count, action, len(invalid_calls)
     )
 
-    await emit_safe(
-        event_emitter,
+    await event_emitter.emit_safe(
         task_id,
         "loop:detected",
         {
@@ -104,7 +112,9 @@ async def _detect_invalid_tool_calls(state: AgentState, config: RunnableConfig) 
             "invalidCount": len(invalid_calls),
         },
     )
-    await emit_phase_safe(event_emitter, task_id, "loop_correcting", previous_phase, current_turn)
+    await event_emitter.emit_phase_changed_safe(
+        task_id, "loop_correcting", previous_phase, current_turn
+    )
 
     base_update = {
         "loop_detected": True,
@@ -134,7 +144,7 @@ async def _detect_invalid_tool_calls(state: AgentState, config: RunnableConfig) 
         base_update["should_end"] = True
         return base_update
 
-    if exhausted_turn_budget(state):
+    if _exhausted_turn_budget(state):
         max_turns = state.get("max_turns", 100)
         logger.error(
             "[NODE:loop_detect] BUDGET_EXHAUSTED | task_id=%s | turn=%d/%d | "
@@ -286,7 +296,7 @@ async def _detect_pattern_loop(state: AgentState, config: RunnableConfig) -> dic
         return {"loop_detected": False, "loop_type": None, "loop_detection_count": 0}
 
     # === Loop 检测到:内部处理反馈与升级策略 ===
-    event_emitter = get_event_emitter(config)
+    event_emitter = _get_event_emitter(config)
     current_turn = state.get("current_turn", 0)
     previous_phase = state.get("phase", "thinking")
     next_count = state.get("loop_detection_count", 0) + 1
@@ -306,8 +316,7 @@ async def _detect_pattern_loop(state: AgentState, config: RunnableConfig) -> dic
         state.get("task_id", ""), current_turn, loop_type, next_count, action
     )
 
-    await emit_safe(
-        event_emitter,
+    await event_emitter.emit_safe(
         state["task_id"],
         "loop:detected",
         {
@@ -316,7 +325,9 @@ async def _detect_pattern_loop(state: AgentState, config: RunnableConfig) -> dic
             "action": action,
         },
     )
-    await emit_phase_safe(event_emitter, state["task_id"], "loop_correcting", previous_phase, current_turn)
+    await event_emitter.emit_phase_changed_safe(
+        state["task_id"], "loop_correcting", previous_phase, current_turn
+    )
 
     base_update = {
         "loop_detected": True,
@@ -345,7 +356,7 @@ async def _detect_pattern_loop(state: AgentState, config: RunnableConfig) -> dic
         base_update["should_end"] = True
         return base_update
 
-    if exhausted_turn_budget(state):
+    if _exhausted_turn_budget(state):
         # 预算耗尽
         max_turns = state.get("max_turns", 100)
         logger.error(
@@ -388,26 +399,42 @@ async def _detect_pattern_loop(state: AgentState, config: RunnableConfig) -> dic
 # === 节点入口 ===
 
 
-async def loop_detect_node(state: AgentState, config: RunnableConfig) -> dict:
-    """Loop 检测节点（前置拦截）
+class LoopDetectNode(BaseNode):
+    """Loop 检测节点(前置拦截)"""
 
-    检测策略（按优先级）：
-    1. 无效工具调用检测（INVALID_TOOL_CALL）
-    2. 精确匹配检测（EXACT_TOOL_REPEAT）
-    3. A-B-A-B 交替检测（ALTERNATING_PATTERN）
+    @property
+    def node_name(self) -> str:
+        return "loop_detect"
 
-    Args:
-        state: 当前 Agent 状态
-        config: LangGraph 配置
+    @property
+    def default_phase(self) -> str | None:
+        return None  # 此节点内部自行控制 phase
 
-    Returns:
-        状态更新字典 (包含 loop_detected、反馈消息等)
-    """
-    # 步骤1: 检测无效工具调用
-    invalid_result = await _detect_invalid_tool_calls(state, config)
-    if invalid_result:
-        return invalid_result
+    async def execute(self, state: AgentState, config: RunnableConfig, context: NodeContext) -> dict:
+        """执行 Loop 检测
 
-    # 步骤2: 检测模式循环（精确匹配 + ABAB 交替）
-    pattern_result = await _detect_pattern_loop(state, config)
-    return pattern_result
+        检测策略(按优先级):
+        1. 无效工具调用检测(INVALID_TOOL_CALL)
+        2. 精确匹配检测(EXACT_TOOL_REPEAT)
+        3. A-B-A-B 交替检测(ALTERNATING_PATTERN)
+
+        Args:
+            state: 当前 Agent 状态
+            config: LangGraph 配置
+            context: 节点执行上下文
+
+        Returns:
+            状态更新字典 (包含 loop_detected、反馈消息等)
+        """
+        # 步骤1: 检测无效工具调用
+        invalid_result = await _detect_invalid_tool_calls(state, config)
+        if invalid_result:
+            return invalid_result
+
+        # 步骤2: 检测模式循环(精确匹配 + ABAB 交替)
+        pattern_result = await _detect_pattern_loop(state, config)
+        return pattern_result
+
+
+# 保持向后兼容的实例导出
+loop_detect_node = LoopDetectNode()

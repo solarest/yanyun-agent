@@ -7,15 +7,15 @@ import type { Session } from '@domain/entities/session';
 import type { AgentPhase } from '@domain/entities/task';
 
 const PHASE_LABELS: Record<string, string> = {
-  idle: 'Idle',
-  thinking: 'Thinking...',
-  tool_executing: 'Using tools...',
-  loop_correcting: 'Correcting loop...',
-  stuck_recovering: 'Recovering...',
-  context_compacting: 'Compacting...',
-  complete: 'Done',
-  failed: 'Failed',
-  cancelled: 'Cancelled',
+  idle: '空闲',
+  thinking: '思考中...',
+  tool_executing: '工具调用中...',
+  loop_correcting: '循环纠正中...',
+  stuck_recovering: '恢复中...',
+  context_compacting: '上下文压缩中...',
+  complete: '完成',
+  failed: '失败',
+  cancelled: '已取消',
 };
 
 interface ChatHeaderProps {
@@ -25,6 +25,9 @@ interface ChatHeaderProps {
   isStreaming: boolean;
   currentPhase: AgentPhase;
   onCancel: () => void;
+  onReplay: () => void;
+  isReplaying: boolean;
+  canReplay: boolean;
 }
 
 export const ChatHeader: React.FC<ChatHeaderProps> = ({
@@ -34,6 +37,9 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   isStreaming,
   currentPhase,
   onCancel,
+  onReplay,
+  isReplaying,
+  canReplay,
 }) => {
   return (
     <div className="flex items-center justify-between border-b bg-card px-4 py-3">
@@ -42,14 +48,14 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
           to="/agents"
           className="text-sm text-muted-foreground hover:text-foreground"
         >
-          &larr; Back
+          &larr; 返回
         </Link>
         <div className="h-5 w-px bg-border" />
         <div>
           <h2 className="text-sm font-semibold">{agentName}</h2>
           {session && (
             <p className="text-xs text-muted-foreground">
-              {session.title || 'Untitled'}
+              {session.title || '未命名'}
             </p>
           )}
         </div>
@@ -67,15 +73,25 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
               onClick={onCancel}
               className="btn btn-outline px-3 py-1 text-xs text-destructive hover:bg-destructive/10"
             >
-              Stop
+              停止
             </button>
           </>
+        )}
+        {canReplay && (
+          <button
+            type="button"
+            onClick={onReplay}
+            disabled={isReplaying}
+            className="btn btn-outline px-3 py-1 text-xs hover:bg-accent"
+          >
+            {isReplaying ? '重新播放中...' : '重新播放'}
+          </button>
         )}
         <Link
           to={`/agents/${agentId}/edit`}
           className="btn btn-ghost px-3 py-1 text-xs"
         >
-          Settings
+          设置
         </Link>
       </div>
     </div>

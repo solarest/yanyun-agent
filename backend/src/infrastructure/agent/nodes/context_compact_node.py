@@ -1,13 +1,13 @@
 """基础设施层 - 上下文压缩节点
 
 LangGraph Node: context_compact_node
-职责：当上下文接近 token 限制时压缩对话历史
+职责:当上下文接近 token 限制时压缩对话历史
 
-支持两种压缩策略：
-- trim（默认）：保留首条 SystemMessage + 尾部 N 条，RemoveMessage 中间部分
-- summarize：调用 LLM 对待移除消息生成摘要，注入摘要 HumanMessage + RemoveMessage 原消息
+支持两种压缩策略:
+- trim(默认):保留首条 SystemMessage + 尾部 N 条,RemoveMessage 中间部分
+- summarize:调用 LLM 对待移除消息生成摘要,注入摘要 HumanMessage + RemoveMessage 原消息
 
-使用 LangGraph 原生的 RemoveMessage 操作来正确删除中间消息，
+使用 LangGraph 原生的 RemoveMessage 操作来正确删除中间消息,
 与 add_messages reducer 兼容。
 """
 
@@ -17,6 +17,7 @@ from langchain_core.messages import HumanMessage, RemoveMessage, SystemMessage
 from langgraph.types import RunnableConfig
 
 from src.domain.entities.agent_state import AgentState
+from src.infrastructure.agent.nodes.base_node import BaseNode, NodeContext
 
 logger = logging.getLogger(__name__)
 
@@ -32,75 +33,72 @@ _SUMMARIZE_SYSTEM_PROMPT = (
 )
 
 
-async def context_compact_node(state: AgentState, config: RunnableConfig) -> dict:
-    """上下文压缩节点
+class ContextCompactNode(BaseNode):
+    """上下文压缩节点"""
 
-    策略由 state['compression_strategy'] 决定：
-    - "trim"（默认）：裁剪中间消息
-    - "summarize"：LLM 摘要 + 裁剪
+    @property
+    def node_name(self) -> str:
+        return "context_compact"
 
-    Args:
-        state: 当前 Agent 状态
-        config: LangGraph 配置
+    @property
+    def default_phase(self) -> str:
+        return "context_compacting"
 
-    Returns:
-        状态更新字典
-    """
-    event_emitter = (
-        config["configurable"].get("event_emitter")
-        or config["configurable"]["event_service"]
-    )
-    task_id = state["task_id"]
-    messages = state["messages"]
-    current_turn = state.get("current_turn", 0)
-    strategy = state.get("compression_strategy") or "trim"
-    agent_id = config.get("configurable", {}).get("agent_id", "unknown")
+    async def execute(self, state: AgentState, config: RunnableConfig, context: NodeContext) -> dict:
+        """执行上下文压缩
 
-    # Node 入口日志
-    logger.info(
-        "[NODE:context_compact] START | agent_id=%s | task_id=%s | turn=%d | "
-        "strategy=%s | messages_count=%d",
-        agent_id, task_id, current_turn, strategy, len(messages)
-    )
+        策略由 state['compression_strategy'] 决定:
+        - "trim"(默认):裁剪中间消息
+        - "summarize":LLM 摘要 + 裁剪
 
-    await event_emitter.emit_phase_changed(
-        task_id,
-        "context_compacting",
-        state.get("phase", "thinking"),
-        current_turn,
-    )
+        Args:
+            state: 当前 Agent 状态
+            config: LangGraph 配置
+            context: 节点执行上下文
 
-    keep_recent = 10
-    before_count = len(messages)
+        Returns:
+            状态更新字典
+        """
+        current_turn = context.current_turn
+        messages = state["messages"]
+        strategy = state.get("compression_strategy") or "trim"
 
-    if before_count <= keep_recent + 1:
-        # 消息不多，无需压缩
+        keep_recent = 10
+        before_count = len(messages)
+
+        if before_count <= keep_recent + 1:
+            # 消息不多,无需压缩
+            logger.info(
+                "[NODE:context_compact] SKIP_COMPACT | task_id=%s | turn=%d | "
+                "reason=messages_count_low | count=%d",
+                context.task_id, current_turn, before_count
+            )
+            return {"phase": "context_compacting", "compression_strategy": None}
+
+        # 需要删除的消息:跳过第 1 条(SystemMessage)和最后 keep_recent 条
+        to_remove = messages[1: -(keep_recent)]
+
         logger.info(
-            "[NODE:context_compact] SKIP_COMPACT | task_id=%s | turn=%d | "
-            "reason=messages_count_low | count=%d",
-            task_id, current_turn, before_count
-        )
-        return {"phase": "context_compacting", "compression_strategy": None}
-
-    # 需要删除的消息：跳过第 1 条（SystemMessage）和最后 keep_recent 条
-    to_remove = messages[1: -(keep_recent)]
-
-    logger.info(
-        "[NODE:context_compact] COMPACT_PLANNED | task_id=%s | turn=%d | "
-        "before_count=%d | to_remove_count=%d | strategy=%s",
-        task_id, current_turn, before_count, len(to_remove), strategy
-    )
-
-    if strategy == "summarize":
-        return await _summarize_and_compact(
-            state, config, event_emitter, task_id,
-            messages, to_remove, before_count, keep_recent,
+            "[NODE:context_compact] COMPACT_PLANNED | task_id=%s | turn=%d | "
+            "before_count=%d | to_remove_count=%d | strategy=%s",
+            context.task_id, current_turn, before_count, len(
+                to_remove), strategy
         )
 
-    # 默认 trim 策略
-    return await _trim_compact(
-        event_emitter, task_id, to_remove, before_count,
-    )
+        if strategy == "summarize":
+            return await _summarize_and_compact(
+                state, config, context.event_emitter, context.task_id,
+                messages, to_remove, before_count, keep_recent,
+            )
+
+        # 默认 trim 策略
+        return await _trim_compact(
+            context.event_emitter, context.task_id, to_remove, before_count,
+        )
+
+
+# 保持向后兼容的实例导出
+context_compact_node = ContextCompactNode()
 
 
 async def _trim_compact(

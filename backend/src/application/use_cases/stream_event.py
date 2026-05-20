@@ -11,6 +11,7 @@ from collections import defaultdict
 from typing import Any, AsyncContextManager, Callable, Dict, List
 
 from src.application.dtos.event_dto import SSEEventDTO
+from src.application.services.event_mapper import EventMapper
 from src.domain.repositories.event_repository import IEventRepository
 from src.domain.services import IEventEmitter
 
@@ -37,14 +38,18 @@ class StreamEventService(IEventEmitter):
         return lock
 
     async def _save_event(self, task_id: str, event: SSEEventDTO) -> None:
+        # 将 DTO 转换为领域实体后保存
+        entity = EventMapper.to_entity(event)
         async with self._event_repo_factory() as event_repo:
-            await event_repo.save(task_id, event)
+            await event_repo.save(task_id, entity)
 
     async def _save_events(self, task_id: str, events: List[SSEEventDTO]) -> None:
         if not events:
             return
+        # 将 DTO 列表转换为领域实体列表后保存
+        entities = EventMapper.to_entity_list(events)
         async with self._event_repo_factory() as event_repo:
-            await event_repo.save_batch(task_id, events)
+            await event_repo.save_batch(task_id, entities)
 
     async def _flush_chunks_locked(self, task_id: str) -> None:
         buffered = self._chunk_buffers.get(task_id, [])
@@ -116,6 +121,23 @@ class StreamEventService(IEventEmitter):
             },
         )
 
+    async def emit_thinking_chunk(
+        self,
+        task_id: str,
+        turn: int,
+        text: str,
+    ) -> None:
+        """发射深度思考流式输出片段。"""
+        await self.emit(
+            task_id,
+            "thinking:chunk",
+            {
+                "turn": turn,
+                "text": text,
+                "delta": True,
+            },
+        )
+
     async def subscribe(self, task_id: str) -> asyncio.Queue:
         """订阅任务事件流
 
@@ -154,7 +176,9 @@ class StreamEventService(IEventEmitter):
             await self._flush_chunks_locked(task_id)
             async with self._event_repo_factory() as event_repo:
                 events = await event_repo.get_by_task_id(task_id)
-        return [e.model_dump_json() for e in events]
+        # 将领域实体转换为 DTO，然后序列化
+        dtos = EventMapper.to_dto_list(events)
+        return [dto.model_dump_json() for dto in dtos]
 
     async def get_events_after(self, task_id: str, last_event_id: str) -> List[str]:
         """获取指定序列号之后的事件 (断线重连补发)
@@ -170,4 +194,6 @@ class StreamEventService(IEventEmitter):
             await self._flush_chunks_locked(task_id)
             async with self._event_repo_factory() as event_repo:
                 events = await event_repo.get_after(task_id, last_event_id)
-        return [e.model_dump_json() for e in events]
+        # 将领域实体转换为 DTO，然后序列化
+        dtos = EventMapper.to_dto_list(events)
+        return [dto.model_dump_json() for dto in dtos]

@@ -1,12 +1,12 @@
 """应用层 - Agent 工作流用例
 
 职责:
-1. 构建 Agent StateGraph(5 个核心节点)
+1. 构建 Agent StateGraph(4 个核心节点)
 2. 定义路由函数(纯判定,不修改 state)
 3. 路由极简:llm_call 只做"有无 tool_calls"的二元判断,
-   分类评估分别交给 loop_detect / stuck_detect
+   循环检测交给 loop_detect
 
-节点:llm_call / tool_execute / loop_detect / stuck_detect / context_compact
+节点:llm_call / tool_execute / loop_detect / context_compact
 """
 import logging
 
@@ -19,7 +19,6 @@ from src.infrastructure.agent.nodes.context_compact_node import (
 )
 from src.infrastructure.agent.nodes.llm_call_node import llm_call_node
 from src.infrastructure.agent.nodes.loop_detect_node import loop_detect_node
-from src.infrastructure.agent.nodes.stuck_detect_node import stuck_detect_node
 from src.infrastructure.agent.nodes.tool_execute_node import tool_execute_node
 
 logger = logging.getLogger(__name__)
@@ -47,10 +46,10 @@ def _extract_tool_calls(msg) -> list:
 def route_after_llm(state: AgentState) -> str:
     """LLM 调用后的路由决策
 
-    极简三分支:
+    简化三分支:
     1. should_end → END
     2. 有 tool_calls → loop_detect(先检测循环)
-    3. 其他 → stuck_detect(文本评估+卡住检测)
+    3. 无 tool_calls → END(认为任务已完成)
     """
     if state.get("should_end"):
         return END
@@ -63,9 +62,10 @@ def route_after_llm(state: AgentState) -> str:
     tool_calls = _extract_tool_calls(last_msg)
 
     if tool_calls:
-        return "loop_detect"  # 有 tool_calls，先检测循环
+        return "loop_detect"  # 有 tool_calls,先检测循环
 
-    return "stuck_detect"  # 纯文本进入 stuck_detect 评估
+    # 无 tool_calls,认为任务已完成,直接终止
+    return END
 
 
 def route_after_loop_detect(state: AgentState) -> str:
@@ -99,25 +99,13 @@ def route_after_tool_execute(state: AgentState) -> str:
     return "llm_call"
 
 
-def route_after_stuck_detect(state: AgentState) -> str:
-    """Stuck 检测后路由
-
-    stuck_detect_node 内部已处理反馈注入和升级策略:
-    - should_end → END(count >= 3 或预算耗尽)
-    - 其他 → llm_call(已注入反馈消息)
-    """
-    if state.get("should_end"):
-        return END
-    return "llm_call"
-
-
 # === 工作流构建器 ===
 
 
 class AgentWorkflowBuilder:
     """Agent StateGraph 构建器
 
-    5 个核心节点,4 个条件路由 + 1 个固定边
+    4 个核心节点,3 个条件路由 + 1 个固定边
     """
 
     _compiled: CompiledStateGraph | None = None
@@ -130,25 +118,22 @@ class AgentWorkflowBuilder:
 
         workflow = StateGraph(AgentState)
 
-        # === 核心节点(5 个) ===
+        # === 核心节点(4 个) ===
         workflow.add_node("llm_call", llm_call_node)
         workflow.add_node("tool_execute", tool_execute_node)
         workflow.add_node("loop_detect", loop_detect_node)  # 吸收 tool_observe
-        # 吸收 answer_observe
-        workflow.add_node("stuck_detect", stuck_detect_node)
         workflow.add_node("context_compact", context_compact_node)
 
         # === 入口 ===
         workflow.set_entry_point("llm_call")
 
-        # === LLM 后路由(三分支) ===
+        # === LLM 后路由(双分支) ===
         workflow.add_conditional_edges(
             "llm_call",
             route_after_llm,
             {
                 "loop_detect": "loop_detect",    # 有 tool_calls,先检测循环
-                "stuck_detect": "stuck_detect",   # 纯文本,检测是否卡住
-                END: END,                           # should_end=True
+                END: END,                           # should_end=True 或无 tool_calls
             },
         )
 
@@ -171,16 +156,6 @@ class AgentWorkflowBuilder:
             {
                 "llm_call": "llm_call",         # 工具执行完毕,继续循环
                 END: END,                        # awaiting_user_input
-            },
-        )
-
-        # === Stuck 检测后路由(两分支) ===
-        workflow.add_conditional_edges(
-            "stuck_detect",
-            route_after_stuck_detect,
-            {
-                "llm_call": "llm_call",
-                END: END,
             },
         )
 

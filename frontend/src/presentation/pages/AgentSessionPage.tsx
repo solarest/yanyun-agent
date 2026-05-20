@@ -16,11 +16,13 @@ import { ChatHeader } from '@presentation/components/chat/ChatHeader';
 import { MessageList } from '@presentation/components/chat/MessageList';
 import { MessageInput } from '@presentation/components/chat/MessageInput';
 import { TaskPanel } from '@presentation/components/chat';
+import { SkillSelector } from '@presentation/components/chat/SkillSelector';
 
 export const AgentSessionPage: React.FC = () => {
   const { id: agentId } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [isRestoring, setIsRestoring] = React.useState(false);
+  const [selectedSkillIds, setSelectedSkillIds] = React.useState<string[]>([]);
 
   // Agent 信息
   const { currentAgent, fetchAgent } = useAgentManagement();
@@ -45,11 +47,14 @@ export const AgentSessionPage: React.FC = () => {
   const {
     isSending,
     isStreaming,
+    isReplaying,
     currentPhase,
     currentTask,
+    currentTaskId,
     error: chatError,
     sendMessage,
     cancelExecution,
+    replayStream,
   } = useChat({
     agentId: agentId || '',
     sessionId: currentSession?.id || null,
@@ -59,6 +64,29 @@ export const AgentSessionPage: React.FC = () => {
     onUpdateLastAssistant: updateLastAssistantMessage,
     onSessionUpdated: fetchSessions, // 刷新会话列表以获取最新标题
   });
+
+  // 手动触发 SSE 重放
+  const handleReplay = useCallback(() => {
+    // 优先使用 currentTaskId，如果没有则从消息列表中获取最后一个 assistant 消息的 task_id
+    const assistantMessages = messages.filter(m => m.role === 'assistant');
+    const lastAssistantMsg = assistantMessages.pop();
+    const taskId = currentTaskId || lastAssistantMsg?.task_id;
+    
+    console.log('[AgentSessionPage] Replay debug:', {
+      currentTaskId,
+      assistantMessagesCount: assistantMessages.length,
+      lastAssistantTaskId: lastAssistantMsg?.task_id,
+      finalTaskId: taskId,
+      messagesCount: messages.length
+    });
+    
+    if (taskId) {
+      console.log('[AgentSessionPage] Replaying task:', taskId);
+      replayStream(true, taskId); // forceReplay = true, 传递 taskId
+    } else {
+      console.warn('[AgentSessionPage] No task to replay');
+    }
+  }, [currentTaskId, messages, replayStream]);
 
   // 初始化：加载 Agent 信息和会话列表
   useEffect(() => {
@@ -114,15 +142,16 @@ export const AgentSessionPage: React.FC = () => {
 
   // 发送消息（无 session 时自动创建）
   const handleSendMessage = useCallback(async (content: string) => {
+    const skillOpts = selectedSkillIds.length > 0 ? { skill_ids: selectedSkillIds } : {};
     if (!currentSession) {
       const session = await createSession();
       if (!session) return;
       // 等待 session 创建完成后发送（useChat 依赖 currentSession）
-      setTimeout(() => sendMessage(content), 50);
+      setTimeout(() => sendMessage(content, skillOpts), 50);
       return;
     }
-    sendMessage(content);
-  }, [currentSession, createSession, sendMessage]);
+    sendMessage(content, skillOpts);
+  }, [currentSession, createSession, sendMessage, selectedSkillIds]);
 
   if (!agentId) return null;
 
@@ -147,6 +176,9 @@ export const AgentSessionPage: React.FC = () => {
           isStreaming={isStreaming}
           currentPhase={currentPhase}
           onCancel={cancelExecution}
+          onReplay={handleReplay}
+          isReplaying={isReplaying}
+          canReplay={!isStreaming && messages.length > 0}
         />
 
         {/* 恢复状态提示 */}
@@ -173,14 +205,20 @@ export const AgentSessionPage: React.FC = () => {
         {/* 任务列表面板 */}
         <TaskPanel task={currentTask} />
 
-        {/* 输入框 */}
+        {/* 输入框（含左侧 "+" 技能选择按钮） */}
         <MessageInput
           onSend={handleSendMessage}
           disabled={isSending || isStreaming}
           placeholder={
             !currentSession
-              ? 'Send a message to start a new chat...'
-              : 'Type a message...'
+              ? '发送消息开始新对话...'
+              : '输入消息...'
+          }
+          leftActions={
+            <SkillSelector
+              selectedSkillIds={selectedSkillIds}
+              onSelectionChange={setSelectedSkillIds}
+            />
           }
         />
       </div>

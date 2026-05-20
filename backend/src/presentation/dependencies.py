@@ -17,7 +17,11 @@ from src.domain.repositories.task_repository import ITaskRepository
 from src.domain.repositories.agent_repository import IAgentRepository
 from src.domain.repositories.session_repository import ISessionRepository
 from src.domain.repositories.session_message_repository import ISessionMessageRepository
+from src.domain.repositories.skill_repository import ISkillRepository
+from src.domain.repositories.tool_registry import IToolRegistry
+from src.domain.interfaces.llm_provider import ILLMProvider
 from src.infrastructure.llm.config import LLMSettings
+from src.infrastructure.llm.llm_provider_impl import LLMProviderImpl
 from src.infrastructure.repositories.in_memory_repo import InMemoryRepository
 from src.infrastructure.repositories.sqlite_event_repo import SQLiteEventRepository
 from src.infrastructure.repositories.sqlite_task_repo import SQLiteTaskRepository
@@ -26,7 +30,10 @@ from src.infrastructure.repositories.sqlite_session_repo import SQLiteSessionRep
 from src.infrastructure.repositories.sqlite_session_message_repo import (
     SQLiteSessionMessageRepository,
 )
+from src.infrastructure.repositories.sqlite_skill_repo import SQLiteSkillRepository
+from src.application.services.skill_storage_service import SkillStorageService
 from src.infrastructure.tools.registry import ToolRegistry
+from src.application.use_cases.skill_upload import SkillUploadService
 
 
 # 创建 Repository 实例(单例模式)
@@ -68,8 +75,7 @@ def get_agent_repository(
     return SQLiteAgentRepository(db)
 
 
-def get_event_service(
-) -> StreamEventService:
+def get_event_service() -> StreamEventService:
     """获取事件服务实例"""
     return StreamEventService(create_event_repo_factory())
 
@@ -100,6 +106,26 @@ def get_session_message_repository(
     return SQLiteSessionMessageRepository(db)
 
 
+def get_skill_repository(
+    db: AsyncSession = Depends(get_async_db),
+) -> ISkillRepository:
+    """获取 Skill 仓储实例"""
+    return SQLiteSkillRepository(db)
+
+
+def get_skill_storage_service() -> SkillStorageService:
+    """获取 Skill 存储服务实例"""
+    return SkillStorageService()
+
+
+def get_skill_upload_service(
+    skill_repo: ISkillRepository = Depends(get_skill_repository),
+    storage_service: SkillStorageService = Depends(get_skill_storage_service),
+) -> SkillUploadService:
+    """获取 Skill 上传服务实例"""
+    return SkillUploadService(skill_repo, storage_service)
+
+
 # LLM 依赖注入
 @lru_cache()
 def get_llm_settings() -> LLMSettings:
@@ -107,10 +133,20 @@ def get_llm_settings() -> LLMSettings:
     return LLMSettings()
 
 
+def get_llm_provider() -> ILLMProvider:
+    """获取 LLM Provider 实例"""
+    return LLMProviderImpl()
+
+
 # === Tool Registry 依赖注入 ===
 
 
-def create_tool_registry() -> ToolRegistry:
+def get_tool_registry() -> IToolRegistry:
+    """获取工具注册表实例"""
+    return create_tool_registry()
+
+
+def create_tool_registry() -> IToolRegistry:
     """创建并配置工具注册表
 
     组装 ExecutionPipeline + 中间件 + 自动注册内置工具。
@@ -123,11 +159,13 @@ def create_tool_registry() -> ToolRegistry:
 
     # 导入内置工具模块（触发 @tool 装饰器注册）
     import src.infrastructure.tools.builtin.web_search  # noqa: F401
+    import src.infrastructure.tools.builtin.web_fetch  # noqa: F401
     import src.infrastructure.tools.builtin.file_ops  # noqa: F401
     import src.infrastructure.tools.builtin.clarify  # noqa: F401
     import src.infrastructure.tools.builtin.task_create  # noqa: F401
     import src.infrastructure.tools.builtin.task_update  # noqa: F401
     import src.infrastructure.tools.builtin.shell  # noqa: F401
+    import src.infrastructure.tools.builtin.session_spawn  # noqa: F401
 
     # 构建中间件管道
     pipeline = ExecutionPipeline()

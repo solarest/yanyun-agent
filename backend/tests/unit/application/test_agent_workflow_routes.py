@@ -2,7 +2,6 @@ from src.application.use_cases.agent_workflow import (
     route_after_llm,
     route_after_tool_execute,
     route_after_loop_detect,
-    route_after_stuck_detect,
 )
 
 
@@ -50,11 +49,11 @@ def make_state(**overrides):
 # === route_after_llm 测试 ===
 
 
-def test_route_after_llm_plain_text_goes_to_stuck_detect() -> None:
-    """纯文本响应路由到 stuck_detect(文本评估+卡住检测)"""
+def test_route_after_llm_plain_text_goes_to_end() -> None:
+    """纯文本响应直接终止(认为任务已完成)"""
     state = make_state(
         messages=[{"role": "assistant", "content": "Here is the answer."}])
-    assert route_after_llm(state) == "stuck_detect"
+    assert route_after_llm(state) == "__end__"
 
 
 def test_route_after_llm_tool_calls_goes_to_loop_detect() -> None:
@@ -121,13 +120,13 @@ def test_route_after_tool_execute_awaiting_user() -> None:
     assert route_after_tool_execute(state) == "__end__"
 
 
-def test_route_after_tool_execute_goes_to_loop_detect() -> None:
-    """有工具执行结果时路由到 loop_detect(循环检测前置守卫)"""
+def test_route_after_tool_execute_goes_to_llm_call() -> None:
+    """有工具执行结果时路由到 llm_call(继续循环)"""
     state = make_state(
         awaiting_user_input=False,
         last_executed_tool_call_ids=["call-1", "call-2"],
     )
-    assert route_after_tool_execute(state) == "loop_detect"
+    assert route_after_tool_execute(state) == "llm_call"
 
 
 def test_route_after_tool_execute_no_tools_goes_to_llm_call() -> None:
@@ -137,18 +136,3 @@ def test_route_after_tool_execute_no_tools_goes_to_llm_call() -> None:
         last_executed_tool_call_ids=[],
     )
     assert route_after_tool_execute(state) == "llm_call"
-
-
-# === route_after_stuck_detect 测试 ===
-
-
-def test_route_after_stuck_detect_should_end() -> None:
-    """should_end=True 时路由到 END"""
-    state = make_state(should_end=True, stuck_detection_count=3)
-    assert route_after_stuck_detect(state) == "__end__"
-
-
-def test_route_after_stuck_detect_goes_to_llm_call() -> None:
-    """未终止时路由回 llm_call(已注入反馈)"""
-    state = make_state(should_end=False, stuck_detection_count=1)
-    assert route_after_stuck_detect(state) == "llm_call"

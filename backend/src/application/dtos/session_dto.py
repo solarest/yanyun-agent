@@ -21,10 +21,15 @@ class UpdateSessionDTO(BaseModel):
 class SendMessageDTO(BaseModel):
     """发送消息请求"""
 
-    content: str = Field(..., min_length=1, max_length=50000, description="消息内容")
+    content: str = Field(..., min_length=1,
+                         max_length=50000, description="消息内容")
     model: Optional[str] = Field(default=None, description="使用的模型")
-    max_turns: Optional[int] = Field(default=100, ge=1, le=500, description="最大轮次")
-    workspace: Optional[str] = Field(default="/tmp/agent-workspace", description="工作目录")
+    max_turns: Optional[int] = Field(
+        default=100, ge=1, le=500, description="最大轮次")
+    workspace: Optional[str] = Field(
+        default="/tmp/agent-workspace", description="工作目录")
+    skill_ids: List[str] = Field(
+        default_factory=list, description="选中的 Skill ID 列表")
 
 
 class SessionResponseDTO(BaseModel):

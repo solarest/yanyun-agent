@@ -3,37 +3,38 @@
  */
 import React from 'react';
 import type {
-  PlanProgress,
-  PlanStatus,
-  PlanStepStatus,
+  TaskProgress,
+  TaskStatus,
+  TaskStepStatus,
+  TaskStepProgress,
 } from '@application/services/useChat';
 
 interface PlanStatusPanelProps {
-  plan: PlanProgress | null;
+  plan: TaskProgress | null;
 }
 
-const STATUS_LABELS: Record<PlanStatus, string> = {
-  planning: 'Planning',
-  executing: 'Running',
-  completed: 'Done',
-  failed: 'Failed',
+const STATUS_LABELS: Record<TaskStatus, string> = {
+  planning: '规划中',
+  executing: '执行中',
+  completed: '已完成',
+  failed: '失败',
 };
 
-const STEP_STATUS_LABELS: Record<PlanStepStatus, string> = {
-  pending: 'Pending',
-  running: 'Running',
-  completed: 'Done',
-  failed: 'Failed',
+const STEP_STATUS_LABELS: Record<TaskStepStatus, string> = {
+  pending: '待执行',
+  running: '执行中',
+  completed: '已完成',
+  failed: '失败',
 };
 
-const stepDotClass = (status: PlanStepStatus): string => {
+const stepDotClass = (status: TaskStepStatus): string => {
   if (status === 'completed') return 'bg-success';
   if (status === 'failed') return 'bg-destructive';
   if (status === 'running') return 'animate-pulse bg-primary';
   return 'bg-muted-foreground/40';
 };
 
-const statusBadgeClass = (status: PlanStatus): string => {
+const statusBadgeClass = (status: TaskStatus): string => {
   if (status === 'completed') return 'border-success/30 bg-success/10 text-success';
   if (status === 'failed') return 'border-destructive/30 bg-destructive/10 text-destructive';
   if (status === 'executing') return 'border-primary/20 bg-primary/10 text-primary';
@@ -65,7 +66,7 @@ export const PlanStatusPanel: React.FC<PlanStatusPanelProps> = ({ plan }) => {
         {plan.steps.length > 0 && (
           <div className="mt-3 max-h-44 overflow-y-auto pr-1">
             <div className="space-y-2">
-              {plan.steps.map((step) => (
+              {plan.steps.map((step: TaskStepProgress) => (
                 <div
                   key={step.id}
                   className="grid grid-cols-[1.5rem_minmax(0,1fr)_5rem] items-start gap-2 text-sm"
