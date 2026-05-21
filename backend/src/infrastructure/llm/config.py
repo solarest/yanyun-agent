@@ -38,6 +38,8 @@ class LLMSettings(BaseSettings):
     default_timeout: int = Field(default=60, alias="LLM_DEFAULT_TIMEOUT")
     default_max_retries: int = Field(
         default=3, alias="LLM_DEFAULT_MAX_RETRIES")
+    default_max_tokens: int = Field(
+        default=100000, alias="LLM_DEFAULT_MAX_TOKENS")
     default_enable_thinking: bool = Field(
         default=False, alias="LLM_ENABLE_THINKING")
     default_thinking_budget: int = Field(

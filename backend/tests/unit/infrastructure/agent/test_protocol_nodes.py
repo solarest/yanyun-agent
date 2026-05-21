@@ -203,6 +203,35 @@ async def test_tool_execute_node_emits_phase_call_and_result() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tool_execute_node_preserves_large_tool_output_for_llm_context() -> None:
+    emitter = RecordingEmitter()
+    large_output = "x" * 20000
+
+    class FakeToolRegistry:
+        async def execute(self, tool_name, tool_input, context):
+            return SimpleNamespace(
+                output=large_output,
+                success=True,
+                error=None,
+                metadata={},
+            )
+
+    result = await tool_execute_node(
+        make_state(
+            pending_tool_calls=[
+                {"id": "call-large", "name": "file_read", "input": {"path": "logs/tool-call.log"}},
+            ],
+        ),
+        {"configurable": {"tool_registry": FakeToolRegistry(), "event_emitter": emitter}},
+    )
+
+    tool_result = result["tool_results"]["call-large"]
+    assert tool_result["output"] == large_output
+    assert tool_result["metadata"] == {}
+    assert result["messages"][0].content == large_output
+
+
+@pytest.mark.asyncio
 async def test_tool_execute_node_marks_awaiting_user_input_for_clarify_like_tools() -> None:
     emitter = RecordingEmitter()
 

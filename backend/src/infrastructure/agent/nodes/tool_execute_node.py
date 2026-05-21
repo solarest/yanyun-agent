@@ -74,17 +74,17 @@ async def _execute_single_tool(
     try:
         result = await tool_registry.execute(tool_name, tool_input, tool_context)
         status = "success" if result.success else "error"
+        metadata = result.metadata or {}
         result_dict = {
             "tool_name": tool_name,
             "status": status,
             "output": result.output,
             "error": result.error,
-            "metadata": result.metadata,
+            "metadata": metadata,
         }
 
         # 工具调用成功日志
-        output_preview = str(result.output)[
-            :200] if result.output else "(empty)"
+        output_preview = str(result.output)[:200] if result.output else "(empty)"
         logger.info(
             "[NODE:tool_execute] TOOL_CALL_SUCCESS | task_id=%s | tool_call_id=%s | "
             "tool_name=%s | status=%s | output_preview=%s",
@@ -100,7 +100,7 @@ async def _execute_single_tool(
                 "toolName": tool_name,
                 "status": status,
                 "output": result.output,
-                "metadata": result.metadata,
+                "metadata": metadata,
             },
         )
         return tool_call_id, result_dict

@@ -16,6 +16,7 @@ def test_llm_settings_default_values():
         assert settings.default_temperature == 0.7
         assert settings.default_timeout == 60
         assert settings.default_max_retries == 3
+        assert settings.default_max_tokens == 8192
 
 
 def test_llm_settings_from_env():
@@ -25,9 +26,11 @@ def test_llm_settings_from_env():
         "LLM_DEFAULT_PROVIDER": "anthropic",
         "LLM_DEFAULT_MODEL": "claude-3-sonnet",
         "LLM_DEFAULT_TEMPERATURE": "0.9",
+        "LLM_DEFAULT_MAX_TOKENS": "4096",
     }, clear=True):
         settings = LLMSettings()
 
         assert settings.default_provider == "anthropic"
         assert settings.default_model == "claude-3-sonnet"
         assert settings.default_temperature == 0.9
+        assert settings.default_max_tokens == 4096
