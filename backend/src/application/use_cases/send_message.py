@@ -482,6 +482,7 @@ class SendMessageUseCase:
                 or error
                 or _extract_last_message_content(result.get("messages", []))
             )
+        terminal_result = final_result or assistant_content
 
         assistant_msg: Optional[SessionMessage] = None
         if persist_session_messages:
@@ -501,7 +502,7 @@ class SendMessageUseCase:
             task.status = TaskStatus.FAILED if error else TaskStatus.COMPLETED
             task.current_turn = final_turn
             task.completed_at = datetime.now()
-            task.result = final_result
+            task.result = None if error else terminal_result
             task.error = error
             await self.task_repo.update(task)
 
@@ -526,7 +527,7 @@ class SendMessageUseCase:
         if error:
             await emitter.emit(task.id, "task:failed", {"error": error})
         else:
-            await emitter.emit(task.id, "task:completed", {"result": final_result})
+            await emitter.emit(task.id, "task:completed", {"result": terminal_result})
 
     async def _run_agent_loop(
         self,
@@ -611,28 +612,33 @@ class SendMessageUseCase:
             # 没有一并回放，传入会触发 LLM provider 报错（tool_call 无对应结果），
             # 同时也避免旧数据中 tool_calls 缺少 keyword-only 参数 `args` 时
             # AIMessage 构造抛出 `tool_call() missing 1 required keyword-only argument: 'args'`。
-            history_messages = await self.message_repo.list_by_session(session_id, limit=20)
             messages = []
-            for msg in history_messages:
-                # 跳过当前这条用户消息（会在 initial_state 中作为 user_message 处理）
-                if msg.role == SessionMessageRole.USER:
-                    messages.append(HumanMessage(content=msg.content))
-                elif msg.role == SessionMessageRole.ASSISTANT:
-                    # 构建内容：保留原始内容 + 工具使用记录（去重）
-                    content_parts = [msg.content or ""]
-                    if msg.tool_calls:
-                        # 提取工具名称并去重
-                        tool_names = list(dict.fromkeys(
-                            tc.get("name", "") for tc in msg.tool_calls if tc.get("name")
-                        ))
-                        if tool_names:
-                            tools_summary = f"\n\n[Used Tools: {', '.join(tool_names)}]"
-                            content_parts.append(tools_summary)
+            if is_sub_agent:
+                # Sub-agent 是主 agent 的工具调用执行单元，只接收本次原子任务，
+                # 不继承父 session 的 user/assistant/tool 历史，避免执行主 agent 的全局目标。
+                messages.append(HumanMessage(content=content))
+            else:
+                history_messages = await self.message_repo.list_by_session(session_id, limit=20)
+                for msg in history_messages:
+                    # 跳过当前这条用户消息（会在 initial_state 中作为 user_message 处理）
+                    if msg.role == SessionMessageRole.USER:
+                        messages.append(HumanMessage(content=msg.content))
+                    elif msg.role == SessionMessageRole.ASSISTANT:
+                        # 构建内容：保留原始内容 + 工具使用记录（去重）
+                        content_parts = [msg.content or ""]
+                        if msg.tool_calls:
+                            # 提取工具名称并去重
+                            tool_names = list(dict.fromkeys(
+                                tc.get("name", "") for tc in msg.tool_calls if tc.get("name")
+                            ))
+                            if tool_names:
+                                tools_summary = f"\n\n[Used Tools: {', '.join(tool_names)}]"
+                                content_parts.append(tools_summary)
 
-                    messages.append(AIMessage(content="".join(content_parts)))
-                elif msg.role == SessionMessageRole.TOOL_SUMMARY:
-                    messages.append(HumanMessage(
-                        content=f"[Tool Results] {msg.content}"))
+                        messages.append(AIMessage(content="".join(content_parts)))
+                    elif msg.role == SessionMessageRole.TOOL_SUMMARY:
+                        messages.append(HumanMessage(
+                            content=f"[Tool Results] {msg.content}"))
 
             # 步骤 C: 创建 LLM 实例 + 绑定工具
             # 根据模式构建工具注册表
