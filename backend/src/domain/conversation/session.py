@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 
-from src.domain.entities.base import Entity
+from src.domain.base import Entity
 
 
 class SessionStatus(str, Enum):

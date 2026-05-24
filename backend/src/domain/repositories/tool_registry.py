@@ -7,7 +7,7 @@
 from abc import ABC, abstractmethod
 from typing import Optional
 
-from src.domain.entities.tool import (
+from src.domain.tool import (
     RegisteredTool,
     ToolContext,
     ToolDef,

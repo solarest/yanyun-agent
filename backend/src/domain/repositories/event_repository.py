@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from typing import List
 
-from src.domain.entities.event import Event
+from src.domain.event.event import Event
 
 
 class IEventRepository(ABC):

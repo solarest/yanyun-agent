@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from src.domain.entities.agent import Agent
+    from src.domain.agent.agent import Agent
 
 
 @dataclass

@@ -13,8 +13,8 @@ from src.application.dtos.session_dto import (
     UpdateSessionDTO,
 )
 from src.application.use_cases.session_management import SessionManagementUseCase
-from src.domain.entities.session import Session
-from src.domain.entities.session_message import SessionMessage
+from src.domain.conversation.session import Session
+from src.domain.conversation.session_message import SessionMessage
 from src.domain.repositories.agent_repository import IAgentRepository
 from src.domain.repositories.session_message_repository import (
     ISessionMessageRepository,

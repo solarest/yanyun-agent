@@ -5,7 +5,7 @@ import types
 
 import pytest
 
-from src.domain.entities.tool import ToolContext, ToolResult
+from src.domain.tool import ToolContext, ToolResult
 from src.infrastructure.tools.builtin.web_search import (
     _format_tavily_results,
     web_search,

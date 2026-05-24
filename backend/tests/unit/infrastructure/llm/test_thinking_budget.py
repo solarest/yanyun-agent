@@ -1,7 +1,7 @@
 """测试 thinking_budget 参数的传递和使用"""
 
 import os
-from src.domain.entities.llm import LLMConfig, LLMProvider
+from src.domain.llm.llm import LLMConfig, LLMProvider
 from src.infrastructure.llm.config import LLMSettings
 from src.infrastructure.llm.model_factory import create_chat_model
 

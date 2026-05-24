@@ -8,7 +8,7 @@
 import os
 from typing import Any, Optional
 
-from src.domain.entities.tool import RegisteredTool, ToolContext, ToolResult
+from src.domain.tool import RegisteredTool, ToolContext, ToolResult
 
 
 class SecurityMiddleware:

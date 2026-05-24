@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from typing import List, Optional
 
-from src.domain.entities.task import Task
+from src.domain.task.task import Task
 
 
 class ITaskRepository(ABC):

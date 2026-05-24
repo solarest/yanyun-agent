@@ -9,7 +9,7 @@ import logging
 import os
 from typing import Any, Optional
 
-from src.domain.entities.tool import ToolContext, ToolResult
+from src.domain.tool import ToolContext, ToolResult
 from src.infrastructure.tools.decorator import tool
 
 logger = logging.getLogger(__name__)

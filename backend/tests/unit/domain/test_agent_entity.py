@@ -3,7 +3,7 @@
 import json
 import pytest
 
-from src.domain.entities.agent import Agent, CONFIG_FILES, MAX_CONFIG_LENGTH
+from src.domain.agent.agent import Agent, CONFIG_FILES, MAX_CONFIG_LENGTH
 
 
 class TestAgentDefaults:

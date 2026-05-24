@@ -3,7 +3,7 @@
 from datetime import datetime
 from uuid import uuid4
 
-from src.domain.entities.skill_def import SkillDef
+from src.domain.skill.skill_def import SkillDef
 from src.domain.repositories.skill_repository import ISkillRepository
 from src.domain.services.skill_md_parser import parse_skill_md
 from src.application.services.skill_storage_service import (

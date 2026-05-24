@@ -7,8 +7,8 @@
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-from src.domain.entities.tool import ToolContext, ToolResult
-from src.domain.entities.task import Task, TaskStatus
+from src.domain.tool import ToolContext, ToolResult
+from src.domain.task.task import Task, TaskStatus
 
 
 @pytest.fixture

@@ -10,7 +10,7 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.use_cases.stream_event import StreamEventService
-from src.domain.entities.base import Entity
+from src.domain.base import Entity
 from src.domain.repositories.base import Repository
 from src.domain.repositories.event_repository import IEventRepository
 from src.domain.repositories.task_repository import ITaskRepository
@@ -19,7 +19,7 @@ from src.domain.repositories.session_repository import ISessionRepository
 from src.domain.repositories.session_message_repository import ISessionMessageRepository
 from src.domain.repositories.skill_repository import ISkillRepository
 from src.domain.repositories.tool_registry import IToolRegistry
-from src.domain.interfaces.llm_provider import ILLMProvider
+from src.domain.llm.interfaces.llm_provider import ILLMProvider
 from src.infrastructure.llm.config import LLMSettings
 from src.infrastructure.llm.llm_provider_impl import LLMProviderImpl
 from src.infrastructure.repositories.in_memory_repo import InMemoryRepository

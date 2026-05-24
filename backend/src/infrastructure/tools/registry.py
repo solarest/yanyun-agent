@@ -6,7 +6,7 @@
 import logging
 from typing import Optional
 
-from src.domain.entities.tool import (
+from src.domain.tool import (
     RegisteredTool,
     ToolContext,
     ToolDef,

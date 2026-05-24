@@ -5,7 +5,7 @@
 """
 
 from abc import ABC, abstractmethod
-from src.domain.entities.conversation import ConversationMessage, MessageGroup
+from src.domain.conversation.conversation import ConversationMessage, MessageGroup
 
 
 class PromptContextInterface(ABC):

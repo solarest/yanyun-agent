@@ -5,7 +5,7 @@ from typing import List, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.domain.entities.session import Session, SessionStatus
+from src.domain.conversation.session import Session, SessionStatus
 from src.domain.repositories.session_repository import ISessionRepository
 from src.infrastructure.database.models.agent_model import SessionModel
 

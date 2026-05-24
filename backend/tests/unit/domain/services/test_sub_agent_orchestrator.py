@@ -7,7 +7,7 @@ from src.domain.services.sub_agent_orchestrator import (
 )
 from src.infrastructure.tools.registry import ToolRegistry
 from src.infrastructure.tools.decorator import tool, clear_collected_tools
-from src.domain.entities.tool import ToolContext, ToolResult
+from src.domain.tool import ToolContext, ToolResult
 
 
 @pytest.fixture(autouse=True)

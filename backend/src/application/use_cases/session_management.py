@@ -2,7 +2,7 @@
 
 from typing import List, Optional
 
-from src.domain.entities.session import Session, SessionStatus
+from src.domain.conversation.session import Session, SessionStatus
 from src.domain.repositories.session_repository import ISessionRepository
 from src.domain.repositories.session_message_repository import ISessionMessageRepository
 

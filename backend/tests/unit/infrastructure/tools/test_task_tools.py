@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.domain.entities.tool import ToolContext, ToolResult
+from src.domain.tool import ToolContext, ToolResult
 from src.infrastructure.tools.builtin.task_create import task_create
 from src.infrastructure.tools.builtin.task_update import task_update
 from src.infrastructure.tools.decorator import clear_collected_tools

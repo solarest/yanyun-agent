@@ -24,8 +24,8 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, AsyncIterator, Optional
 
-from src.domain.entities.task import Task, TaskConfig, TaskStatus
-from src.domain.entities.tool import ToolContext, ToolResult
+from src.domain.task.task import Task, TaskConfig, TaskStatus
+from src.domain.tool import ToolContext, ToolResult
 from src.infrastructure.tools.decorator import tool
 
 logger = logging.getLogger(__name__)

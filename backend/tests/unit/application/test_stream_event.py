@@ -6,7 +6,7 @@ import pytest
 
 from src.application.dtos.event_dto import SSEEventDTO
 from src.application.use_cases.stream_event import StreamEventService
-from src.domain.entities.event import Event
+from src.domain.event.event import Event
 from src.domain.services.event_emitter import ProxyEventEmitter
 
 

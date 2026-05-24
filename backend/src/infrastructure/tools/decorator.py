@@ -12,7 +12,7 @@ import logging
 import time
 from typing import Any, Callable, Optional, get_type_hints
 
-from src.domain.entities.tool import (
+from src.domain.tool import (
     RegisteredTool,
     ToolContext,
     ToolParameter,

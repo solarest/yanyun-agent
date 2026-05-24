@@ -14,8 +14,8 @@ from src.application.dtos.agent_dto import (
     UpdateAgentConfigDTO,
     UpdateAgentDTO,
 )
-from src.domain.entities.agent import Agent
-from src.domain.entities.tool import ToolDef
+from src.domain.agent.agent import Agent
+from src.domain.tool import ToolDef
 from src.domain.repositories.agent_repository import IAgentRepository
 from src.infrastructure.tools.registry import ToolRegistry
 from src.presentation.dependencies import get_agent_repository, create_tool_registry

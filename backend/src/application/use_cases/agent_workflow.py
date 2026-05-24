@@ -13,7 +13,7 @@ import logging
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
-from src.domain.entities.agent_state import AgentState
+from src.domain.agent.agent_state import AgentState
 from src.infrastructure.agent.nodes.context_compact_node import (
     context_compact_node,
 )

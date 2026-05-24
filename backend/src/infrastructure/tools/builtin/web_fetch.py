@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from src.domain.entities.tool import ToolContext, ToolResult
+from src.domain.tool import ToolContext, ToolResult
 from src.infrastructure.tools.decorator import tool
 
 logger = logging.getLogger(__name__)

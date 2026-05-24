@@ -7,7 +7,7 @@ from typing import Optional
 
 from langchain_core.language_models import BaseChatModel
 
-from src.domain.interfaces.llm_provider import ILLMProvider
+from src.domain.llm.interfaces.llm_provider import ILLMProvider
 from src.infrastructure.llm.model_factory import create_chat_model as _create_chat_model
 
 

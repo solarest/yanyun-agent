@@ -9,7 +9,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from src.domain.entities.base import Entity
+from src.domain.base import Entity
 
 
 class SessionMessageRole(str, Enum):

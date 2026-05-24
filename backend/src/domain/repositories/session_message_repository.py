@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from typing import List, Optional
 
-from src.domain.entities.session_message import SessionMessage
+from src.domain.conversation.session_message import SessionMessage
 
 
 class ISessionMessageRepository(ABC):

@@ -7,9 +7,9 @@
 from dataclasses import dataclass, field
 from typing import Any, Callable, Coroutine
 
-from src.domain.entities.tool.context import ToolResult
-from src.domain.entities.tool.definition import ToolDef, ToolParameter
-from src.domain.entities.tool.policy import ToolPolicy
+from src.domain.tool.entities.context import ToolResult
+from src.domain.tool.entities.definition import ToolDef, ToolParameter
+from src.domain.tool.entities.policy import ToolPolicy
 
 # 工具函数类型：接收 Dict 参数和可选 Context，返回 ToolResult
 ToolFunction = Callable[..., Coroutine[Any, Any, ToolResult]]

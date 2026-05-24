@@ -5,7 +5,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, Optional
 
-from src.domain.entities.base import Entity
+from src.domain.base import Entity
 
 
 class TaskStatus(str, Enum):

@@ -6,7 +6,7 @@ Phase 1 实现为标记穿透 + 资源限制预留接口。
 
 from typing import Any, Optional
 
-from src.domain.entities.tool import RegisteredTool, ToolContext, ToolResult
+from src.domain.tool import RegisteredTool, ToolContext, ToolResult
 
 
 class SandboxMiddleware:

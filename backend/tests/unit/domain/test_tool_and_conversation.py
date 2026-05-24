@@ -1,10 +1,10 @@
 """领域层 - ToolDef 和 ConversationMessage 实体单元测试"""
 
 import pytest
-from src.domain.entities.tool import ToolDef, ToolParameter
-from src.domain.entities.skill_def import SkillDef, SkillStep
-from src.domain.entities.output_schema import OutputSchema
-from src.domain.entities.conversation import ConversationMessage, MessageGroup, ToolCall
+from src.domain.tool import ToolDef, ToolParameter
+from src.domain.skill.skill_def import SkillDef, SkillStep
+from src.domain.prompt.output_schema import OutputSchema
+from src.domain.conversation.conversation import ConversationMessage, MessageGroup, ToolCall
 
 
 class TestToolDef:

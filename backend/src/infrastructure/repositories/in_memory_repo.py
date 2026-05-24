@@ -6,7 +6,7 @@
 """
 
 from typing import Optional, List
-from src.domain.entities.base import Entity
+from src.domain.base import Entity
 from src.domain.repositories.base import Repository
 
 

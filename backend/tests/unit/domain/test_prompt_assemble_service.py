@@ -1,10 +1,10 @@
 """领域层 - PromptAssembleService 单元测试"""
 
 import pytest
-from src.domain.entities.prompt_template import PromptTemplate
-from src.domain.entities.tool import ToolDef, ToolParameter
-from src.domain.entities.skill_def import SkillDef, SkillStep
-from src.domain.entities.output_schema import OutputSchema
+from src.domain.prompt.prompt_template import PromptTemplate
+from src.domain.tool import ToolDef, ToolParameter
+from src.domain.skill.skill_def import SkillDef, SkillStep
+from src.domain.prompt.output_schema import OutputSchema
 from src.domain.services.prompt_assemble_service import PromptAssembleService
 
 

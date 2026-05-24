@@ -15,7 +15,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.types import RunnableConfig
 
-from src.domain.entities.agent_state import AgentState
+from src.domain.agent.agent_state import AgentState
 from src.infrastructure.agent.nodes.base_node import BaseNode, NodeContext
 from src.infrastructure.llm.model_factory import create_chat_model
 

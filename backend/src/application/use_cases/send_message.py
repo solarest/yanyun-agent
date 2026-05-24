@@ -11,13 +11,13 @@ from typing import Any, Dict, Optional
 from langchain_core.messages import AIMessage, HumanMessage
 
 from src.application.use_cases.agent_workflow import AgentWorkflowBuilder
-from src.domain.entities.session_message import (
+from src.domain.conversation.session_message import (
     MessageStatus,
     SessionMessage,
     SessionMessageRole,
 )
-from src.domain.entities.task import Task, TaskConfig, TaskStatus
-from src.domain.interfaces.llm_provider import ILLMProvider
+from src.domain.task.task import Task, TaskConfig, TaskStatus
+from src.domain.llm.interfaces.llm_provider import ILLMProvider
 from src.domain.repositories.agent_repository import IAgentRepository
 from src.domain.repositories.session_message_repository import (
     ISessionMessageRepository,
@@ -27,7 +27,7 @@ from src.domain.repositories.skill_repository import ISkillRepository
 from src.domain.repositories.task_repository import ITaskRepository
 from src.domain.repositories.tool_registry import IToolRegistry
 from src.domain.services import IEventEmitter, ProxyEventEmitter
-from src.domain.entities.prompt_template import PromptTemplate
+from src.domain.prompt.prompt_template import PromptTemplate
 from src.domain.services.prompt_assemble_service import PromptAssembleService
 
 logger = logging.getLogger(__name__)

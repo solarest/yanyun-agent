@@ -3,8 +3,8 @@ import asyncio
 import pytest
 
 from src.application.use_cases.send_message import SendMessageUseCase
-from src.domain.entities.agent import Agent
-from src.domain.entities.task import Task, TaskConfig, TaskStatus
+from src.domain.agent.agent import Agent
+from src.domain.task.task import Task, TaskConfig, TaskStatus
 
 
 class RecordingEmitter:

@@ -5,7 +5,7 @@ from typing import List, Optional
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.domain.entities.session_message import (
+from src.domain.conversation.session_message import (
     MessageStatus,
     SessionMessage,
     SessionMessageRole,

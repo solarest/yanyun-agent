@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.dtos.event_dto import SSEEventDTO, normalize_event_type
-from src.domain.entities.event import Event
+from src.domain.event.event import Event
 from src.domain.repositories.event_repository import IEventRepository
 from src.infrastructure.database.models.agent_model import EventModel
 

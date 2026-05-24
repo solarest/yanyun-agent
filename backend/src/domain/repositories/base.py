@@ -8,7 +8,7 @@
 
 from abc import ABC, abstractmethod
 from typing import Generic, TypeVar, Optional, List
-from src.domain.entities.base import Entity
+from src.domain.base import Entity
 
 T = TypeVar("T", bound=Entity)
 

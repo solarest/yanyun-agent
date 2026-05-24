@@ -10,7 +10,7 @@ import pytest
 from unittest.mock import AsyncMock
 from langchain_core.messages import AIMessage
 
-from src.domain.entities.agent_state import AgentState
+from src.domain.agent.agent_state import AgentState
 from src.application.use_cases.agent_workflow import (
     route_after_llm,
     route_after_tool_execute,
@@ -127,7 +127,7 @@ class TestSubAgentToolRegistry:
         """测试子Agent工具集排除plan相关工具"""
         from src.infrastructure.tools.registry import ToolRegistry
         from src.infrastructure.tools.pipeline import ExecutionPipeline
-        from src.domain.entities.tool import RegisteredTool, ToolResult
+        from src.domain.tool import RegisteredTool, ToolResult
 
         # 创建父Agent工具集
         parent_registry = ToolRegistry()

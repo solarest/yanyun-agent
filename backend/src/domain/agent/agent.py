@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from src.domain.entities.base import Entity
+from src.domain.base import Entity
 
 # OpenClaw 配置文件名称常量
 CONFIG_FILES = [

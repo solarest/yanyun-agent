@@ -5,7 +5,7 @@ from typing import Optional
 from langchain_openai import ChatOpenAI
 from langchain_core.language_models import BaseChatModel
 
-from src.domain.entities.llm import LLMConfig, LLMProvider
+from src.domain.llm.llm import LLMConfig, LLMProvider
 from src.infrastructure.llm.providers.base import ProviderAdapter
 from src.infrastructure.llm.config import LLMSettings
 

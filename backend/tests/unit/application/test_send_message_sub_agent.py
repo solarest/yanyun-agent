@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import AsyncMock
 
 from src.application.use_cases.send_message import SendMessageUseCase
-from src.domain.entities.task import Task, TaskConfig, TaskStatus
+from src.domain.task.task import Task, TaskConfig, TaskStatus
 
 
 class FakeAgentRepository:

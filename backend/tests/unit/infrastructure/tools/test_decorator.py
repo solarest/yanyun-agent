@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.domain.entities.tool import ToolResult
+from src.domain.tool import ToolResult
 from src.infrastructure.tools.decorator import (
     _extract_parameters,
     _parse_docstring_params,

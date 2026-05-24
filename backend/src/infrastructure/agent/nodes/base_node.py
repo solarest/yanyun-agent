@@ -12,7 +12,7 @@ from typing import Any
 
 from langgraph.types import RunnableConfig
 
-from src.domain.entities.agent_state import AgentState
+from src.domain.agent.agent_state import AgentState
 
 logger = logging.getLogger(__name__)
 

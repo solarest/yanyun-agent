@@ -1,7 +1,7 @@
 """应用层 - Event 实体与 DTO 转换"""
 
 from src.application.dtos.event_dto import SSEEventDTO
-from src.domain.entities.event import Event
+from src.domain.event.event import Event
 
 
 class EventMapper:

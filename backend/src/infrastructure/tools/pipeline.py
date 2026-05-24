@@ -7,7 +7,7 @@ import logging
 import time
 from typing import Any, Optional, Protocol
 
-from src.domain.entities.tool import RegisteredTool, ToolContext, ToolResult
+from src.domain.tool import RegisteredTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
 

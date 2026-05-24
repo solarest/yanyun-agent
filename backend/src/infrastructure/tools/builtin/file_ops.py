@@ -7,7 +7,7 @@ import glob as glob_module
 import os
 from typing import Optional
 
-from src.domain.entities.tool import ToolContext, ToolResult
+from src.domain.tool import ToolContext, ToolResult
 from src.infrastructure.tools.decorator import tool
 
 

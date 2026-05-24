@@ -5,7 +5,7 @@ from typing import List, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.domain.entities.task import Task, TaskConfig, CostTracker, TaskStatus
+from src.domain.task.task import Task, TaskConfig, CostTracker, TaskStatus
 from src.domain.repositories.task_repository import ITaskRepository
 from src.infrastructure.database.models.agent_model import TaskModel
 

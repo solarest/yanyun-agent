@@ -1,8 +1,8 @@
 """领域层 - PromptTemplate 值对象单元测试"""
 
 import pytest
-from src.domain.entities.agent import Agent
-from src.domain.entities.prompt_template import PromptTemplate
+from src.domain.agent.agent import Agent
+from src.domain.prompt.prompt_template import PromptTemplate
 from src.domain.services.token_utils import count_tokens
 
 

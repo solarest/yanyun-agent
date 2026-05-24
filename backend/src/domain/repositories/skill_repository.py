@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from typing import Optional
 
-from src.domain.entities.skill_def import SkillDef
+from src.domain.skill.skill_def import SkillDef
 
 
 class ISkillRepository(ABC):

@@ -9,7 +9,7 @@ from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import BaseMessage
 from langchain_core.outputs import LLMResult
 
-from src.domain.entities.task import CostTracker
+from src.domain.task.task import CostTracker
 from src.infrastructure.llm.middleware.cost_tracker import calculate_cost
 
 # 独立的 LLM 调用日志记录器（记录完整入参/出参）
