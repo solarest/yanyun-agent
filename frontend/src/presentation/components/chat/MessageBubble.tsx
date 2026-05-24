@@ -12,6 +12,7 @@ import { ThinkingBlock } from './ThinkingBlock';
 
 interface MessageBubbleProps {
   message: SessionMessage;
+  embeddedSubAgents?: SessionMessage[];
   clarifyDisabled?: boolean;
   onClarifyAnswer?: (answer: string) => void;
 }
@@ -79,8 +80,103 @@ const buildToolTimeline = (
   return items;
 };
 
+interface EmbeddedSubAgentListProps {
+  messages: SessionMessage[];
+}
+
+const EmbeddedSubAgentList: React.FC<EmbeddedSubAgentListProps> = ({ messages }) => {
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
+
+  if (messages.length === 0) return null;
+
+  const toggle = (messageId: string) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(messageId)) {
+        next.delete(messageId);
+      } else {
+        next.add(messageId);
+      }
+      return next;
+    });
+  };
+
+  return (
+    <div className="mb-3 overflow-hidden rounded-lg border border-border/40 bg-background/70">
+      <div className="border-b border-border/40 px-3 py-2 text-xs font-medium text-muted-foreground">
+        Sub-agents · {messages.length}
+      </div>
+      <div className="divide-y divide-border/40">
+        {messages.map((subMessage) => {
+          const isExpanded = expandedIds.has(subMessage.id);
+          const isError = subMessage.status === 'error';
+          const isStreaming = subMessage.status === 'streaming';
+          const statusLabel = isStreaming ? '运行中' : isError ? '失败' : '完成';
+          const toolTimeline = buildToolTimeline(
+            subMessage.tool_calls.filter((tc) => !isSpecialTool(tc.name)),
+            subMessage.tool_results.filter((result) => !isSpecialTool(result.tool_name)),
+          );
+          const title = subMessage.meta?.title || 'Sub-agent';
+
+          return (
+            <div key={subMessage.id}>
+              <button
+                type="button"
+                onClick={() => toggle(subMessage.id)}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-muted-foreground transition-colors hover:bg-muted/30 hover:text-foreground"
+                aria-expanded={isExpanded}
+              >
+                <span className="min-w-0 flex-1 truncate">
+                  Sub-agent · {title}
+                </span>
+                <span className={isError ? 'text-destructive' : ''}>
+                  {statusLabel}
+                </span>
+                <svg
+                  className={`h-4 w-4 shrink-0 transition-transform duration-200 ${
+                    isExpanded ? 'rotate-180' : ''
+                  }`}
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+
+              {isExpanded && (
+                <div className="space-y-2 px-3 pb-3">
+                  {toolTimeline.length > 0 && (
+                    <ToolCallGroup
+                      items={toolTimeline}
+                      isStreaming={isStreaming}
+                    />
+                  )}
+                  {subMessage.content.trim() && (
+                    <div className="markdown-content text-xs leading-relaxed text-foreground">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {subMessage.content}
+                      </ReactMarkdown>
+                    </div>
+                  )}
+                  {isError && subMessage.error && (
+                    <div className="text-xs text-destructive">
+                      {subMessage.error}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 export const MessageBubble: React.FC<MessageBubbleProps> = ({
   message,
+  embeddedSubAgents = [],
   clarifyDisabled = false,
   onClarifyAnswer,
 }) => {
@@ -197,6 +293,10 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
               isStreaming={isStreaming}
             />
           </div>
+        )}
+
+        {!isUser && !isSubAgent && embeddedSubAgents.length > 0 && (
+          <EmbeddedSubAgentList messages={embeddedSubAgents} />
         )}
 
         {/* 深度思考内容 */}

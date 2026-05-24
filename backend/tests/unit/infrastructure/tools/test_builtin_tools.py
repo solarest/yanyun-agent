@@ -10,7 +10,12 @@ from src.infrastructure.tools.builtin.web_search import (
     _format_tavily_results,
     web_search,
 )
-from src.infrastructure.tools.builtin.file_ops import file_read, file_search, file_write
+from src.infrastructure.tools.builtin.file_ops import (
+    file_grep,
+    file_read,
+    file_search,
+    file_write,
+)
 from src.infrastructure.tools.builtin.clarify import clarify
 from src.infrastructure.tools.decorator import clear_collected_tools
 
@@ -189,6 +194,76 @@ class TestFileSearch:
             {"pattern": "../*.py"},
             ToolContext(task_id="t", workspace=str(workspace)),
         )
+        assert result.success is False
+        assert "outside workspace" in result.output
+
+
+class TestFileGrep:
+    @pytest.mark.asyncio
+    async def test_plain_text_search(self, tmp_path) -> None:
+        (tmp_path / "app.py").write_text("def hello():\n    return 'world'\n")
+        (tmp_path / "readme.md").write_text("hello docs\n")
+        ctx = ToolContext(task_id="t", workspace=str(tmp_path))
+        rt = file_grep._registered_tool  # type: ignore[attr-defined]
+
+        result = await rt.func(
+            {"query": "hello", "pattern": "**/*.py"},
+            ctx,
+        )
+
+        assert result.success is True
+        assert "app.py:1: > def hello():" in result.output
+        assert "readme.md" not in result.output
+        assert result.metadata["match_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_regex_case_insensitive_with_context(self, tmp_path) -> None:
+        (tmp_path / "log.txt").write_text("before\nError: failed\nafter\n")
+        ctx = ToolContext(task_id="t", workspace=str(tmp_path))
+        rt = file_grep._registered_tool  # type: ignore[attr-defined]
+
+        result = await rt.func(
+            {
+                "query": "error:.*failed",
+                "pattern": "*.txt",
+                "regex": True,
+                "case_sensitive": False,
+                "context_lines": 1,
+            },
+            ctx,
+        )
+
+        assert result.success is True
+        assert "log.txt:1: - before" in result.output
+        assert "log.txt:2: > Error: failed" in result.output
+        assert "log.txt:3: - after" in result.output
+        assert result.metadata["output_line_count"] == 3
+
+    @pytest.mark.asyncio
+    async def test_invalid_regex(self, tmp_path) -> None:
+        (tmp_path / "a.txt").write_text("hello")
+        ctx = ToolContext(task_id="t", workspace=str(tmp_path))
+        rt = file_grep._registered_tool  # type: ignore[attr-defined]
+
+        result = await rt.func(
+            {"query": "[", "pattern": "*.txt", "regex": True},
+            ctx,
+        )
+
+        assert result.success is False
+        assert result.error == "invalid_regex"
+
+    @pytest.mark.asyncio
+    async def test_blocks_pattern_escape(self, tmp_path) -> None:
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        rt = file_grep._registered_tool  # type: ignore[attr-defined]
+
+        result = await rt.func(
+            {"query": "secret", "pattern": "../*.txt"},
+            ToolContext(task_id="t", workspace=str(workspace)),
+        )
+
         assert result.success is False
         assert "outside workspace" in result.output
 

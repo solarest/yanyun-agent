@@ -18,6 +18,8 @@ def test_create_chat_model_with_openai():
         model = create_chat_model(model="gpt-4", temperature=0.7)
         
         assert model == mock_model
+        config = mock_adapter.create_model.call_args.args[0]
+        assert config.max_tokens == 8192
 
 
 def test_create_chat_model_with_anthropic():
@@ -31,3 +33,19 @@ def test_create_chat_model_with_anthropic():
         model = create_chat_model(model="claude-3-sonnet", provider="anthropic")
         
         assert model == mock_model
+
+
+def test_create_chat_model_uses_max_tokens_from_env(monkeypatch):
+    """测试默认最大输出 token 可通过环境变量配置"""
+    monkeypatch.setenv("LLM_DEFAULT_MAX_TOKENS", "4096")
+    with patch("src.infrastructure.llm.providers.registry.ProviderRegistry.get_instance") as mock_registry:
+        mock_adapter = MagicMock()
+        mock_model = MagicMock()
+        mock_adapter.create_model.return_value = mock_model
+        mock_registry.return_value.get_adapter.return_value = mock_adapter
+
+        model = create_chat_model(model="qwen3-max", provider="qwen")
+
+        assert model == mock_model
+        config = mock_adapter.create_model.call_args.args[0]
+        assert config.max_tokens == 4096

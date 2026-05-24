@@ -1,10 +1,11 @@
 """基础设施层 - 文件操作工具
 
-提供 file_read、file_write、file_search 三个工具。
+提供 file_read、file_write、file_search、file_grep 四个工具。
 """
 
 import glob as glob_module
 import os
+import re
 from typing import Optional
 
 from src.domain.entities.tool import ToolContext, ToolResult
@@ -154,6 +155,130 @@ async def file_search(
         return ToolResult(output=f"Search error: {e}", success=False, error=str(e))
 
 
+@tool(
+    name="file_grep",
+    description=(
+        "在工作目录文件内容中执行 grep 搜索。支持正则表达式、大小写控制、上下文行和 glob 文件范围。"
+    ),
+    category="file",
+    returns="匹配行列表，格式为 path:line: content",
+    timeout_ms=15000,
+)
+async def file_grep(
+    query: str,
+    pattern: str = "**/*",
+    case_sensitive: bool = True,
+    regex: bool = False,
+    context_lines: int = 0,
+    max_results: int = 100,
+    context: Optional[ToolContext] = None,
+) -> ToolResult:
+    """在文件内容中 grep 搜索
+
+    Args:
+        query: 要搜索的文本或正则表达式
+        pattern: 限定搜索文件范围的 glob 模式，例如 "**/*.py"
+        case_sensitive: 是否大小写敏感
+        regex: query 是否按正则表达式解释；false 时按普通文本搜索
+        context_lines: 每个匹配前后附带的上下文行数
+        max_results: 最大匹配数量
+    """
+    if not query:
+        return ToolResult(
+            output="Error: query cannot be empty",
+            success=False,
+            error="invalid_input",
+        )
+
+    workspace = context.workspace if context else os.getcwd()
+    max_results = max(1, min(max_results, 1000))
+    context_lines = max(0, min(context_lines, 20))
+
+    try:
+        search_path = _resolve_search_pattern(pattern, workspace)
+        candidate_paths = glob_module.glob(search_path, recursive=True)
+        file_paths = [
+            path for path in candidate_paths
+            if os.path.isfile(path) and not _is_hidden_path(path, workspace)
+        ]
+        matcher = _build_line_matcher(query, case_sensitive, regex)
+
+        matches: list[tuple[str, int, str, bool]] = []
+        matched_files: set[str] = set()
+
+        for file_path in file_paths:
+            if len(matches) >= max_results:
+                break
+            try:
+                with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                    lines = f.readlines()
+            except OSError:
+                continue
+
+            matched_line_indexes = [
+                index for index, line in enumerate(lines)
+                if matcher(line)
+            ]
+            if not matched_line_indexes:
+                continue
+
+            matched_files.add(file_path)
+            included_indexes: set[int] = set()
+            for match_index in matched_line_indexes:
+                start = max(0, match_index - context_lines)
+                end = min(len(lines), match_index + context_lines + 1)
+                for index in range(start, end):
+                    if index in included_indexes:
+                        continue
+                    included_indexes.add(index)
+                    is_match = index == match_index
+                    rel_path = os.path.relpath(file_path, workspace)
+                    prefix = ">" if is_match else "-"
+                    matches.append((
+                        rel_path,
+                        index + 1,
+                        f"{prefix} {lines[index].rstrip()}",
+                        is_match,
+                    ))
+                    if len(matches) >= max_results:
+                        break
+                if len(matches) >= max_results:
+                    break
+
+        if not matches:
+            return ToolResult(
+                output="No matches found.",
+                metadata={
+                    "match_count": 0,
+                    "matched_file_count": 0,
+                    "searched_file_count": len(file_paths),
+                },
+            )
+
+        output = "\n".join(
+            f"{rel_path}:{line_no}: {content}"
+            for rel_path, line_no, content, _is_match in matches
+        )
+        return ToolResult(
+            output=output,
+            metadata={
+                "match_count": sum(1 for *_rest, is_match in matches if is_match),
+                "output_line_count": len(matches),
+                "matched_file_count": len(matched_files),
+                "searched_file_count": len(file_paths),
+                "truncated": len(matches) >= max_results,
+            },
+        )
+    except re.error as e:
+        return ToolResult(
+            output=f"Invalid regex: {e}",
+            success=False,
+            error="invalid_regex",
+        )
+    except Exception as e:
+        return ToolResult(output=f"Grep error: {e}", success=False, error=str(e))
+
+
 def _resolve_path(path: str, workspace: str) -> str:
     """解析文件路径"""
     if os.path.isabs(path):
@@ -167,6 +292,26 @@ def _resolve_path(path: str, workspace: str) -> str:
             raise ValueError(f"path '{path}' is outside workspace '{workspace}'")
 
     return resolved
+
+
+def _build_line_matcher(query: str, case_sensitive: bool, regex: bool):
+    """构建逐行匹配函数。"""
+    if regex:
+        flags = 0 if case_sensitive else re.IGNORECASE
+        compiled = re.compile(query, flags)
+        return lambda line: compiled.search(line) is not None
+
+    needle = query if case_sensitive else query.lower()
+    return lambda line: needle in (line if case_sensitive else line.lower())
+
+
+def _is_hidden_path(path: str, workspace: str) -> bool:
+    """跳过隐藏目录和隐藏文件，避免默认扫到 .git/.venv 等大量内容。"""
+    try:
+        rel_path = os.path.relpath(path, workspace)
+    except ValueError:
+        return False
+    return any(part.startswith(".") for part in rel_path.split(os.sep))
 
 
 def _resolve_search_pattern(pattern: str, workspace: str) -> str:

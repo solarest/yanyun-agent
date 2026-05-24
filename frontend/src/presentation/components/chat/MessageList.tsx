@@ -14,6 +14,14 @@ interface MessageListProps {
   onClarifyAnswer?: (answer: string) => void;
 }
 
+interface RenderMessageItem {
+  message: SessionMessage;
+  embeddedSubAgents: SessionMessage[];
+}
+
+const isSubAgentMessage = (message: SessionMessage): boolean =>
+  Boolean(message.meta?.isSubAgent);
+
 export const MessageList: React.FC<MessageListProps> = ({
   messages,
   isStreaming,
@@ -24,6 +32,29 @@ export const MessageList: React.FC<MessageListProps> = ({
   const shouldAutoScrollRef = useRef(true);
   const previousMessageCountRef = useRef(0);
 
+  const renderItems = useMemo<RenderMessageItem[]>(() => {
+    const items: RenderMessageItem[] = [];
+
+    messages.forEach((message) => {
+      if (!isSubAgentMessage(message)) {
+        items.push({ message, embeddedSubAgents: [] });
+        return;
+      }
+
+      const parentItem = [...items]
+        .reverse()
+        .find((item) => item.message.role === 'assistant');
+
+      if (parentItem) {
+        parentItem.embeddedSubAgents.push(message);
+      } else {
+        items.push({ message, embeddedSubAgents: [] });
+      }
+    });
+
+    return items;
+  }, [messages]);
+
   const handleScroll = useCallback(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -33,14 +64,14 @@ export const MessageList: React.FC<MessageListProps> = ({
   }, []);
 
   const activeClarifyMessageId = useMemo(() => {
-    if (isStreaming || messages.length === 0) return null;
-    const lastMessage = messages[messages.length - 1];
+    if (isStreaming || renderItems.length === 0) return null;
+    const lastMessage = renderItems[renderItems.length - 1].message;
     if (lastMessage.role !== 'assistant') return null;
     
     // 从 message.content 中解析 clarify 问题（支持单个或多个）
     const allPrompts = parseAllClarifyPrompts(lastMessage.content);
     return allPrompts.length > 0 ? lastMessage.id : null;
-  }, [isStreaming, messages]);
+  }, [isStreaming, renderItems]);
 
   // 自动滚动：仅当新增消息且用户在底部附近时触发
   useEffect(() => {
@@ -70,10 +101,11 @@ export const MessageList: React.FC<MessageListProps> = ({
       className="flex-1 overflow-y-auto px-4 py-4"
     >
       <div className="mx-auto max-w-3xl space-y-4">
-        {messages.map((msg) => (
+        {renderItems.map(({ message: msg, embeddedSubAgents }) => (
           <MessageBubble
             key={msg.id}
             message={msg}
+            embeddedSubAgents={embeddedSubAgents}
             clarifyDisabled={msg.id !== activeClarifyMessageId}
             onClarifyAnswer={
               msg.id === activeClarifyMessageId ? onClarifyAnswer : undefined

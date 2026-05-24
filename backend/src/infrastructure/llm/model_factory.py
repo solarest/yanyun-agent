@@ -57,6 +57,7 @@ def create_chat_model(
         provider=LLMProvider(provider),
         model=model,
         temperature=temperature,
+        max_tokens=settings.default_max_tokens,
         enable_thinking=settings.default_enable_thinking,
         thinking_budget=settings.default_thinking_budget,
     )
