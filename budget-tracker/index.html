@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>College Budget Tracker</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Header -->
+    <header class="header">
+      <div class="header-left">
+        <h1>🎓 College Budget Tracker</h1>
+        <p class="subtitle">Stay on top of your finances</p>
+      </div>
+      <div class="header-right">
+        <button id="prev-month" class="btn btn-icon" title="Previous month">&larr;</button>
+        <span id="current-month" class="month-label"></span>
+        <button id="next-month" class="btn btn-icon" title="Next month">&rarr;</button>
+      </div>
+    </header>
+
+    <!-- Summary Cards -->
+    <section class="summary-cards">
+      <div class="card card-budget">
+        <span class="card-label">Total Budget</span>
+        <span id="total-budget" class="card-value">$0.00</span>
+      </div>
+      <div class="card card-spent">
+        <span class="card-label">Total Spent</span>
+        <span id="total-spent" class="card-value">$0.00</span>
+      </div>
+      <div class="card card-remaining">
+        <span class="card-label">Remaining</span>
+        <span id="total-remaining" class="card-value">$0.00</span>
+      </div>
+      <div class="card card-variance">
+        <span class="card-label">Overall Variance</span>
+        <span id="overall-variance" class="card-value">$0.00</span>
+      </div>
+    </section>
+
+    <!-- Main Content -->
+    <div class="main-grid">
+      <!-- Left: Category Budgets & Spending -->
+      <section class="panel">
+        <div class="panel-header">
+          <h2>Categories</h2>
+          <button id="btn-add-expense" class="btn btn-primary">+ Add Expense</button>
+        </div>
+
+        <div id="categories-list" class="categories-list">
+          <!-- Dynamically rendered -->
+        </div>
+      </section>
+
+      <!-- Right: Charts & Recent Transactions -->
+      <aside class="panel panel-side">
+        <h2>Spending Breakdown</h2>
+        <div class="chart-container">
+          <canvas id="chart-doughnut" width="280" height="280"></canvas>
+          <div id="chart-legend" class="chart-legend"></div>
+        </div>
+
+        <h2 class="mt">Budget Variance</h2>
+        <div class="chart-container">
+          <canvas id="chart-bar" width="360" height="220"></canvas>
+        </div>
+
+        <h2 class="mt">Recent Transactions</h2>
+        <ul id="recent-transactions" class="transactions-list">
+          <!-- Dynamically rendered -->
+        </ul>
+      </aside>
+    </div>
+  </div>
+
+  <!-- Add Expense Modal -->
+  <div id="modal-overlay" class="modal-overlay hidden">
+    <div class="modal">
+      <h2 id="modal-title">Add Expense</h2>
+      <form id="expense-form">
+        <label for="expense-category">Category</label>
+        <select id="expense-category" required></select>
+
+        <label for="expense-desc">Description</label>
+        <input type="text" id="expense-desc" placeholder="e.g. Subway fare" required />
+
+        <label for="expense-amount">Amount ($)</label>
+        <input type="number" id="expense-amount" step="0.01" min="0.01" placeholder="0.00" required />
+
+        <label for="expense-date">Date</label>
+        <input type="date" id="expense-date" required />
+
+        <div class="modal-actions">
+          <button type="button" id="btn-cancel" class="btn btn-secondary">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Edit Budget Modal -->
+  <div id="budget-modal-overlay" class="modal-overlay hidden">
+    <div class="modal">
+      <h2>Edit Monthly Budget</h2>
+      <form id="budget-form">
+        <div id="budget-fields"></div>
+        <div class="modal-actions">
+          <button type="button" id="btn-budget-cancel" class="btn btn-secondary">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Budgets</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Edit Budget Trigger -->
+  <button id="btn-edit-budgets" class="fab" title="Edit monthly budgets">✏️</button>
+
+  <script src="app.js"></script>
+</body>
+</html>
