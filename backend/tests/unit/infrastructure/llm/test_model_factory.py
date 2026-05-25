@@ -3,7 +3,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 from src.infrastructure.llm.model_factory import create_chat_model
-from src.domain.entities.llm import LLMConfig, LLMProvider
+from src.domain.value_objects.llm_config import LLMConfig, LLMProvider
 
 
 def test_create_chat_model_with_openai():

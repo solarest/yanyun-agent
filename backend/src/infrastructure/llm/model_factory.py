@@ -4,7 +4,7 @@ from typing import Optional
 
 from langchain_core.language_models import BaseChatModel
 
-from src.domain.entities.llm import LLMConfig, LLMProvider
+from src.domain.value_objects.llm_config import LLMConfig, LLMProvider
 from src.infrastructure.llm.providers.registry import ProviderRegistry
 from src.infrastructure.llm.callback import LLMCallLogger, LLMUsageCallbackHandler
 

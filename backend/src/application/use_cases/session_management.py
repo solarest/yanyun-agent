@@ -2,7 +2,9 @@
 
 from typing import List, Optional
 
-from src.domain.entities.session import Session, SessionStatus
+from src.domain.aggregates.session.session import Session, SessionStatus
+from src.domain.events.session_events import SessionStarted
+from src.domain.repositories.event_publisher import IEventPublisher
 from src.domain.repositories.session_repository import ISessionRepository
 from src.domain.repositories.session_message_repository import ISessionMessageRepository
 
@@ -14,9 +16,11 @@ class SessionManagementUseCase:
         self,
         session_repo: ISessionRepository,
         message_repo: ISessionMessageRepository,
+        event_publisher: Optional[IEventPublisher] = None,
     ):
         self.session_repo = session_repo
         self.message_repo = message_repo
+        self.event_publisher = event_publisher
 
     async def create_session(self, agent_id: str, title: Optional[str] = None) -> Session:
         session = Session(
@@ -24,7 +28,13 @@ class SessionManagementUseCase:
             title=title or "",
             status=SessionStatus.ACTIVE,
         )
-        return await self.session_repo.add(session)
+        session = await self.session_repo.add(session)
+        if self.event_publisher:
+            await self.event_publisher.publish(SessionStarted(
+                session_id=session.id,
+                agent_id=agent_id,
+            ))
+        return session
 
     async def get_session(self, session_id: str) -> Optional[Session]:
         return await self.session_repo.get_by_id(session_id)
@@ -53,6 +63,5 @@ class SessionManagementUseCase:
         return await self.session_repo.update(session)
 
     async def delete_session(self, session_id: str) -> bool:
-        # 先删除该会话的所有消息
         await self.message_repo.remove_by_session(session_id)
         return await self.session_repo.remove(session_id)

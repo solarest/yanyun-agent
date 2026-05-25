@@ -14,9 +14,9 @@ logger = logging.getLogger(__name__)
 
 @tool(
     name="task_update",
-    description="更新任务的完成状态。在子任务执行完成后调用此工具记录结果。",
+    description="Update task completion status. Call this tool to record results after a subtask finishes.",
     category="task",
-    returns="更新确认",
+    returns="Update confirmation",
     timeout_ms=3000,
 )
 async def task_update(

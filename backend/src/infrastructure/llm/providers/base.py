@@ -4,7 +4,7 @@ from typing import Protocol
 
 from langchain_core.language_models import BaseChatModel
 
-from src.domain.entities.llm import LLMConfig, LLMProvider
+from src.domain.value_objects.llm_config import LLMConfig, LLMProvider
 
 
 class ProviderAdapter(Protocol):

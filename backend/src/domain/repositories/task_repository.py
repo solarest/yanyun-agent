@@ -1,9 +1,14 @@
 """领域层 - TaskRepository 接口"""
 
-from abc import ABC, abstractmethod
-from typing import List, Optional
+from __future__ import annotations
 
-from src.domain.entities.task import Task
+from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING, List, Optional
+
+from src.domain.aggregates.task.task import Task
+
+if TYPE_CHECKING:
+    from src.domain.repositories.specifications import Specification
 
 
 class ITaskRepository(ABC):
@@ -32,4 +37,9 @@ class ITaskRepository(ABC):
     @abstractmethod
     async def list_all(self, limit: int = 100, offset: int = 0) -> List[Task]:
         """获取任务列表"""
+        pass
+
+    @abstractmethod
+    async def find_by_spec(self, spec: Specification, limit: int = 100, offset: int = 0) -> List[Task]:
+        """按规约条件查询任务"""
         pass

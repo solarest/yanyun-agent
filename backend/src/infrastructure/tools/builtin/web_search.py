@@ -17,9 +17,9 @@ logger = logging.getLogger(__name__)
 
 @tool(
     name="web_search",
-    description="搜索互联网获取实时信息。当需要查找最新资讯、验证事实或获取不确定的知识时使用。",
+    description="Search the internet for real-time information. Use when you need to find the latest news, verify facts, or look up uncertain knowledge.",
     category="web_search",
-    returns="搜索结果列表，包含标题、摘要、来源链接，可选 AI 摘要",
+    returns="Search result list with titles, snippets, source links, and optional AI summary",
     timeout_ms=15000,
     max_calls_per_minute=20,
 )

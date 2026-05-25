@@ -11,9 +11,9 @@ from src.infrastructure.tools.decorator import tool
 
 @tool(
     name="clarify",
-    description="当任务需求不明确或存在歧义时，向用户发起澄清提问。提供选项可降低用户回答负担。",
+    description="Ask the user a clarifying question when the task requirements are ambiguous or unclear. Providing options reduces the user's burden of answering.",
     category="clarify",
-    returns="标记为等待用户回复的特殊响应",
+    returns="Special response indicating awaiting user input",
     timeout_ms=5000,
 )
 async def clarify(

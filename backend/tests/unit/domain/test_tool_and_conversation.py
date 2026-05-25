@@ -2,7 +2,7 @@
 
 import pytest
 from src.domain.entities.tool import ToolDef, ToolParameter
-from src.domain.entities.skill_def import SkillDef, SkillStep
+from src.skills.skill_def import SkillDef, SkillStep
 from src.domain.entities.output_schema import OutputSchema
 from src.domain.entities.conversation import ConversationMessage, MessageGroup, ToolCall
 

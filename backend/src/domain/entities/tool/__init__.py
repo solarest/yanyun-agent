@@ -7,9 +7,9 @@
 """
 
 from src.domain.entities.tool.call import ToolCall, ToolCallState
-from src.domain.entities.tool.context import ToolContext, ToolResult
+from src.domain.value_objects.tool_context import ToolContext, ToolResult
 from src.domain.entities.tool.definition import ToolDef, ToolParameter
-from src.domain.entities.tool.policy import ToolPolicy
+from src.domain.value_objects.tool_policy import ToolPolicy
 from src.domain.entities.tool.registered import RegisteredTool, ToolFunction
 
 __all__ = [

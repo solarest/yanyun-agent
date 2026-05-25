@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends
 
 from src.application.dtos.llm_dto import LLMProviderInfoDTO
-from src.domain.entities.llm import LLMProvider
+from src.domain.value_objects.llm_config import LLMProvider
 from src.presentation.dependencies import get_llm_settings
 from src.infrastructure.llm.config import LLMSettings
 

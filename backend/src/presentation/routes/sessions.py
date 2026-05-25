@@ -13,8 +13,8 @@ from src.application.dtos.session_dto import (
     UpdateSessionDTO,
 )
 from src.application.use_cases.session_management import SessionManagementUseCase
-from src.domain.entities.session import Session
-from src.domain.entities.session_message import SessionMessage
+from src.domain.aggregates.session.session import Session
+from src.domain.aggregates.session.session_message import SessionMessage
 from src.domain.repositories.agent_repository import IAgentRepository
 from src.domain.repositories.session_message_repository import (
     ISessionMessageRepository,
@@ -25,6 +25,7 @@ from src.presentation.dependencies import (
     get_session_message_repository,
     get_session_repository,
     get_llm_provider,
+    get_llm_settings,
 )
 
 router = APIRouter(prefix="/api/agents/{agent_id}/sessions", tags=["sessions"])
@@ -248,6 +249,7 @@ async def send_message(
     bg_event_emitter = request.app.state.event_service
     bg_tool_registry = create_tool_registry()
     bg_llm_provider = get_llm_provider()
+    bg_llm_settings = get_llm_settings()
 
     use_case = SendMessageUseCase(
         agent_repo=bg_agent_repo,
@@ -258,6 +260,7 @@ async def send_message(
         tool_registry=bg_tool_registry,
         skill_repo=bg_skill_repo,
         llm_provider=bg_llm_provider,
+        default_model=bg_llm_settings.default_model,
         running_tasks=request.app.state.running_tasks,
     )
 

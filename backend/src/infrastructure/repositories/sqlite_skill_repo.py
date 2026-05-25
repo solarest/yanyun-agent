@@ -8,8 +8,8 @@ from uuid import uuid4
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.domain.entities.skill_def import SkillDef, SkillStep
-from src.domain.repositories.skill_repository import ISkillRepository
+from src.skills.skill_def import SkillDef, SkillStep
+from src.skills.skill_repository import ISkillRepository
 from src.infrastructure.database.models.agent_model import SkillModel
 
 

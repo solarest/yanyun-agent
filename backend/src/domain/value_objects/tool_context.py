@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 
-@dataclass
+@dataclass(frozen=True)
 class ToolResult:
     """工具执行结果
 

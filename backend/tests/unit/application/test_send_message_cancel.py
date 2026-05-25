@@ -3,8 +3,8 @@ import asyncio
 import pytest
 
 from src.application.use_cases.send_message import SendMessageUseCase
-from src.domain.entities.agent import Agent
-from src.domain.entities.task import Task, TaskConfig, TaskStatus
+from src.domain.aggregates.agent.agent import Agent
+from src.domain.aggregates.task.task import Task, TaskConfig, TaskStatus
 
 
 class RecordingEmitter:
@@ -147,8 +147,8 @@ async def test_run_agent_loop_emits_cancelled_terminal_event(monkeypatch) -> Non
     )
 
     monkeypatch.setattr(
-        "src.application.use_cases.send_message.AgentWorkflowBuilder.build",
-        lambda self: BlockingGraph(),
+        "src.infrastructure.agent.workflow_builder.AgentWorkflowBuilder.build",
+        lambda: BlockingGraph(),
     )
 
     runner = asyncio.create_task(

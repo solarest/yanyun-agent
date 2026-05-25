@@ -14,9 +14,9 @@ from src.infrastructure.tools.decorator import tool
 
 @tool(
     name="file_read",
-    description="读取指定路径的文件内容。支持文本文件。",
+    description="Read file content from a specified path. Supports text files.",
     category="file",
-    returns="文件内容文本",
+    returns="File content as text",
     timeout_ms=10000,
 )
 async def file_read(
@@ -68,9 +68,9 @@ async def file_read(
 
 @tool(
     name="file_write",
-    description="写入内容到指定文件。如果文件不存在则创建，存在则覆盖。",
+    description="Write content to a specified file. Creates the file if it doesn't exist, overwrites if it does.",
     category="file",
-    returns="写入结果确认",
+    returns="Write result confirmation",
     timeout_ms=10000,
 )
 async def file_write(
@@ -107,9 +107,9 @@ async def file_write(
 
 @tool(
     name="file_search",
-    description="在工作目录中搜索文件。支持 glob 模式匹配文件名，或在文件内容中搜索关键词。",
+    description="Search for files in the working directory. Supports glob pattern matching for filenames, or searching for keywords in file content.",
     category="file",
-    returns="匹配的文件路径列表或包含关键词的行",
+    returns="Matching file path list or lines containing the keyword",
     timeout_ms=15000,
 )
 async def file_search(
@@ -158,10 +158,10 @@ async def file_search(
 @tool(
     name="file_grep",
     description=(
-        "在工作目录文件内容中执行 grep 搜索。支持正则表达式、大小写控制、上下文行和 glob 文件范围。"
+        "Execute grep search in file contents within the working directory. Supports regex, case sensitivity control, context lines, and glob file scoping."
     ),
     category="file",
-    returns="匹配行列表，格式为 path:line: content",
+    returns="Matching lines in format path:line: content",
     timeout_ms=15000,
 )
 async def file_grep(

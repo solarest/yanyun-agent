@@ -4,13 +4,13 @@ from unittest.mock import AsyncMock
 from langchain_core.messages import AIMessage, HumanMessage
 
 from src.application.use_cases.send_message import SendMessageUseCase
-from src.domain.entities.agent import Agent
-from src.domain.entities.session_message import (
+from src.domain.aggregates.agent.agent import Agent
+from src.domain.aggregates.session.session_message import (
     MessageStatus,
     SessionMessage,
     SessionMessageRole,
 )
-from src.domain.entities.task import Task, TaskConfig, TaskStatus
+from src.domain.aggregates.task.task import Task, TaskConfig, TaskStatus
 
 
 class FakeAgentRepository:
@@ -196,9 +196,6 @@ async def test_sub_agent_execute_reuses_task_and_passes_runtime_state() -> None:
 
 @pytest.mark.asyncio
 async def test_execute_passes_effective_default_model_into_runtime_state(monkeypatch) -> None:
-    monkeypatch.setenv("LLM_DEFAULT_MODEL", "qwen3-max")
-    monkeypatch.setenv("LLM_DEFAULT_PROVIDER", "qwen")
-
     use_case = SendMessageUseCase(
         agent_repo=FakeAgentRepository(),
         session_repo=FakeSessionRepository(),
@@ -206,6 +203,7 @@ async def test_execute_passes_effective_default_model_into_runtime_state(monkeyp
         task_repo=FakeTaskRepository(),
         event_emitter=FakeEmitter(),
         tool_registry=FakeToolRegistry(),
+        default_model="qwen3-max",
     )
     use_case._run_agent_loop = AsyncMock()  # type: ignore[method-assign]
 
@@ -251,8 +249,8 @@ async def test_sub_agent_runtime_uses_only_assigned_task_and_stores_final_answer
     )
 
     monkeypatch.setattr(
-        "src.application.use_cases.send_message.AgentWorkflowBuilder.build",
-        lambda self: graph,
+        "src.infrastructure.agent.workflow_builder.AgentWorkflowBuilder.build",
+        lambda: graph,
     )
 
     await use_case._run_agent_loop(

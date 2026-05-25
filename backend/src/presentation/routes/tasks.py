@@ -9,7 +9,7 @@ from src.application.dtos.task_dto import (
     TaskListResponseDTO,
     TaskResponseDTO,
 )
-from src.domain.entities.task import Task, TaskConfig, TaskStatus
+from src.domain.aggregates.task.task import Task, TaskConfig, TaskStatus
 from src.domain.repositories.agent_repository import IAgentRepository
 from src.domain.repositories.task_repository import ITaskRepository
 from src.presentation.dependencies import get_agent_repository, get_task_repository

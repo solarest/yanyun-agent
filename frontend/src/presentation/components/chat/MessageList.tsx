@@ -1,7 +1,7 @@
 /**
  * 表现层 - 消息列表
- * 
- * 渲染会话消息列表，支持自动滚动和澄清卡片显示。
+ *
+ * 时间线布局渲染会话消息，支持自动滚动和澄清卡片显示。
  */
 import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import type { SessionMessage } from '@domain/entities/session';
@@ -67,13 +67,11 @@ export const MessageList: React.FC<MessageListProps> = ({
     if (isStreaming || renderItems.length === 0) return null;
     const lastMessage = renderItems[renderItems.length - 1].message;
     if (lastMessage.role !== 'assistant') return null;
-    
-    // 从 message.content 中解析 clarify 问题（支持单个或多个）
+
     const allPrompts = parseAllClarifyPrompts(lastMessage.content);
     return allPrompts.length > 0 ? lastMessage.id : null;
   }, [isStreaming, renderItems]);
 
-  // 自动滚动：仅当新增消息且用户在底部附近时触发
   useEffect(() => {
     if (messages.length > previousMessageCountRef.current && shouldAutoScrollRef.current) {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -98,9 +96,12 @@ export const MessageList: React.FC<MessageListProps> = ({
     <div
       ref={containerRef}
       onScroll={handleScroll}
-      className="flex-1 overflow-y-auto px-4 py-4"
+      className="flex-1 overflow-y-auto px-4 py-6"
     >
-      <div className="mx-auto max-w-3xl space-y-4">
+      <div className="mx-auto max-w-3xl relative">
+        {/* 垂直时间线 */}
+        <div className="absolute left-3 top-2 bottom-2 w-px bg-border/60" />
+
         {renderItems.map(({ message: msg, embeddedSubAgents }) => (
           <MessageBubble
             key={msg.id}

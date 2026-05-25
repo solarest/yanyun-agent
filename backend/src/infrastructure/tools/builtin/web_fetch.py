@@ -19,9 +19,9 @@ logger = logging.getLogger(__name__)
 
 @tool(
     name="web_fetch",
-    description="从指定 URL 获取网页 HTML 内容。当需要分析网页结构、提取特定信息或获取网页源码时使用。",
+    description="Fetch HTML content from a specified URL. Use when you need to analyze webpage structure, extract specific information, or obtain page source.",
     category="web_search",
-    returns="网页的 HTML 内容，可能被截断以控制大小",
+    returns="HTML content of the webpage, may be truncated to control size",
     timeout_ms=30000,
     max_calls_per_minute=10,
 )

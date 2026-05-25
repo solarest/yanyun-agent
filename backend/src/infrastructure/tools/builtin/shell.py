@@ -16,9 +16,9 @@ logger = logging.getLogger(__name__)
 
 @tool(
     name="shell",
-    description="执行 shell 命令。可用于运行脚本、查询系统信息、安装依赖等操作。注意：危险命令可能被安全策略拦截。",
+    description="Execute a shell command. Can be used to run scripts, query system info, install dependencies, etc. Note: dangerous commands may be blocked by security policy.",
     category="system",
-    returns="命令的标准输出和标准错误",
+    returns="Standard output and standard error of the command",
     timeout_ms=30000,
     max_calls_per_minute=30,
     sandboxed=True,

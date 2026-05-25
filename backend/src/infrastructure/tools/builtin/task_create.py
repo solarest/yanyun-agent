@@ -14,9 +14,9 @@ logger = logging.getLogger(__name__)
 
 @tool(
     name="task_create",
-    description="创建多步骤任务记录，用于跟踪复杂任务的执行进度。在执行多步骤工作流前先创建任务。",
+    description="Create a multi-step task list to track execution progress of complex tasks. Create tasks before starting multi-step workflows.",
     category="task",
-    returns="创建的任务列表",
+    returns="Created task list",
     timeout_ms=5000,
 )
 async def task_create(
