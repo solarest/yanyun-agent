@@ -22,6 +22,8 @@ OPENAI_COMPATIBLE_PRICING = {
     "llama3-8b-8192": (0.00005, 0.00008),
     # DeepSeek
     "deepseek-chat": (0.00014, 0.00028),
+    "deepseek-v4-pro": (0.000435, 0.00087),
+    "deepseek-v4-flash": (0.00014, 0.00028),
     # 通义千问
     "qwen-turbo": (0.00028, 0.00083),
     "qwen-plus": (0.00056, 0.00166),
@@ -74,12 +76,17 @@ class OpenAICompatibleProvider(ProviderAdapter):
         if api_key:
             kwargs["api_key"] = api_key
 
-        # 深度思考模式参数（通过 extra_body 传递，因为 enable_thinking 非 OpenAI 标准参数）
+        # 深度思考模式参数
         if config.enable_thinking:
             extra_body = kwargs.get("extra_body", {})
-            extra_body["enable_thinking"] = True
-            if config.thinking_budget:
-                extra_body["thinking_budget"] = config.thinking_budget
+            if config.provider == LLMProvider.DEEPSEEK:
+                # DeepSeek V4 使用 thinking 对象格式
+                extra_body["thinking"] = {"type": "enabled"}
+            else:
+                # 其他提供商使用 enable_thinking 布尔参数
+                extra_body["enable_thinking"] = True
+                if config.thinking_budget:
+                    extra_body["thinking_budget"] = config.thinking_budget
             kwargs["extra_body"] = extra_body
 
         # 合并 extra 参数

@@ -134,6 +134,7 @@ class SessionMessageModel(Base):
     task_id = Column(String(36), nullable=True)
     role = Column(String(20), nullable=False)
     content = Column(Text, nullable=False, default="")
+    thinking_content = Column(Text, nullable=False, default="")
     tool_calls = Column(JSON, default=[])
     tool_results = Column(JSON, default=[])
     status = Column(String(20), nullable=False, default="completed")

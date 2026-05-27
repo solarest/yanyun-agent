@@ -55,6 +55,10 @@ class AgentState(TypedDict):
     # === 系统提示词 ===
     system_prompt: str
 
+    # === 深度思考 ===
+    thinking_text: str
+    """LLM 深度思考/推理内容（如 DeepSeek reasoning_content）"""
+
     # === 结果 ===
     final_result: Optional[str]
     error: Optional[str]

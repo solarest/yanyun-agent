@@ -98,6 +98,11 @@ def init_db():
         column="file_path",
         column_def="VARCHAR(500) DEFAULT ''",
     )
+    _ensure_column(
+        table="session_messages",
+        column="thinking_content",
+        column_def="TEXT NOT NULL DEFAULT ''",
+    )
 
 
 def _ensure_column(table: str, column: str, column_def: str) -> None:

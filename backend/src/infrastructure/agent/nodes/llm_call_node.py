@@ -130,6 +130,7 @@ class LLMCallNode(BaseNode):
                 "messages": [AIMessage(content=full_text or "LLM call timed out.")],
                 "pending_tool_calls": [],
                 "current_llm_text": full_text,
+                "thinking_text": thinking_text,
                 "phase": "thinking",
                 "current_turn": current_turn,
                 "error": f"LLM streaming timed out after {llm_timeout_sec}s",
@@ -196,6 +197,7 @@ class LLMCallNode(BaseNode):
             # 上一轮工具执行结果在此处失效,避免 observe 误走 Mode B。
             "last_executed_tool_call_ids": [],
             "current_llm_text": full_text,
+            "thinking_text": thinking_text,
             "phase": "complete" if is_complete else "thinking",
             "current_turn": current_turn,
             "should_end": should_end,

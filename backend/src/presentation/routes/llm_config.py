@@ -22,7 +22,7 @@ def _get_models_for_provider(provider: LLMProvider) -> list[str]:
         ],
         LLMProvider.OLLAMA: ["llama3", "mistral", "phi3"],
         LLMProvider.GROQ: ["llama3-70b-8192", "llama3-8b-8192"],
-        LLMProvider.DEEPSEEK: ["deepseek-chat"],
+        LLMProvider.DEEPSEEK: ["deepseek-v4-pro", "deepseek-v4-flash"],
         LLMProvider.QWEN: ["qwen-turbo", "qwen-plus", "qwen-max"],
         LLMProvider.ZHIPU: ["glm-4", "glm-3-turbo"],
     }

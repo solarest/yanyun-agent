@@ -51,6 +51,8 @@ def _to_message_response(msg: SessionMessage) -> SessionMessageResponseDTO:
         task_id=msg.task_id,
         role=msg.role.value,
         content=msg.content,
+        thinking_content=msg.thinking_content,
+        has_thinking=msg.has_thinking,
         tool_calls=msg.tool_calls,
         tool_results=msg.tool_results,
         status=msg.status.value,

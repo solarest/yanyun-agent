@@ -49,6 +49,8 @@ def _build_message_event_payload(message: SessionMessage) -> Dict[str, Any]:
             "task_id": message.task_id,
             "role": message.role.value,
             "content": message.content,
+            "thinking_content": message.thinking_content,
+            "has_thinking": message.has_thinking,
             "tool_calls": message.tool_calls,
             "tool_results": message.tool_results,
             "status": message.status.value,
@@ -500,6 +502,8 @@ class SendMessageUseCase:
             )
         terminal_result = final_result or assistant_content
 
+        thinking_text = result.get("thinking_text", "")
+
         assistant_msg: Optional[SessionMessage] = None
         if persist_session_messages:
             assistant_msg = SessionMessage(
@@ -507,6 +511,8 @@ class SendMessageUseCase:
                 task_id=task.id,
                 role=SessionMessageRole.ASSISTANT,
                 content=assistant_content,
+                thinking_content=thinking_text,
+                has_thinking=bool(thinking_text),
                 tool_calls=all_tool_calls,
                 tool_results=all_tool_results,
                 status=MessageStatus.ERROR if error else MessageStatus.COMPLETED,
