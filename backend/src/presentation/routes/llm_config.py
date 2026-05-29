@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends
 
 from src.application.dtos.llm_dto import LLMProviderInfoDTO
-from src.domain.entities.llm import LLMProvider
+from src.domain.value_objects.llm_config import LLMProvider
 from src.presentation.dependencies import get_llm_settings
 from src.infrastructure.llm.config import LLMSettings
 
@@ -22,7 +22,7 @@ def _get_models_for_provider(provider: LLMProvider) -> list[str]:
         ],
         LLMProvider.OLLAMA: ["llama3", "mistral", "phi3"],
         LLMProvider.GROQ: ["llama3-70b-8192", "llama3-8b-8192"],
-        LLMProvider.DEEPSEEK: ["deepseek-chat"],
+        LLMProvider.DEEPSEEK: ["deepseek-v4-pro", "deepseek-v4-flash"],
         LLMProvider.QWEN: ["qwen-turbo", "qwen-plus", "qwen-max"],
         LLMProvider.ZHIPU: ["glm-4", "glm-3-turbo"],
     }

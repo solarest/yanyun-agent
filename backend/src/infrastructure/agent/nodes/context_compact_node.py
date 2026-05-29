@@ -16,7 +16,7 @@ import logging
 from langchain_core.messages import HumanMessage, RemoveMessage, SystemMessage
 from langgraph.types import RunnableConfig
 
-from src.domain.entities.agent_state import AgentState
+from src.domain.aggregates.agent.agent_state import AgentState
 from src.infrastructure.agent.nodes.base_node import BaseNode, NodeContext
 
 logger = logging.getLogger(__name__)

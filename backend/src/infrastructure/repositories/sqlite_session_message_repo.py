@@ -5,7 +5,7 @@ from typing import List, Optional
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.domain.entities.session_message import (
+from src.domain.aggregates.session.session_message import (
     MessageStatus,
     SessionMessage,
     SessionMessageRole,
@@ -47,6 +47,7 @@ class SQLiteSessionMessageRepository(ISessionMessageRepository):
             raise ValueError(f"SessionMessage {entity.id} not found")
 
         model.content = entity.content
+        model.thinking_content = entity.thinking_content
         model.tool_calls = entity.tool_calls
         model.tool_results = entity.tool_results
         model.status = entity.status.value
@@ -85,6 +86,8 @@ class SQLiteSessionMessageRepository(ISessionMessageRepository):
             task_id=model.task_id,
             role=SessionMessageRole(model.role),
             content=model.content,
+            thinking_content=model.thinking_content or "",
+            has_thinking=bool(model.thinking_content),
             tool_calls=model.tool_calls or [],
             tool_results=model.tool_results or [],
             status=MessageStatus(model.status),
@@ -100,6 +103,7 @@ class SQLiteSessionMessageRepository(ISessionMessageRepository):
             task_id=entity.task_id,
             role=entity.role.value,
             content=entity.content,
+            thinking_content=entity.thinking_content,
             tool_calls=entity.tool_calls,
             tool_results=entity.tool_results,
             status=entity.status.value,

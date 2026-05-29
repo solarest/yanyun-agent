@@ -658,7 +658,11 @@ export const useChat = ({
       const savedMsg = data.message;
       if (savedMsg) {
         onMessageSaved?.(savedMsg);
-        updateMessage(mainMessageIdRef.current, () => savedMsg);
+        updateMessage(mainMessageIdRef.current, (prevMsg) => ({
+          ...savedMsg,
+          thinking_content: prevMsg.thinking_content || savedMsg.thinking_content || '',
+          has_thinking: prevMsg.has_thinking || savedMsg.has_thinking || false,
+        }));
         mainMessageIdRef.current = savedMsg.id;
       }
     });

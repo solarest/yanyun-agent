@@ -10,24 +10,26 @@ from typing import Any, Dict, Optional
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from src.application.use_cases.agent_workflow import AgentWorkflowBuilder
-from src.domain.entities.session_message import (
+from src.domain.interfaces.agent_workflow import IAgentWorkflowBuilder
+from src.domain.aggregates.session.session_message import (
     MessageStatus,
     SessionMessage,
     SessionMessageRole,
 )
-from src.domain.entities.task import Task, TaskConfig, TaskStatus
+from src.domain.aggregates.task.task import Task, TaskConfig, TaskStatus
 from src.domain.interfaces.llm_provider import ILLMProvider
 from src.domain.repositories.agent_repository import IAgentRepository
 from src.domain.repositories.session_message_repository import (
     ISessionMessageRepository,
 )
 from src.domain.repositories.session_repository import ISessionRepository
-from src.domain.repositories.skill_repository import ISkillRepository
+from src.skills.skill_repository import ISkillRepository
 from src.domain.repositories.task_repository import ITaskRepository
 from src.domain.repositories.tool_registry import IToolRegistry
 from src.domain.services import IEventEmitter, ProxyEventEmitter
-from src.domain.entities.prompt_template import PromptTemplate
+from src.domain.events.task_events import TaskCompleted, TaskCreated, TaskFailed
+from src.domain.repositories.event_publisher import IEventPublisher
+from src.domain.value_objects.prompt_template import PromptTemplate
 from src.domain.services.prompt_assemble_service import PromptAssembleService
 
 logger = logging.getLogger(__name__)
@@ -47,6 +49,8 @@ def _build_message_event_payload(message: SessionMessage) -> Dict[str, Any]:
             "task_id": message.task_id,
             "role": message.role.value,
             "content": message.content,
+            "thinking_content": message.thinking_content,
+            "has_thinking": message.has_thinking,
             "tool_calls": message.tool_calls,
             "tool_results": message.tool_results,
             "status": message.status.value,
@@ -92,6 +96,9 @@ class SendMessageUseCase:
         llm_provider: Optional[ILLMProvider] = None,
         running_tasks: Optional[dict[str, asyncio.Task]] = None,
         sub_agent_launcher: Optional[Any] = None,
+        event_publisher: Optional[IEventPublisher] = None,
+        workflow_builder: Optional[IAgentWorkflowBuilder] = None,
+        default_model: str = "gpt-4",
     ):
         self.agent_repo = agent_repo
         self.session_repo = session_repo
@@ -103,6 +110,9 @@ class SendMessageUseCase:
         self.llm_provider = llm_provider
         self.running_tasks = running_tasks if running_tasks is not None else {}
         self.sub_agent_launcher = sub_agent_launcher
+        self.event_publisher = event_publisher
+        self.workflow_builder = workflow_builder
+        self.default_model = default_model
 
     async def execute(
         self,
@@ -175,9 +185,7 @@ class SendMessageUseCase:
                 await self.session_repo.update(session)
 
         # 3. 创建 Task
-        from src.infrastructure.llm.config import LLMSettings
-
-        effective_model = model or LLMSettings().default_model
+        effective_model = model or self.default_model
         if sub_task is not None:
             task = sub_task
             task.status = TaskStatus.RUNNING
@@ -196,6 +204,14 @@ class SendMessageUseCase:
             )
         if self.task_repo and sub_task is None:
             task = await self.task_repo.add(task)
+
+        if self.event_publisher and not is_sub_agent:
+            await self.event_publisher.publish(TaskCreated(
+                task_id=task.id,
+                agent_id=agent_id,
+                session_id=session_id,
+                model=effective_model,
+            ))
 
         # 4. 启动后台 runner
         asyncio_task: asyncio.Task | None = None
@@ -290,7 +306,7 @@ class SendMessageUseCase:
             return agent_system_prompt
 
         # Sub-agent 模式：复用父 prompt + 添加任务说明
-        from src.domain.services.sub_agent_orchestrator import SubAgentOrchestrator
+        from src.subagent.sub_agent_orchestrator import SubAgentOrchestrator
         orchestrator = SubAgentOrchestrator()
         return orchestrator.build_sub_agent_system_prompt(
             parent_system_prompt=parent_system_prompt or "",
@@ -315,10 +331,12 @@ class SendMessageUseCase:
             return self.tool_registry
 
         # Sub-agent 模式：排除特定工具
-        from src.domain.services.sub_agent_orchestrator import SubAgentOrchestrator
+        from src.subagent.sub_agent_orchestrator import SubAgentOrchestrator
+        from src.infrastructure.tools.registry import ToolRegistry
         orchestrator = SubAgentOrchestrator()
         return orchestrator.create_sub_agent_tool_registry(
             self.tool_registry,
+            registry_factory=lambda: ToolRegistry(),
             allowed_tools=allowed_tools,
         )
 
@@ -484,6 +502,8 @@ class SendMessageUseCase:
             )
         terminal_result = final_result or assistant_content
 
+        thinking_text = result.get("thinking_text", "")
+
         assistant_msg: Optional[SessionMessage] = None
         if persist_session_messages:
             assistant_msg = SessionMessage(
@@ -491,6 +511,8 @@ class SendMessageUseCase:
                 task_id=task.id,
                 role=SessionMessageRole.ASSISTANT,
                 content=assistant_content,
+                thinking_content=thinking_text,
+                has_thinking=bool(thinking_text),
                 tool_calls=all_tool_calls,
                 tool_results=all_tool_results,
                 status=MessageStatus.ERROR if error else MessageStatus.COMPLETED,
@@ -526,8 +548,20 @@ class SendMessageUseCase:
             )
         if error:
             await emitter.emit(task.id, "task:failed", {"error": error})
+            if self.event_publisher:
+                await self.event_publisher.publish(TaskFailed(
+                    task_id=task.id,
+                    error=error,
+                    failed_at=task.completed_at,
+                ))
         else:
             await emitter.emit(task.id, "task:completed", {"result": terminal_result})
+            if self.event_publisher:
+                await self.event_publisher.publish(TaskCompleted(
+                    task_id=task.id,
+                    result=terminal_result or "",
+                    completed_at=task.completed_at,
+                ))
 
     async def _run_agent_loop(
         self,
@@ -554,8 +588,7 @@ class SendMessageUseCase:
             sub_task_id=task.id,
         )
         if model is None:
-            from src.infrastructure.llm.config import LLMSettings
-            model = LLMSettings().default_model
+            model = self.default_model
 
         try:
             # 步骤 A: 构建 system_prompt（使用 11 层 Prompt 架构）
@@ -690,7 +723,11 @@ class SendMessageUseCase:
             }
 
             # 步骤 E: 编译并执行 LangGraph
-            graph = AgentWorkflowBuilder().build()
+            if self.workflow_builder:
+                graph = self.workflow_builder.build()
+            else:
+                from src.infrastructure.agent.workflow_builder import AgentWorkflowBuilder
+                graph = AgentWorkflowBuilder.build()
 
             graph_config = {
                 "configurable": {

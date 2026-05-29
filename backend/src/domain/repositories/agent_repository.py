@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from typing import Optional
 
-from src.domain.entities.agent import Agent
+from src.domain.aggregates.agent.agent import Agent
 
 
 class IAgentRepository(ABC):

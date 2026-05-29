@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
-from src.domain.entities.llm import LLMConfig, LLMProvider
+from src.domain.value_objects.llm_config import LLMConfig, LLMProvider
 from src.infrastructure.llm.providers.base import ProviderAdapter
 
 if TYPE_CHECKING:

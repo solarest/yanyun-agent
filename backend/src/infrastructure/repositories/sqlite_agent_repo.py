@@ -6,7 +6,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.domain.entities.agent import Agent, CONFIG_FILES
+from src.domain.aggregates.agent.agent import Agent, CONFIG_FILES
 from src.domain.repositories.agent_repository import IAgentRepository
 from src.infrastructure.database.models.agent_model import AgentModel
 

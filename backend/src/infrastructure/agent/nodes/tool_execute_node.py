@@ -10,7 +10,7 @@ import logging
 from langchain_core.messages import ToolMessage
 from langgraph.types import RunnableConfig
 
-from src.domain.entities.agent_state import AgentState
+from src.domain.aggregates.agent.agent_state import AgentState
 from src.domain.entities.tool import ToolContext
 from src.infrastructure.agent.nodes.base_node import BaseNode, NodeContext
 

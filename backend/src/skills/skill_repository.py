@@ -1,9 +1,9 @@
-"""领域层 - Skill 仓储接口"""
+"""Skills 有界上下文 - Skill 仓储接口"""
 
 from abc import ABC, abstractmethod
 from typing import Optional
 
-from src.domain.entities.skill_def import SkillDef
+from src.skills.skill_def import SkillDef
 
 
 class ISkillRepository(ABC):

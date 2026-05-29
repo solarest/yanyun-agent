@@ -1,4 +1,4 @@
-"""领域层 - SKILL.md 解析器
+"""Skills 有界上下文 - SKILL.md 解析器
 
 从 SKILL.md 内容中提取 name 和 description。
 解析规则：

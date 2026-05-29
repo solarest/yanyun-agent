@@ -57,6 +57,8 @@ export const MultiClarifyCard: React.FC<MultiClarifyCardProps> = ({
   const answeredCount = Object.keys(answers).length;
   const allAnswered = answeredCount === totalQuestions && totalQuestions > 0;
   const canSubmit = !!onAnswer && !disabled && !submitted && allAnswered;
+
+  if (submitted) return null;
   
   const handleOptionSelect = useCallback((questionIndex: number, answer: string) => {
     setAnswers((prev) => ({

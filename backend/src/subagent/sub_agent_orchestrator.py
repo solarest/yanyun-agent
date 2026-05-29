@@ -1,4 +1,4 @@
-"""领域服务 - Sub-Agent 编排器
+"""SubAgent 有界上下文 - Sub-Agent 编排器
 
 负责 sub-agent 的领域逻辑：
 - 构建 sub-agent 的 system prompt
@@ -6,7 +6,7 @@
 - 创建过滤后的工具注册表（排除 session_spawn 和 task 系列工具）
 """
 
-from typing import Optional
+from typing import Callable, Optional
 
 from src.domain.repositories.tool_registry import IToolRegistry
 
@@ -133,6 +133,7 @@ class SubAgentOrchestrator:
     def create_sub_agent_tool_registry(
         self,
         parent_registry: IToolRegistry,
+        registry_factory: Callable[[], IToolRegistry],
         allowed_tools: Optional[list[str]] = None,
     ) -> IToolRegistry:
         """创建 sub-agent 的工具注册表
@@ -142,22 +143,18 @@ class SubAgentOrchestrator:
 
         Args:
             parent_registry: 父 agent 的工具注册表
+            registry_factory: 工具注册表工厂（由基础设施层提供）
             allowed_tools: 允许的工具列表（可选，默认排除 SUB_AGENT_EXCLUDED_TOOLS）
 
         Returns:
             sub-agent 的工具注册表
         """
-        from src.infrastructure.tools.registry import ToolRegistry
-
-        # 复用父注册表的 pipeline
-        sub_registry = ToolRegistry()
+        sub_registry = registry_factory()
 
         for tool in parent_registry.list_tools():
-            # 如果指定了 allowed_tools，只包含列表中的工具
             if allowed_tools is not None:
                 if tool.name not in allowed_tools:
                     continue
-            # 否则排除 SUB_AGENT_EXCLUDED_TOOLS 中的工具
             elif tool.name in SUB_AGENT_EXCLUDED_TOOLS:
                 continue
 

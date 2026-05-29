@@ -39,3 +39,17 @@ class Session(Entity):
             self.title = first_message[:50].strip()
             if len(first_message) > 50:
                 self.title += "..."
+
+    def archive(self) -> None:
+        """归档会话"""
+        self.status = SessionStatus.ARCHIVED
+        self.updated_at = datetime.now()
+
+    @classmethod
+    def create(cls, agent_id: str, title: str = "") -> "Session":
+        """创建新会话（工厂方法）"""
+        return cls(
+            agent_id=agent_id,
+            title=title,
+            status=SessionStatus.ACTIVE,
+        )

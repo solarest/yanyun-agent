@@ -1,4 +1,4 @@
-"""领域层 - SkillDef 技能定义实体"""
+"""Skills 有界上下文 - SkillDef 技能定义实体"""
 
 from dataclasses import dataclass, field
 from datetime import datetime

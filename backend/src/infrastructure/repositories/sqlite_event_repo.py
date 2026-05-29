@@ -5,7 +5,7 @@ from typing import List
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.application.dtos.event_dto import SSEEventDTO, normalize_event_type
+from src.domain.services.event_utils import normalize_event_type
 from src.domain.entities.event import Event
 from src.domain.repositories.event_repository import IEventRepository
 from src.infrastructure.database.models.agent_model import EventModel
@@ -14,9 +14,8 @@ from src.infrastructure.database.models.agent_model import EventModel
 class SQLiteEventRepository(IEventRepository):
     """SQLite 事件仓储实现
 
-    注意：对外暴露的 SSEEventDTO.id 使用 EventModel.task_seq（任务级序号），
-    而非数据库自增主键 EventModel.id，以保证回放事件与实时事件 id 体系一致，
-    避免 sse_stream 跳过逻辑误丢实时事件。
+    注意：事件序列号使用 EventModel.task_seq（任务级序号），
+    而非数据库自增主键 EventModel.id，以保证回放事件与实时事件 id 体系一致。
     """
 
     def __init__(self, session: AsyncSession):
@@ -85,13 +84,4 @@ class SQLiteEventRepository(IEventRepository):
             sequence=model.task_seq,
             task_id=model.task_id,
             timestamp=model.created_at,
-        )
-
-    def _to_dto(self, model: EventModel) -> SSEEventDTO:
-        """数据库模型转 DTO（id 取 task_seq，与实时事件保持同一体系）"""
-        return SSEEventDTO(
-            id=str(model.task_seq),
-            event_type=normalize_event_type(model.event_type),
-            data=model.event_data,
-            timestamp=model.created_at.isoformat(),
         )

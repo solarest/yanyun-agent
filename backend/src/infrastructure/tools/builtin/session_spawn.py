@@ -24,8 +24,9 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, AsyncIterator, Optional
 
-from src.domain.entities.task import Task, TaskConfig, TaskStatus
+from src.domain.aggregates.task.task import Task, TaskConfig, TaskStatus
 from src.domain.entities.tool import ToolContext, ToolResult
+from src.subagent.sub_agent_launcher import ISubAgentLauncher
 from src.infrastructure.tools.decorator import tool
 
 logger = logging.getLogger(__name__)
@@ -85,6 +86,7 @@ async def _sub_agent_runtime_scope(
             tool_registry=send_message_use_case.tool_registry,
             skill_repo=SQLiteSkillRepository(db_session),
             llm_provider=send_message_use_case.llm_provider,
+            default_model=send_message_use_case.default_model,
             running_tasks=send_message_use_case.running_tasks,
         )
         yield isolated_use_case, isolated_task_repo
@@ -104,13 +106,14 @@ async def _emit_safely(event_emitter: Any, task_id: str, event_type: str, payloa
 @tool(
     name="session_spawn",
     description=(
-        "生成一个 sub-agent 执行一个原子、独立、可并行的信息获取子任务。"
-        "重要：一次 session_spawn 只处理一个子任务；不要把多个日期、多个文件、多个主题或多个查询合并到同一个 sub-agent。"
-        "当任务可拆分时，主 agent 应在同一轮并行调用多个 session_spawn，例如近 10 天天气应创建 10 个 sub-agent，"
-        "每个负责 1 天，然后由主 agent 汇总结果。同步阻塞模式：单个调用等待该 sub-agent 完成；多个调用会并行执行。"
+        "Spawn a sub-agent to execute an atomic, independent, parallelizable information-gathering subtask. "
+        "Important: One session_spawn handles exactly one subtask; do not combine multiple dates, files, topics, or queries into a single sub-agent. "
+        "When a task is divisible, the main agent should invoke multiple session_spawn calls in parallel within the same turn. "
+        "For example, for 10 days of weather, create 10 sub-agents, each handling 1 day, then the main agent aggregates the results. "
+        "Synchronous blocking mode: a single call waits for its sub-agent to complete; multiple calls execute in parallel."
     ),
     category="session",
-    returns="Sub-agent 执行结果",
+    returns="Sub-agent execution result",
     # 装饰器超时需大于内部轮询 max_wait（300s），让内部 TimeoutError 优先触发以返回友好错误
     timeout_ms=600000,
     max_calls_per_minute=10,
@@ -166,12 +169,12 @@ async def session_spawn(
             error="missing_context",
         )
 
-    send_message_use_case = context.extra.get("send_message_use_case")
-    if not send_message_use_case:
+    sub_agent_launcher: ISubAgentLauncher = context.extra.get("send_message_use_case")  # type: ignore[assignment]
+    if not sub_agent_launcher:
         return ToolResult(
-            output="Error: send_message_use_case not available in context",
+            output="Error: sub_agent_launcher not available in context",
             success=False,
-            error="missing_use_case",
+            error="missing_launcher",
         )
 
     task_repo = context.extra.get("task_repo")
@@ -210,7 +213,7 @@ async def session_spawn(
 
         effective_model = parent_state.get("model") or LLMSettings().default_model
 
-        async with _sub_agent_runtime_scope(send_message_use_case, task_repo) as (
+        async with _sub_agent_runtime_scope(sub_agent_launcher, task_repo) as (
             runtime_use_case,
             runtime_task_repo,
         ):

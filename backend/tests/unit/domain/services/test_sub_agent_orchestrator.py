@@ -1,7 +1,7 @@
 """单元测试 - SubAgentOrchestrator 领域服务"""
 
 import pytest
-from src.domain.services.sub_agent_orchestrator import (
+from src.subagent.sub_agent_orchestrator import (
     SubAgentOrchestrator,
     SUB_AGENT_EXCLUDED_TOOLS,
 )
@@ -111,7 +111,10 @@ class TestSubAgentOrchestrator:
         parent_registry = ToolRegistry()
         parent_registry.auto_register_collected()
 
-        sub_registry = self.orchestrator.create_sub_agent_tool_registry(parent_registry)
+        sub_registry = self.orchestrator.create_sub_agent_tool_registry(
+            parent_registry,
+            registry_factory=lambda: ToolRegistry(),
+        )
 
         # 验证排除的工具
         assert sub_registry.resolve("session_spawn") is None
@@ -136,6 +139,7 @@ class TestSubAgentOrchestrator:
         # 只允许 test_tool_a
         sub_registry = self.orchestrator.create_sub_agent_tool_registry(
             parent_registry,
+            registry_factory=lambda: ToolRegistry(),
             allowed_tools=["test_tool_a"],
         )
 
@@ -154,6 +158,7 @@ class TestSubAgentOrchestrator:
         # 允许不存在的工具
         sub_registry = self.orchestrator.create_sub_agent_tool_registry(
             parent_registry,
+            registry_factory=lambda: ToolRegistry(),
             allowed_tools=["nonexistent_tool"],
         )
 

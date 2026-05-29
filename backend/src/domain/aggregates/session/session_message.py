@@ -33,6 +33,8 @@ class SessionMessage(Entity):
     task_id: Optional[str] = None
     role: SessionMessageRole = SessionMessageRole.USER
     content: str = ""
+    thinking_content: str = ""
+    has_thinking: bool = False
     tool_calls: List[Dict[str, Any]] = field(default_factory=list)
     tool_results: List[Dict[str, Any]] = field(default_factory=list)
     status: MessageStatus = MessageStatus.COMPLETED

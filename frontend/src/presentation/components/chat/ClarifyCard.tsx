@@ -69,6 +69,8 @@ export const ClarifyCard: React.FC<ClarifyCardProps> = ({
     [canSubmit, onAnswer],
   );
 
+  if (submitted) return null;
+
   return (
     <div className="w-full max-w-[720px] rounded-xl border bg-card p-4 shadow-sm">
       <div className="mb-3">

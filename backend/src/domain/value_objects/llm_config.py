@@ -20,7 +20,7 @@ class LLMProvider(str, Enum):
     ZHIPU = "zhipu"
 
 
-@dataclass
+@dataclass(frozen=True)
 class LLMConfig:
     """LLM 配置实体
 

@@ -8,8 +8,8 @@ from src.application.dtos.skill_dto import (
     SkillStepDTO,
 )
 from src.application.use_cases.skill_upload import SkillUploadError, SkillUploadService
-from src.domain.entities.skill_def import SkillDef
-from src.domain.repositories.skill_repository import ISkillRepository
+from src.skills.skill_def import SkillDef
+from src.skills.skill_repository import ISkillRepository
 from src.presentation.dependencies import (
     get_skill_repository,
     get_skill_upload_service,

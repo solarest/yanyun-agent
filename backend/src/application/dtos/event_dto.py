@@ -5,10 +5,7 @@ from typing import Any, Dict
 
 from pydantic import BaseModel, Field
 
-
-def normalize_event_type(event_type: str) -> str:
-    """规范化事件类型为内部冒号风格。"""
-    return event_type.replace("-", ":")
+from src.domain.services.event_utils import normalize_event_type
 
 
 def to_sse_event_name(event_type: str) -> str:

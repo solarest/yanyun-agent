@@ -10,7 +10,7 @@ import pytest
 from unittest.mock import AsyncMock
 from langchain_core.messages import AIMessage
 
-from src.domain.entities.agent_state import AgentState
+from src.domain.aggregates.agent.agent_state import AgentState
 from src.application.use_cases.agent_workflow import (
     route_after_llm,
     route_after_tool_execute,

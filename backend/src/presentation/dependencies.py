@@ -10,19 +10,16 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.use_cases.stream_event import StreamEventService
-from src.domain.entities.base import Entity
-from src.domain.repositories.base import Repository
 from src.domain.repositories.event_repository import IEventRepository
 from src.domain.repositories.task_repository import ITaskRepository
 from src.domain.repositories.agent_repository import IAgentRepository
 from src.domain.repositories.session_repository import ISessionRepository
 from src.domain.repositories.session_message_repository import ISessionMessageRepository
-from src.domain.repositories.skill_repository import ISkillRepository
+from src.skills.skill_repository import ISkillRepository
 from src.domain.repositories.tool_registry import IToolRegistry
 from src.domain.interfaces.llm_provider import ILLMProvider
 from src.infrastructure.llm.config import LLMSettings
 from src.infrastructure.llm.llm_provider_impl import LLMProviderImpl
-from src.infrastructure.repositories.in_memory_repo import InMemoryRepository
 from src.infrastructure.repositories.sqlite_event_repo import SQLiteEventRepository
 from src.infrastructure.repositories.sqlite_task_repo import SQLiteTaskRepository
 from src.infrastructure.repositories.sqlite_agent_repo import SQLiteAgentRepository
@@ -34,12 +31,6 @@ from src.infrastructure.repositories.sqlite_skill_repo import SQLiteSkillReposit
 from src.application.services.skill_storage_service import SkillStorageService
 from src.infrastructure.tools.registry import ToolRegistry
 from src.application.use_cases.skill_upload import SkillUploadService
-
-
-# 创建 Repository 实例(单例模式)
-def get_repository() -> Repository[Entity]:
-    """获取 Repository 实例"""
-    return InMemoryRepository()
 
 
 # 异步数据库依赖

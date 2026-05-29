@@ -8,7 +8,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 from src.domain.entities.tool import ToolContext, ToolResult
-from src.domain.entities.task import Task, TaskStatus
+from src.domain.aggregates.task.task import Task, TaskStatus
 
 
 @pytest.fixture
@@ -202,7 +202,7 @@ class TestSessionSpawn:
         result = await original_func({"description": "Test"}, context)
 
         assert result.success is False
-        assert "send_message_use_case not available" in result.output
+        assert "sub_agent_launcher not available" in result.output
 
     @pytest.mark.asyncio
     async def test_missing_task_repo_fails(self, mock_use_case, mock_event_emitter):

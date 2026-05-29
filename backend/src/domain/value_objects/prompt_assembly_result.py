@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 
 
-@dataclass
+@dataclass(frozen=True)
 class PromptAssemblyResult:
     """Prompt 组装结果值对象
 
