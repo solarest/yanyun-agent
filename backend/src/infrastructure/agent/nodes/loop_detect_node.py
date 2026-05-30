@@ -21,6 +21,8 @@ from langgraph.types import RunnableConfig
 from src.domain.aggregates.agent.agent_state import AgentState
 from src.infrastructure.agent.nodes.base_node import BaseNode, NodeContext
 
+from src.domain.entities.event_types import AgentEventType
+
 logger = logging.getLogger(__name__)
 
 # 全局纠正预算:空响应/循环/卡住计数累计达到此阈值即终止
@@ -104,7 +106,7 @@ async def _detect_invalid_tool_calls(state: AgentState, config: RunnableConfig) 
 
     await event_emitter.emit_safe(
         task_id,
-        "loop:detected",
+        AgentEventType.LOOP_DETECTED,
         {
             "loopType": "invalid_tool_call",
             "count": next_count,
@@ -318,7 +320,7 @@ async def _detect_pattern_loop(state: AgentState, config: RunnableConfig) -> dic
 
     await event_emitter.emit_safe(
         state["task_id"],
-        "loop:detected",
+        AgentEventType.LOOP_DETECTED,
         {
             "loopType": loop_type,
             "count": next_count,

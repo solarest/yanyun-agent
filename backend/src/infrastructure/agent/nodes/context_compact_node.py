@@ -19,6 +19,8 @@ from langgraph.types import RunnableConfig
 from src.domain.aggregates.agent.agent_state import AgentState
 from src.infrastructure.agent.nodes.base_node import BaseNode, NodeContext
 
+from src.domain.entities.event_types import AgentEventType
+
 logger = logging.getLogger(__name__)
 
 # LLM 摘要压缩的 system prompt
@@ -124,7 +126,7 @@ async def _trim_compact(
 
     await event_emitter.emit(
         task_id,
-        "context:compacting",
+        AgentEventType.CONTEXT_COMPACTING,
         {
             "strategy": "trim",
             "beforeCount": before_count,
@@ -241,7 +243,7 @@ async def _summarize_and_compact(
 
     await event_emitter.emit(
         task_id,
-        "context:compacting",
+        AgentEventType.CONTEXT_COMPACTING,
         {
             "strategy": "summarize",
             "beforeCount": before_count,

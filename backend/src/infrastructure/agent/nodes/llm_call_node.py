@@ -15,6 +15,8 @@ from langgraph.types import RunnableConfig
 from src.domain.aggregates.agent.agent_state import AgentState
 from src.infrastructure.agent.nodes.base_node import BaseNode, NodeContext
 
+from src.domain.entities.event_types import AgentEventType
+
 logger = logging.getLogger(__name__)
 
 
@@ -164,7 +166,7 @@ class LLMCallNode(BaseNode):
         # 发射 LLM 完成事件(与前端 AgentEventStream 约定:llm:complete)
         await context.event_emitter.emit(
             context.task_id,
-            "llm:complete",
+            AgentEventType.LLM_COMPLETE,
             {
                 "turn": current_turn,
                 "fullText": full_text,

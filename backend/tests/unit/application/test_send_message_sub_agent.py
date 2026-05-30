@@ -11,6 +11,7 @@ from src.domain.aggregates.session.session_message import (
     SessionMessageRole,
 )
 from src.domain.aggregates.task.task import Task, TaskConfig, TaskStatus
+from src.domain.entities.event_types import AgentEventType
 
 
 class FakeAgentRepository:
@@ -89,15 +90,15 @@ class FakeEmitter:
     ) -> None:
         await self.emit(
             task_id,
-            "phase:changed",
+            AgentEventType.PHASE_CHANGED,
             {"phase": new_phase, "previousPhase": previous_phase, "turn": turn},
         )
 
     async def emit_llm_chunk(self, task_id: str, turn: int, text: str) -> None:
-        await self.emit(task_id, "llm:chunk", {"turn": turn, "text": text})
+        await self.emit(task_id, AgentEventType.LLM_CHUNK, {"turn": turn, "text": text})
 
     async def emit_thinking_chunk(self, task_id: str, turn: int, text: str) -> None:
-        await self.emit(task_id, "thinking:chunk", {"turn": turn, "text": text})
+        await self.emit(task_id, AgentEventType.THINKING_CHUNK, {"turn": turn, "text": text})
 
 
 class FakeToolRegistry:
@@ -184,7 +185,8 @@ async def test_sub_agent_execute_reuses_task_and_passes_runtime_state() -> None:
     assert message_repo.saved_messages == []
     assert session_repo.get_calls == 0
 
-    run_kwargs = use_case._run_agent_loop.call_args.kwargs  # type: ignore[attr-defined]
+    # type: ignore[attr-defined]
+    run_kwargs = use_case._run_agent_loop.call_args.kwargs
     assert run_kwargs["task"] is sub_task
     assert run_kwargs["is_sub_agent"] is True
     assert run_kwargs["parent_task_id"] == "parent-task-1"
@@ -216,7 +218,8 @@ async def test_execute_passes_effective_default_model_into_runtime_state(monkeyp
     )
     await result["asyncio_task"]
 
-    run_kwargs = use_case._run_agent_loop.call_args.kwargs  # type: ignore[attr-defined]
+    # type: ignore[attr-defined]
+    run_kwargs = use_case._run_agent_loop.call_args.kwargs
     assert run_kwargs["model"] == "qwen3-max"
     assert run_kwargs["task"].model == "qwen3-max"
 

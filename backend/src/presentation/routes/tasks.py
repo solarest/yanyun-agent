@@ -10,6 +10,7 @@ from src.application.dtos.task_dto import (
     TaskResponseDTO,
 )
 from src.domain.aggregates.task.task import Task, TaskConfig, TaskStatus
+from src.domain.entities.event_types import AgentEventType
 from src.domain.repositories.agent_repository import IAgentRepository
 from src.domain.repositories.task_repository import ITaskRepository
 from src.presentation.dependencies import get_agent_repository, get_task_repository
@@ -196,6 +197,6 @@ async def cancel_task(
             "paused",
             task.current_turn,
         )
-        await request.app.state.event_service.emit(task_id, "task:cancelled", {})
+        await request.app.state.event_service.emit(task_id, AgentEventType.TASK_CANCELLED, {})
 
     return {"message": "cancel requested", "task_id": task_id}

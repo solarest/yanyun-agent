@@ -6,8 +6,6 @@
 
 **核心节点**: `llm_call` / `tool_execute` / `loop_detect` / `context_compact`
 
-> **注意**: `stuck_detect_node` 代码已存在但当前**未注册到工作流中**（预留实现）。LLM 返回纯文本/空响应时直接走 `route_after_llm` → END 终止。
-
 ## 工作流流程图
 
 ```mermaid
@@ -44,7 +42,6 @@ graph TB
 - **检测内聚**: 反馈注入逻辑内聚到 `loop_detect_node`
 - **Plan 降级**: `plan_execute` 已降级为闭包工具，不再是图节点
 - **工具执行简化**: `route_after_tool_execute` 只有两分支，工具执行后直接回 `llm_call`，由下轮 LLM 返回后再检测循环
-- **stuck_detect 未注册**: `stuck_detect_node` 代码存在但未接入工作流，LLM 返回纯文本时直接终止
 
 ### 反馈机制说明
 
@@ -55,7 +52,7 @@ graph TB
 | 致命错误 | `loop_detect_node` | permission 等致命错误 → terminate |
 | 工具质量评估 | `loop_detect_node` | 规则评估质量并记录 → 路由回 tool_execute |
 | 工具执行完毕 | `route_after_tool_execute` | 直接路由回 `llm_call`，由下轮 LLM 后再检测循环 |
-| 无 tool_calls | `route_after_llm` | 直接 END 终止（stuck_detect 尚未接入） |
+| 无 tool_calls | `route_after_llm` | 直接 END 终止 |
 
 ## 系统提示词（System Prompt）
 
@@ -134,25 +131,7 @@ LLM 调用节点的 system prompt 由 **PromptAssembleService** 组装，采用 
   - count≥3 或全局纠正预算熔断: 设置 `error`/`should_end=True` → 终止
 - **返回状态**: `loop_detected` / `loop_detection_count` / `loop_type` / `messages` / `observation_summary` / `observation_quality`
 
-### 4. 卡住检测节点 (stuck_detect_node)
-- **文件**: `backend/src/infrastructure/agent/nodes/stuck_detect_node.py`
-- **职责**: 评估 LLM 文本输出 + 检测 Agent 是否卡住（吸收原 answer_observe）
-- **触发条件**: `llm_call` 返回纯文本且无 `tool_calls`
-- **LLM文本评估(新增)**:
-  - 空响应: 重试≤1次,超限终止
-  - 完成声明: 实质性验证,通过→complete,不通过→llm_call
-  - 用户提问: 识别为完成→complete
-  - 纯规划: 重试≤2次,超限终止
-  - 实质性文本: 继续检测 monologue
-- **检测模式**: 连续 3 条 assistant 消息无 tool_calls → `stuck_type="monologue"`
-- **内部处理**:
-  - count<3: 注入纠正 SystemMessage → 路由 `llm_call`
-  - count≥3 或全局纠正预算熔断: 设置 `error`/`should_end=True` → 终止
-- **返回状态**: `stuck_detected` / `stuck_detection_count` / `stuck_type` / `messages`
-
-> **注意**: `stuck_detect_node` 代码已实现但**未注册到工作流**，LLM 返回纯文本时由 `route_after_llm` 直接 END 终止。
-
-### 5. 上下文压缩节点 (context_compact_node)
+### 4. 上下文压缩节点 (context_compact_node)
 - **文件**: `backend/src/infrastructure/agent/nodes/context_compact_node.py`
 - **职责**: 当上下文消息过多时压缩对话历史
 - **压缩策略**:
@@ -189,15 +168,6 @@ LLM 调用节点的 system prompt 由 **PromptAssembleService** 组装，采用 
 | 工具执行完毕 | `llm_call`（继续循环，无需循环检测） |
 
 **说明**: 工具执行后直接回到 `llm_call`，由下一轮 LLM 返回后再进入 `loop_detect` 进行循环检测。这种设计避免了重复检测，保持路由逻辑极简。
-
-删除以下已废弃的路由段：
-
-### route_after_stuck_detect（两分支）
-
-| 条件 | 目标 |
-|------|------|
-| `should_end=True` | END（count≥3 或预算耗尽） |
-| 其他（已注入反馈） | `llm_call` |
 
 ### 固定边
 
@@ -236,12 +206,7 @@ Agent 状态定义在 `backend/src/domain/entities/agent_state.py` 中，继承 
 | `loop_detection_count` | `int` | 循环检测连续次数 |
 | `loop_detected` | `bool` | 本轮是否检测到循环 |
 | `loop_type` | `Optional[str]` | 循环类型 |
-| `stuck_detection_count` | `int` | 卡住检测连续次数（预留，未接入工作流） |
-| `stuck_detected` | `bool` | 本轮是否检测到卡住（预留，未接入工作流） |
-| `stuck_type` | `Optional[str]` | 卡住类型（预留，未接入工作流） |
 | `current_llm_text` | `str` | 当前 LLM 输出文本 |
-| `empty_retry_count` | `int` | 空响应重试计数（预留） |
-| `planning_retry_count` | `int` | 纯规划重试计数（预留） |
 | `system_prompt` | `str` | 系统提示词 |
 | `final_result` | `Optional[str]` | 最终结果 |
 | `error` | `Optional[str]` | 错误信息 |
@@ -253,8 +218,6 @@ Agent 状态定义在 `backend/src/domain/entities/agent_state.py` 中，继承 
 | `consecutive_empty_observations` | `int` | 连续空观察计数 |
 | `last_error_category` | `Optional[str]` | 最近一次错误分类 |
 | `compression_strategy` | `Optional[str]` | 压缩策略（trim/summarize） |
-
-> **注意**: `stuck_detection_count` / `stuck_detected` / `stuck_type` / `empty_retry_count` / `planning_retry_count` 字段当前**未被工作流使用**，为 `stuck_detect_node` 预留。
 
 ## 维护说明
 

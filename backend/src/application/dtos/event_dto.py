@@ -5,6 +5,7 @@ from typing import Any, Dict
 
 from pydantic import BaseModel, Field
 
+from src.domain.entities.event_types import AgentEventType
 from src.domain.services.event_utils import normalize_event_type
 
 
@@ -20,7 +21,8 @@ class SSEEventDTO(BaseModel):
     event_type: str = Field(
         ...,
         description="事件类型（冒号分隔，SSE 输出时替换为连字符）",
-        examples=["task:started", "llm:chunk", "tool:result"],
+        examples=[AgentEventType.TASK_STARTED,
+                  AgentEventType.LLM_CHUNK, AgentEventType.TOOL_RESULT],
     )
     data: Dict[str, Any] = Field(..., description="事件载荷")
     timestamp: str = Field(..., description="ISO 8601 时间戳")

@@ -11,6 +11,7 @@ from langchain_core.messages import ToolMessage
 from langgraph.types import RunnableConfig
 
 from src.domain.aggregates.agent.agent_state import AgentState
+from src.domain.entities.event_types import AgentEventType
 from src.domain.entities.tool import ToolContext
 from src.infrastructure.agent.nodes.base_node import BaseNode, NodeContext
 
@@ -63,7 +64,7 @@ async def _execute_single_tool(
     await _emit_tool_event(
         event_emitter,
         task_id,
-        "tool:call",
+        AgentEventType.TOOL_CALL,
         {
             "toolCallId": tool_call_id,
             "toolName": tool_name,
@@ -84,7 +85,8 @@ async def _execute_single_tool(
         }
 
         # 工具调用成功日志
-        output_preview = str(result.output)[:200] if result.output else "(empty)"
+        output_preview = str(result.output)[
+            :200] if result.output else "(empty)"
         logger.info(
             "[NODE:tool_execute] TOOL_CALL_SUCCESS | task_id=%s | tool_call_id=%s | "
             "tool_name=%s | status=%s | output_preview=%s",
@@ -94,7 +96,7 @@ async def _execute_single_tool(
         await _emit_tool_event(
             event_emitter,
             task_id,
-            "tool:result",
+            AgentEventType.TOOL_RESULT,
             {
                 "toolCallId": tool_call_id,
                 "toolName": tool_name,
@@ -123,7 +125,7 @@ async def _execute_single_tool(
         await _emit_tool_event(
             event_emitter,
             task_id,
-            "tool:result",
+            AgentEventType.TOOL_RESULT,
             {
                 "toolCallId": tool_call_id,
                 "toolName": tool_name,

@@ -8,7 +8,7 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from src.domain.interfaces.agent_workflow import IAgentWorkflowBuilder
 from src.domain.aggregates.session.session_message import (
@@ -18,6 +18,7 @@ from src.domain.aggregates.session.session_message import (
 )
 from src.domain.aggregates.task.task import Task, TaskConfig, TaskStatus
 from src.domain.interfaces.llm_provider import ILLMProvider
+from src.domain.interfaces.prompt_context_interface import PromptContextInterface
 from src.domain.repositories.agent_repository import IAgentRepository
 from src.domain.repositories.session_message_repository import (
     ISessionMessageRepository,
@@ -28,6 +29,8 @@ from src.domain.repositories.task_repository import ITaskRepository
 from src.domain.repositories.tool_registry import IToolRegistry
 from src.domain.services import IEventEmitter, ProxyEventEmitter
 from src.domain.events.task_events import TaskCompleted, TaskCreated, TaskFailed
+from src.domain.entities.event_types import AgentEventType
+from src.domain.entities.conversation import ConversationMessage
 from src.domain.repositories.event_publisher import IEventPublisher
 from src.domain.value_objects.prompt_template import PromptTemplate
 from src.domain.services.prompt_assemble_service import PromptAssembleService
@@ -81,6 +84,86 @@ def _extract_last_message_content(messages: list) -> str:
     return ""
 
 
+def _session_messages_to_conversation(
+    history_messages: list[SessionMessage],
+) -> list[ConversationMessage]:
+    """将 SessionMessage 列表转换为 ConversationMessage 列表。
+
+    SessionMessage 是持久化聚合实体，ConversationMessage 是 Prompt
+    构建域的领域实体。转换时：
+    - 历史 assistant 消息不携带 tool_calls（避免缺少对应 tool 结果
+      导致 LLM 报错）
+    - TOOL_SUMMARY 转为 user 角色消息，标注工具结果上下文
+    """
+    result: list[ConversationMessage] = []
+    for msg in history_messages:
+        if msg.role == SessionMessageRole.USER:
+            result.append(ConversationMessage(
+                role="user",
+                content=msg.content,
+            ))
+        elif msg.role == SessionMessageRole.ASSISTANT:
+            # 历史 assistant 消息不携带 tool_calls，
+            # 因为对应的 tool 结果消息未完整存储。
+            # 工具使用记录以文本摘要形式附在 content 中。
+            content_parts = [msg.content or ""]
+            if msg.tool_calls:
+                tool_names = list(dict.fromkeys(
+                    tc.get("name", "") for tc in msg.tool_calls if tc.get("name")
+                ))
+                if tool_names:
+                    tools_summary = f"\n\n[Used Tools: {', '.join(tool_names)}]"
+                    content_parts.append(tools_summary)
+            result.append(ConversationMessage(
+                role="assistant",
+                content="".join(content_parts),
+            ))
+        elif msg.role == SessionMessageRole.SYSTEM:
+            result.append(ConversationMessage(
+                role="system",
+                content=msg.content,
+            ))
+        elif msg.role == SessionMessageRole.TOOL_SUMMARY:
+            result.append(ConversationMessage(
+                role="user",
+                content=f"[Tool Results] {msg.content}",
+            ))
+    return result
+
+
+def _dict_messages_to_langchain(
+    messages: list[dict],
+) -> list:
+    """将 LLM API dict 消息列表转换为 LangChain 消息对象。
+
+    用于将 PromptContextInterface.build_messages() 的输出
+    转换为 LangGraph 可消费的消息格式。
+    """
+    from langchain_core.messages import ToolMessage as LCMessage
+
+    lc_messages: list = []
+    for msg in messages:
+        role = msg.get("role", "")
+        content = msg.get("content", "")
+        if role == "system":
+            lc_messages.append(SystemMessage(content=content))
+        elif role == "user":
+            lc_messages.append(HumanMessage(content=content))
+        elif role == "assistant":
+            lc_messages.append(AIMessage(
+                content=content,
+                tool_calls=msg.get("tool_calls", []),
+            ))
+        elif role == "tool":
+            lc_messages.append(LCMessage(
+                content=content,
+                tool_call_id=msg.get("tool_call_id", ""),
+            ))
+        else:
+            lc_messages.append(HumanMessage(content=content))
+    return lc_messages
+
+
 class SendMessageUseCase:
     """发送消息用例 — 编排 Session 操作 + Agent Loop 启动"""
 
@@ -94,6 +177,7 @@ class SendMessageUseCase:
         tool_registry: Optional[IToolRegistry] = None,
         skill_repo: Optional[ISkillRepository] = None,
         llm_provider: Optional[ILLMProvider] = None,
+        prompt_context: Optional[PromptContextInterface] = None,
         running_tasks: Optional[dict[str, asyncio.Task]] = None,
         sub_agent_launcher: Optional[Any] = None,
         event_publisher: Optional[IEventPublisher] = None,
@@ -108,6 +192,7 @@ class SendMessageUseCase:
         self.tool_registry = tool_registry
         self.skill_repo = skill_repo
         self.llm_provider = llm_provider
+        self.prompt_context = prompt_context
         self.running_tasks = running_tasks if running_tasks is not None else {}
         self.sub_agent_launcher = sub_agent_launcher
         self.event_publisher = event_publisher
@@ -261,28 +346,6 @@ class SendMessageUseCase:
             logger.info("binding-tools agent %s Tool schemas: %s",
                         agent_id, tool_schemas)
         return llm
-
-    def _build_graph_config(
-        self,
-        llm,
-        tool_registry: Optional[IToolRegistry],
-        agent_id: str,
-        model: Optional[str],
-        sub_agent_launcher: Optional[Any] = None,
-        session_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        return {
-            "configurable": {
-                "llm": llm,
-                "event_emitter": self.event_emitter,
-                "event_service": self.event_emitter,
-                "tool_registry": tool_registry,
-                "agent_id": agent_id,
-                "llm_model": model,
-                "sub_agent_launcher": sub_agent_launcher,
-                "session_id": session_id,
-            }
-        }
 
     def _build_system_prompt(
         self,
@@ -543,11 +606,11 @@ class SendMessageUseCase:
         if assistant_msg is not None:
             await emitter.emit(
                 task.id,
-                "session:message:saved",
+                AgentEventType.SESSION_MESSAGE_SAVED,
                 _build_message_event_payload(assistant_msg),
             )
         if error:
-            await emitter.emit(task.id, "task:failed", {"error": error})
+            await emitter.emit(task.id, AgentEventType.TASK_FAILED, {"error": error})
             if self.event_publisher:
                 await self.event_publisher.publish(TaskFailed(
                     task_id=task.id,
@@ -555,7 +618,7 @@ class SendMessageUseCase:
                     failed_at=task.completed_at,
                 ))
         else:
-            await emitter.emit(task.id, "task:completed", {"result": terminal_result})
+            await emitter.emit(task.id, AgentEventType.TASK_COMPLETED, {"result": terminal_result})
             if self.event_publisher:
                 await self.event_publisher.publish(TaskCompleted(
                     task_id=task.id,
@@ -640,35 +703,46 @@ class SendMessageUseCase:
                 assembly_result.static_prefix_tokens,
             )
 
-            # 步骤 B: 加载会话历史 → LangChain 消息格式
-            # 注意：历史 AIMessage 不传 tool_calls，因为对应的 ToolMessage
-            # 没有一并回放，传入会触发 LLM provider 报错（tool_call 无对应结果），
-            # 同时也避免旧数据中 tool_calls 缺少 keyword-only 参数 `args` 时
-            # AIMessage 构造抛出 `tool_call() missing 1 required keyword-only argument: 'args'`。
-            messages = []
+            # 步骤 B: 加载会话历史 → 通过 PromptContextInterface 构建 messages
             if is_sub_agent:
                 # Sub-agent 是主 agent 的工具调用执行单元，只接收本次原子任务，
-                # 不继承父 session 的 user/assistant/tool 历史，避免执行主 agent 的全局目标。
-                messages.append(HumanMessage(content=content))
+                # 不继承父 session 的 user/assistant/tool 历史。
+                messages = [HumanMessage(content=content)]
+            elif self.prompt_context:
+                # 使用 PromptContextInterface 进行 Token 预算管理 + 裁剪
+                history_messages = await self.message_repo.list_by_session(
+                    session_id, limit=100
+                )
+                conversation_history = _session_messages_to_conversation(
+                    history_messages
+                )
+                max_tokens = 8000  # TODO: 从配置读取
+                api_messages = await self.prompt_context.build_messages(
+                    system_message=system_prompt,
+                    history=conversation_history,
+                    max_tokens=max_tokens,
+                )
+                messages = _dict_messages_to_langchain(api_messages)
             else:
-                history_messages = await self.message_repo.list_by_session(session_id, limit=20)
+                # 降级：无 PromptContextInterface 时的简单历史加载
+                messages = []
+                history_messages = await self.message_repo.list_by_session(
+                    session_id, limit=20
+                )
                 for msg in history_messages:
-                    # 跳过当前这条用户消息（会在 initial_state 中作为 user_message 处理）
                     if msg.role == SessionMessageRole.USER:
                         messages.append(HumanMessage(content=msg.content))
                     elif msg.role == SessionMessageRole.ASSISTANT:
-                        # 构建内容：保留原始内容 + 工具使用记录（去重）
                         content_parts = [msg.content or ""]
                         if msg.tool_calls:
-                            # 提取工具名称并去重
                             tool_names = list(dict.fromkeys(
                                 tc.get("name", "") for tc in msg.tool_calls if tc.get("name")
                             ))
                             if tool_names:
                                 tools_summary = f"\n\n[Used Tools: {', '.join(tool_names)}]"
                                 content_parts.append(tools_summary)
-
-                        messages.append(AIMessage(content="".join(content_parts)))
+                        messages.append(
+                            AIMessage(content="".join(content_parts)))
                     elif msg.role == SessionMessageRole.TOOL_SUMMARY:
                         messages.append(HumanMessage(
                             content=f"[Tool Results] {msg.content}"))
@@ -703,20 +777,11 @@ class SendMessageUseCase:
                 "loop_type": None,
                 "stuck_detection_count": 0,
                 "stuck_detected": False,
-                "stuck_type": None,
                 "current_llm_text": "",
                 "empty_retry_count": 0,
-                "planning_retry_count": 0,
                 "system_prompt": system_prompt,
                 "final_result": None,
                 "error": None,
-                "observation_summary": None,
-                "observation_quality": None,
-                "observation_items": [],
-                "consecutive_empty_observations": 0,
-                "last_error_category": None,
-                "route_hint": None,
-                "observe_mode": None,
                 "compression_strategy": None,
                 "is_sub_agent": is_sub_agent,
                 "parent_task_id": parent_task_id,
@@ -748,7 +813,7 @@ class SendMessageUseCase:
                 }
             }
 
-            await effective_event_emitter.emit(task.id, "task:started", {})
+            await effective_event_emitter.emit(task.id, AgentEventType.TASK_STARTED, {})
 
             result = await graph.ainvoke(initial_state, graph_config)
 
@@ -775,7 +840,7 @@ class SendMessageUseCase:
                     task.current_turn,
                 )
                 await effective_event_emitter.emit(
-                    task.id, "task:cancelled", {}
+                    task.id, AgentEventType.TASK_CANCELLED, {}
                 )
         except Exception as e:
             logger.exception("Agent loop failed for task %s: %s", task.id, e)
@@ -792,5 +857,5 @@ class SendMessageUseCase:
                     task.current_turn,
                 )
                 await effective_event_emitter.emit(
-                    task.id, "task:failed", {"error": str(e)}
+                    task.id, AgentEventType.TASK_FAILED, {"error": str(e)}
                 )

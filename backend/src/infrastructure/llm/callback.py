@@ -69,15 +69,6 @@ class LLMUsageCallbackHandler(BaseCallbackHandler):
             cost = calculate_cost(prompt_tokens, completion_tokens, self.model_name)
             self.total_cost += cost
 
-    def get_cost_tracker(self) -> CostTracker:
-        """返回 CostTracker 实体"""
-        return CostTracker(
-            total_tokens=self.total_prompt_tokens + self.total_completion_tokens,
-            prompt_tokens=self.total_prompt_tokens,
-            completion_tokens=self.total_completion_tokens,
-            total_cost=self.total_cost,
-        )
-
 
 class LLMCallLogger(BaseCallbackHandler):
     """LangChain CallbackHandler - 在 LLM 发起 API 请求的前后记录完整参数

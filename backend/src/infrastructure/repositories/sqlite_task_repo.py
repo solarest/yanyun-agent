@@ -6,7 +6,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.domain.aggregates.task.task import Task, TaskConfig, CostTracker, TaskStatus
-from src.domain.repositories.specifications import Specification
 from src.domain.repositories.task_repository import ITaskRepository
 from src.infrastructure.database.models.agent_model import TaskModel
 
@@ -62,19 +61,6 @@ class SQLiteTaskRepository(ITaskRepository):
         await self.session.commit()
         await self.session.refresh(model)
         return self._to_entity(model)
-
-    async def find_by_spec(self, spec: Specification, limit: int = 100, offset: int = 0) -> List[Task]:
-        """按规约条件查询任务"""
-        stmt = (
-            select(TaskModel)
-            .where(spec.to_expression(TaskModel))
-            .order_by(TaskModel.created_at.desc())
-            .limit(limit)
-            .offset(offset)
-        )
-        result = await self.session.execute(stmt)
-        models = result.scalars().all()
-        return [self._to_entity(m) for m in models]
 
     async def remove(self, task_id: str) -> bool:
         """删除任务"""

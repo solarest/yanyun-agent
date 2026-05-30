@@ -18,6 +18,8 @@ from src.domain.repositories.session_message_repository import ISessionMessageRe
 from src.skills.skill_repository import ISkillRepository
 from src.domain.repositories.tool_registry import IToolRegistry
 from src.domain.interfaces.llm_provider import ILLMProvider
+from src.domain.interfaces.prompt_context_interface import PromptContextInterface
+from src.infrastructure.agent.prompt_context_impl import PromptContextImpl
 from src.infrastructure.llm.config import LLMSettings
 from src.infrastructure.llm.llm_provider_impl import LLMProviderImpl
 from src.infrastructure.repositories.sqlite_event_repo import SQLiteEventRepository
@@ -115,6 +117,11 @@ def get_skill_upload_service(
 ) -> SkillUploadService:
     """获取 Skill 上传服务实例"""
     return SkillUploadService(skill_repo, storage_service)
+
+
+def get_prompt_context() -> PromptContextInterface:
+    """获取 Prompt 上下文组装实现实例"""
+    return PromptContextImpl()
 
 
 # LLM 依赖注入

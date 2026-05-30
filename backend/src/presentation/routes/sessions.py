@@ -26,6 +26,7 @@ from src.presentation.dependencies import (
     get_session_repository,
     get_llm_provider,
     get_llm_settings,
+    get_prompt_context,
 )
 
 router = APIRouter(prefix="/api/agents/{agent_id}/sessions", tags=["sessions"])
@@ -262,6 +263,7 @@ async def send_message(
         tool_registry=bg_tool_registry,
         skill_repo=bg_skill_repo,
         llm_provider=bg_llm_provider,
+        prompt_context=get_prompt_context(),
         default_model=bg_llm_settings.default_model,
         running_tasks=request.app.state.running_tasks,
     )

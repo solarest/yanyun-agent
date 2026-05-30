@@ -4,6 +4,8 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict
 
+from src.domain.entities.event_types import AgentEventType
+
 logger = logging.getLogger(__name__)
 
 
@@ -99,7 +101,7 @@ class ProxyEventEmitter(IEventEmitter):
         """转发阶段变更事件"""
         await self._parent_emitter.emit(
             self._parent_task_id,
-            "phase:changed",
+            AgentEventType.PHASE_CHANGED,
             {
                 "phase": new_phase,
                 "previousPhase": previous_phase,
@@ -117,7 +119,7 @@ class ProxyEventEmitter(IEventEmitter):
         """转发 LLM 流式片段"""
         await self._parent_emitter.emit(
             self._parent_task_id,
-            "llm:chunk",
+            AgentEventType.LLM_CHUNK,
             {
                 "turn": turn,
                 "text": text,
@@ -135,7 +137,7 @@ class ProxyEventEmitter(IEventEmitter):
         """转发深度思考片段"""
         await self._parent_emitter.emit(
             self._parent_task_id,
-            "thinking:chunk",
+            AgentEventType.THINKING_CHUNK,
             {
                 "turn": turn,
                 "text": text,

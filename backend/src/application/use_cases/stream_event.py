@@ -12,6 +12,7 @@ from typing import Any, AsyncContextManager, Callable, Dict, List
 
 from src.application.dtos.event_dto import SSEEventDTO
 from src.application.services.event_mapper import EventMapper
+from src.domain.entities.event_types import AgentEventType
 from src.domain.repositories.event_repository import IEventRepository
 from src.domain.services import IEventEmitter
 
@@ -65,7 +66,7 @@ class StreamEventService(IEventEmitter):
 
         Args:
             task_id: 任务 ID
-            event_type: 事件类型 (如 "llm:chunk", "tool:result")
+            event_type: 事件类型 (如 AgentEventType.LLM_CHUNK, AgentEventType.TOOL_RESULT)
             payload: 事件载荷
         """
         async with self._get_lock(task_id):
@@ -74,7 +75,7 @@ class StreamEventService(IEventEmitter):
 
             event = SSEEventDTO.create(task_id, seq, event_type, payload)
 
-            if event.event_type == "llm:chunk":
+            if event.event_type == AgentEventType.LLM_CHUNK:
                 self._chunk_buffers[task_id].append(event)
                 if len(self._chunk_buffers[task_id]) >= self._chunk_flush_size:
                     await self._flush_chunks_locked(task_id)
@@ -96,7 +97,7 @@ class StreamEventService(IEventEmitter):
         """发射阶段变更事件。"""
         await self.emit(
             task_id,
-            "phase:changed",
+            AgentEventType.PHASE_CHANGED,
             {
                 "phase": new_phase,
                 "previousPhase": previous_phase,
@@ -113,7 +114,7 @@ class StreamEventService(IEventEmitter):
         """发射流式输出片段。"""
         await self.emit(
             task_id,
-            "llm:chunk",
+            AgentEventType.LLM_CHUNK,
             {
                 "turn": turn,
                 "text": text,
@@ -130,7 +131,7 @@ class StreamEventService(IEventEmitter):
         """发射深度思考流式输出片段。"""
         await self.emit(
             task_id,
-            "thinking:chunk",
+            AgentEventType.THINKING_CHUNK,
             {
                 "turn": turn,
                 "text": text,

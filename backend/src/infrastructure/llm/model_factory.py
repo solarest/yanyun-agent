@@ -65,18 +65,6 @@ def create_chat_model(
     return _build_model_with_middleware(config)
 
 
-def create_chat_model_with_config(config: LLMConfig) -> BaseChatModel:
-    """使用完整配置创建 ChatModel 实例
-
-    Args:
-        config: LLM 配置实体
-
-    Returns:
-        LangChain ChatModel 实例（带 CallbackHandler）
-    """
-    return _build_model_with_middleware(config)
-
-
 def _build_model_with_middleware(config: LLMConfig) -> BaseChatModel:
     """构建带中间件的 ChatModel
 

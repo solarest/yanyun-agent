@@ -7,6 +7,7 @@ import pytest
 from src.application.dtos.event_dto import SSEEventDTO
 from src.application.use_cases.stream_event import StreamEventService
 from src.domain.entities.event import Event
+from src.domain.entities.event_types import AgentEventType
 from src.domain.services.event_emitter import ProxyEventEmitter
 
 
@@ -55,9 +56,9 @@ async def test_stream_event_service_normalizes_events_and_flushes_on_replay() ->
 
     all_events = [json.loads(item) for item in await service.get_all_events("task-1")]
     assert [event["event_type"] for event in all_events] == [
-        "task:started",
-        "llm:chunk",
-        "llm:chunk",
+        AgentEventType.TASK_STARTED,
+        AgentEventType.LLM_CHUNK,
+        AgentEventType.LLM_CHUNK,
     ]
     assert repo.batch_saves == 1
 
@@ -73,13 +74,13 @@ async def test_non_chunk_event_flushes_chunk_buffer_before_cancelled_terminal_ev
 
     await service.emit_llm_chunk("task-2", 2, "A")
     await service.emit_llm_chunk("task-2", 2, "B")
-    await service.emit("task-2", "task:cancelled", {})
+    await service.emit("task-2", AgentEventType.TASK_CANCELLED, {})
 
     stored = repo.events["task-2"]
     assert [event.event_type for event in stored] == [
-        "llm:chunk",
-        "llm:chunk",
-        "task:cancelled",
+        AgentEventType.LLM_CHUNK,
+        AgentEventType.LLM_CHUNK,
+        AgentEventType.TASK_CANCELLED,
     ]
     assert repo.batch_saves == 1
     assert repo.single_saves == 1
@@ -101,15 +102,15 @@ class RecordingEmitter:
     ) -> None:
         await self.emit(
             task_id,
-            "phase:changed",
+            AgentEventType.PHASE_CHANGED,
             {"phase": new_phase, "previousPhase": previous_phase, "turn": turn},
         )
 
     async def emit_llm_chunk(self, task_id: str, turn: int, text: str) -> None:
-        await self.emit(task_id, "llm:chunk", {"turn": turn, "text": text})
+        await self.emit(task_id, AgentEventType.LLM_CHUNK, {"turn": turn, "text": text})
 
     async def emit_thinking_chunk(self, task_id: str, turn: int, text: str) -> None:
-        await self.emit(task_id, "thinking:chunk", {"turn": turn, "text": text})
+        await self.emit(task_id, AgentEventType.THINKING_CHUNK, {"turn": turn, "text": text})
 
 
 @pytest.mark.asyncio
@@ -121,14 +122,15 @@ async def test_proxy_event_emitter_writes_to_parent_stream_with_sub_task_marker(
         sub_task_id="sub-task-1",
     )
 
-    await proxy.emit("sub-task-1", "task:started", {})
+    await proxy.emit("sub-task-1", AgentEventType.TASK_STARTED, {})
     await proxy.emit_llm_chunk("sub-task-1", 1, "hello")
 
     assert parent.events == [
-        ("parent-task-1", "task:started", {"sub_task_id": "sub-task-1"}),
+        ("parent-task-1", AgentEventType.TASK_STARTED,
+         {"sub_task_id": "sub-task-1"}),
         (
             "parent-task-1",
-            "llm:chunk",
+            AgentEventType.LLM_CHUNK,
             {"turn": 1, "text": "hello", "delta": True, "sub_task_id": "sub-task-1"},
         ),
     ]

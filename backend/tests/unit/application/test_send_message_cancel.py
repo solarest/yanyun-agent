@@ -5,6 +5,7 @@ import pytest
 from src.application.use_cases.send_message import SendMessageUseCase
 from src.domain.aggregates.agent.agent import Agent
 from src.domain.aggregates.task.task import Task, TaskConfig, TaskStatus
+from src.domain.entities.event_types import AgentEventType
 
 
 class RecordingEmitter:
@@ -25,7 +26,7 @@ class RecordingEmitter:
     ) -> None:
         await self.emit(
             task_id,
-            "phase:changed",
+            AgentEventType.PHASE_CHANGED,
             {
                 "phase": new_phase,
                 "previousPhase": previous_phase,
@@ -36,14 +37,14 @@ class RecordingEmitter:
     async def emit_llm_chunk(self, task_id: str, turn: int, text: str) -> None:
         await self.emit(
             task_id,
-            "llm:chunk",
+            AgentEventType.LLM_CHUNK,
             {"turn": turn, "text": text, "delta": True},
         )
 
     async def emit_thinking_chunk(self, task_id: str, turn: int, text: str) -> None:
         await self.emit(
             task_id,
-            "thinking:chunk",
+            AgentEventType.THINKING_CHUNK,
             {"turn": turn, "text": text, "delta": True},
         )
 
@@ -168,7 +169,7 @@ async def test_run_agent_loop_emits_cancelled_terminal_event(monkeypatch) -> Non
     await runner
 
     event_types = [event["event_type"] for event in emitter.events]
-    assert "task:cancelled" in event_types
-    assert "task:failed" not in event_types
+    assert AgentEventType.TASK_CANCELLED in event_types
+    assert AgentEventType.TASK_FAILED not in event_types
     assert task.status == TaskStatus.CANCELLED
     assert task_repo.updated is task

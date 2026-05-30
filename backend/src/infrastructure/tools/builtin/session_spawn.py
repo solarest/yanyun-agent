@@ -3,7 +3,7 @@
 当需要并行处理相互独立的信息获取任务时，可以使用 sub-agent 来处理。
 
 典型使用场景：
-- 需要同时执行多个互不依赖的信息查询、资料阅读、文件分析
+- 需要同时执行多个互不依赖的信息查询、资料阅读、文章分析
 - 需要把一个可拆分目标拆成多个原子子任务，并发交给多个 sub-agent
 - 某个原子子任务需要独立的上下文和工具集
 - 任务执行时间较长，需要独立的流式输出
@@ -11,7 +11,7 @@
 
 重要约束：
 - 一次 session_spawn 只代表一个原子子任务，不要把多个查询目标合并进同一个 sub-agent。
-- 如果用户要求“近 10 天天气”“读取 5 个文件”“调研 3 个方案”等可拆分任务，主 agent 应在同一轮中并行调用多个 session_spawn，每个 sub-agent 只负责一天、一个文件、一个方案等。
+- 如果用户要求”近 10 天天气””总结多篇文章””调研 3 个方案”等可拆分任务，主 agent 应在同一轮中并行调用多个 session_spawn，每个 sub-agent 只负责一天、一篇文章、一个方案等。
 - 主 agent 负责拆分任务、并行发起多个 sub-agent、汇总所有返回结果并给出最终答案。
 
 同步阻塞模式：每个工具调用会等待对应 sub-agent 执行完成并返回结果；多个 session_spawn 工具调用会由工具执行节点并行执行。
@@ -25,6 +25,7 @@ from datetime import datetime
 from typing import Any, AsyncIterator, Optional
 
 from src.domain.aggregates.task.task import Task, TaskConfig, TaskStatus
+from src.domain.entities.event_types import AgentEventType
 from src.domain.entities.tool import ToolContext, ToolResult
 from src.subagent.sub_agent_launcher import ISubAgentLauncher
 from src.infrastructure.tools.decorator import tool
@@ -107,7 +108,7 @@ async def _emit_safely(event_emitter: Any, task_id: str, event_type: str, payloa
     name="session_spawn",
     description=(
         "Spawn a sub-agent to execute an atomic, independent, parallelizable information-gathering subtask. "
-        "Important: One session_spawn handles exactly one subtask; do not combine multiple dates, files, topics, or queries into a single sub-agent. "
+        "Important: One session_spawn handles exactly one subtask; do not combine multiple dates, articles, topics, or queries into a single sub-agent. "
         "When a task is divisible, the main agent should invoke multiple session_spawn calls in parallel within the same turn. "
         "For example, for 10 days of weather, create 10 sub-agents, each handling 1 day, then the main agent aggregates the results. "
         "Synchronous blocking mode: a single call waits for its sub-agent to complete; multiple calls execute in parallel."
@@ -137,7 +138,7 @@ async def session_spawn(
 
     典型场景：
     - 查询近 10 天某地天气：发起 10 个 session_spawn，每个查询 1 天
-    - 读取多个文件：发起多个 session_spawn，每个读取/总结 1 个文件
+    - 总结多篇文章：发起多个 session_spawn，每个读取/总结 1 篇文章
     - 调研多个方案或来源：发起多个 session_spawn，每个负责 1 个方案或来源
     - 需要隔离的任务，避免影响主 agent 状态
 
@@ -169,7 +170,8 @@ async def session_spawn(
             error="missing_context",
         )
 
-    sub_agent_launcher: ISubAgentLauncher = context.extra.get("send_message_use_case")  # type: ignore[assignment]
+    sub_agent_launcher: ISubAgentLauncher = context.extra.get(
+        "send_message_use_case")  # type: ignore[assignment]
     if not sub_agent_launcher:
         return ToolResult(
             output="Error: sub_agent_launcher not available in context",
@@ -211,7 +213,8 @@ async def session_spawn(
     try:
         from src.infrastructure.llm.config import LLMSettings
 
-        effective_model = parent_state.get("model") or LLMSettings().default_model
+        effective_model = parent_state.get(
+            "model") or LLMSettings().default_model
 
         async with _sub_agent_runtime_scope(sub_agent_launcher, task_repo) as (
             runtime_use_case,
@@ -236,7 +239,7 @@ async def session_spawn(
             await _emit_safely(
                 event_emitter,
                 parent_task_id,
-                "sub_agent:started",
+                AgentEventType.SUB_AGENT_STARTED,
                 {
                     "sub_task_id": sub_task_id,
                     "description": description,
@@ -287,7 +290,7 @@ async def session_spawn(
                 await _emit_safely(
                     event_emitter,
                     parent_task_id,
-                    "sub_agent:failed",
+                    AgentEventType.SUB_AGENT_FAILED,
                     {
                         "sub_task_id": sub_task_id,
                         "error": completed_task.error or "Unknown error",
@@ -312,7 +315,7 @@ async def session_spawn(
             await _emit_safely(
                 event_emitter,
                 parent_task_id,
-                "sub_agent:completed",
+                AgentEventType.SUB_AGENT_COMPLETED,
                 {
                     "sub_task_id": sub_task_id,
                     "result": completed_task.result or "No result",
@@ -341,7 +344,7 @@ async def session_spawn(
         await _emit_safely(
             event_emitter,
             parent_task_id,
-            "sub_agent:failed",
+            AgentEventType.SUB_AGENT_FAILED,
             {
                 "sub_task_id": sub_task_id,
                 "error": str(e),

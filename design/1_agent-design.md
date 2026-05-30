@@ -53,7 +53,7 @@ domain/services/prompt_builder.py  — 领域服务：提示词构建逻辑
 基于 LangGraph StateGraph 实现：
 
 ```
-llm_call → tool_execute → loop_detect → stuck_detect → complete_check
+llm_call → tool_execute → loop_detect → context_compact → complete_check
 ```
 
 ### 实现位置

@@ -45,12 +45,10 @@ class AgentState(TypedDict):
     # === Stuck 检测器状态 ===
     stuck_detection_count: int
     stuck_detected: bool
-    stuck_type: Optional[str]
 
     # === 流式输出 ===
     current_llm_text: str
     empty_retry_count: int
-    planning_retry_count: int
 
     # === 系统提示词 ===
     system_prompt: str
@@ -62,22 +60,6 @@ class AgentState(TypedDict):
     # === 结果 ===
     final_result: Optional[str]
     error: Optional[str]
-
-    # === Observation 状态(loop_detect / stuck_detect 节点写入)===
-    observation_summary: Optional[str]
-    """本轮观察文本总结(供调试/前端展示)"""
-
-    observation_quality: Optional[str]
-    """本轮观察总体质量:good / empty / partial / failed / mixed"""
-
-    observation_items: List[Dict[str, Any]]
-    """每个 tool_call 的观察详情"""
-
-    consecutive_empty_observations: int
-    """连续空观察计数(触发语义循环检测)"""
-
-    last_error_category: Optional[str]
-    """最近一次错误分类"""
 
     # === 压缩策略 ===
     compression_strategy: Optional[str]
