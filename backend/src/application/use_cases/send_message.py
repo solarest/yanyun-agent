@@ -1,6 +1,7 @@
 """应用层 - SendMessage 用例
 
 核心编排用例：用户发送消息 → 创建 Task → 异步启动 Agent Loop。
+精简为 thin facade，将具体执行逻辑委托给各应用服务。
 """
 
 import asyncio
@@ -8,195 +9,61 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-
-from src.domain.interfaces.agent_workflow import IAgentWorkflowBuilder
+from src.application.services.agent_loop_runner import AgentLoopRunner
+from src.application.services.session_title_generator import SessionTitleGenerator
 from src.domain.aggregates.session.session_message import (
     MessageStatus,
     SessionMessage,
     SessionMessageRole,
 )
 from src.domain.aggregates.task.task import Task, TaskConfig, TaskStatus
-from src.domain.interfaces.llm_provider import ILLMProvider
-from src.domain.interfaces.prompt_context_interface import PromptContextInterface
-from src.domain.repositories.agent_repository import IAgentRepository
+from src.domain.events.task_events import TaskCreated
+from src.domain.repositories.event_publisher import IEventPublisher
 from src.domain.repositories.session_message_repository import (
     ISessionMessageRepository,
 )
 from src.domain.repositories.session_repository import ISessionRepository
-from src.skills.skill_repository import ISkillRepository
 from src.domain.repositories.task_repository import ITaskRepository
 from src.domain.repositories.tool_registry import IToolRegistry
-from src.domain.services import IEventEmitter, ProxyEventEmitter
-from src.domain.events.task_events import TaskCompleted, TaskCreated, TaskFailed
-from src.domain.entities.event_types import AgentEventType
-from src.domain.entities.conversation import ConversationMessage
-from src.domain.repositories.event_publisher import IEventPublisher
-from src.domain.value_objects.prompt_template import PromptTemplate
-from src.domain.services.prompt_assemble_service import PromptAssembleService
+from src.domain.services import IEventEmitter
 
 logger = logging.getLogger(__name__)
 
 
-def _tool_defs_to_openai_functions(tool_registry: IToolRegistry) -> list:
-    """将工具转换为 OpenAI function schema 格式（供 bind_tools 使用）"""
-    return [tool.to_tool_def().to_llm_schema() for tool in tool_registry.list_tools()]
-
-
-def _build_message_event_payload(message: SessionMessage) -> Dict[str, Any]:
-    """构建 session:message:saved 事件载荷。"""
-    return {
-        "message": {
-            "id": message.id,
-            "session_id": message.session_id,
-            "task_id": message.task_id,
-            "role": message.role.value,
-            "content": message.content,
-            "thinking_content": message.thinking_content,
-            "has_thinking": message.has_thinking,
-            "tool_calls": message.tool_calls,
-            "tool_results": message.tool_results,
-            "status": message.status.value,
-            "error": message.error,
-            "cost": message.cost,
-            "created_at": message.created_at.isoformat(),
-        }
-    }
-
-
-def _tool_output_text(tool_result: Dict[str, Any]) -> str:
-    """统一提取工具结果的文本：优先 output，其次 error，都没有返回空串。"""
-    return tool_result.get("output") or tool_result.get("error") or ""
-
-
-def _extract_last_message_content(messages: list) -> str:
-    """从消息列表倒序查找第一条非空 content，找不到返回空串。
-
-    兼容 dict 和 LangChain Message 对象两种形式。
-    """
-    for msg in reversed(messages):
-        if isinstance(msg, dict):
-            content = msg.get("content", "")
-        else:
-            content = getattr(msg, "content", "") or ""
-        if content:
-            return content
-    return ""
-
-
-def _session_messages_to_conversation(
-    history_messages: list[SessionMessage],
-) -> list[ConversationMessage]:
-    """将 SessionMessage 列表转换为 ConversationMessage 列表。
-
-    SessionMessage 是持久化聚合实体，ConversationMessage 是 Prompt
-    构建域的领域实体。转换时：
-    - 历史 assistant 消息不携带 tool_calls（避免缺少对应 tool 结果
-      导致 LLM 报错）
-    - TOOL_SUMMARY 转为 user 角色消息，标注工具结果上下文
-    """
-    result: list[ConversationMessage] = []
-    for msg in history_messages:
-        if msg.role == SessionMessageRole.USER:
-            result.append(ConversationMessage(
-                role="user",
-                content=msg.content,
-            ))
-        elif msg.role == SessionMessageRole.ASSISTANT:
-            # 历史 assistant 消息不携带 tool_calls，
-            # 因为对应的 tool 结果消息未完整存储。
-            # 工具使用记录以文本摘要形式附在 content 中。
-            content_parts = [msg.content or ""]
-            if msg.tool_calls:
-                tool_names = list(dict.fromkeys(
-                    tc.get("name", "") for tc in msg.tool_calls if tc.get("name")
-                ))
-                if tool_names:
-                    tools_summary = f"\n\n[Used Tools: {', '.join(tool_names)}]"
-                    content_parts.append(tools_summary)
-            result.append(ConversationMessage(
-                role="assistant",
-                content="".join(content_parts),
-            ))
-        elif msg.role == SessionMessageRole.SYSTEM:
-            result.append(ConversationMessage(
-                role="system",
-                content=msg.content,
-            ))
-        elif msg.role == SessionMessageRole.TOOL_SUMMARY:
-            result.append(ConversationMessage(
-                role="user",
-                content=f"[Tool Results] {msg.content}",
-            ))
-    return result
-
-
-def _dict_messages_to_langchain(
-    messages: list[dict],
-) -> list:
-    """将 LLM API dict 消息列表转换为 LangChain 消息对象。
-
-    用于将 PromptContextInterface.build_messages() 的输出
-    转换为 LangGraph 可消费的消息格式。
-    """
-    from langchain_core.messages import ToolMessage as LCMessage
-
-    lc_messages: list = []
-    for msg in messages:
-        role = msg.get("role", "")
-        content = msg.get("content", "")
-        if role == "system":
-            lc_messages.append(SystemMessage(content=content))
-        elif role == "user":
-            lc_messages.append(HumanMessage(content=content))
-        elif role == "assistant":
-            lc_messages.append(AIMessage(
-                content=content,
-                tool_calls=msg.get("tool_calls", []),
-            ))
-        elif role == "tool":
-            lc_messages.append(LCMessage(
-                content=content,
-                tool_call_id=msg.get("tool_call_id", ""),
-            ))
-        else:
-            lc_messages.append(HumanMessage(content=content))
-    return lc_messages
-
-
 class SendMessageUseCase:
-    """发送消息用例 — 编排 Session 操作 + Agent Loop 启动"""
+    """发送消息用例 — 同步准备 + 异步启动 Agent Loop。
+
+    职责边界：
+    - 同步阶段：保存用户消息 → 更新 Session → 创建 Task → 发布 TaskCreated
+    - 异步启动：委托 AgentLoopRunner 执行后台 Agent Loop
+    - 标题生成：委托 SessionTitleGenerator 异步生成
+
+    不负责：Agent Loop 执行过程、终态结果持久化（由 AgentLoopRunner
+    及其内部的 TaskCompletionService 处理）。
+    """
 
     def __init__(
         self,
-        agent_repo: IAgentRepository,
         session_repo: ISessionRepository,
         message_repo: ISessionMessageRepository,
         task_repo: Optional[ITaskRepository] = None,
         event_emitter: Optional[IEventEmitter] = None,
         tool_registry: Optional[IToolRegistry] = None,
-        skill_repo: Optional[ISkillRepository] = None,
-        llm_provider: Optional[ILLMProvider] = None,
-        prompt_context: Optional[PromptContextInterface] = None,
-        running_tasks: Optional[dict[str, asyncio.Task]] = None,
-        sub_agent_launcher: Optional[Any] = None,
         event_publisher: Optional[IEventPublisher] = None,
-        workflow_builder: Optional[IAgentWorkflowBuilder] = None,
+        loop_runner: Optional[AgentLoopRunner] = None,
+        title_generator: Optional[SessionTitleGenerator] = None,
+        running_tasks: Optional[dict[str, asyncio.Task]] = None,
         default_model: str = "gpt-4",
     ):
-        self.agent_repo = agent_repo
         self.session_repo = session_repo
         self.message_repo = message_repo
         self.task_repo = task_repo
         self.event_emitter = event_emitter
         self.tool_registry = tool_registry
-        self.skill_repo = skill_repo
-        self.llm_provider = llm_provider
-        self.prompt_context = prompt_context
-        self.running_tasks = running_tasks if running_tasks is not None else {}
-        self.sub_agent_launcher = sub_agent_launcher
         self.event_publisher = event_publisher
-        self.workflow_builder = workflow_builder
+        self.loop_runner = loop_runner
+        self.title_generator = title_generator
+        self.running_tasks = running_tasks if running_tasks is not None else {}
         self.default_model = default_model
 
     async def execute(
@@ -262,10 +129,10 @@ class SendMessageUseCase:
             if session:
                 session.update_metadata(content)
                 # 首条消息自动生成标题 - 使用 LLM 提炼
-                if session.message_count == 1:
+                if session.message_count == 1 and self.title_generator:
                     # 异步生成标题，不阻塞主流程
                     asyncio.create_task(
-                        self._generate_session_title(session_id, content)
+                        self.title_generator.generate(session_id, content)
                     )
                 await self.session_repo.update(session)
 
@@ -300,9 +167,9 @@ class SendMessageUseCase:
 
         # 4. 启动后台 runner
         asyncio_task: asyncio.Task | None = None
-        if self.event_emitter and self.tool_registry:
+        if self.event_emitter and self.tool_registry and self.loop_runner:
             asyncio_task = asyncio.create_task(
-                self._run_agent_loop(
+                self.loop_runner.run(
                     agent_id=agent_id,
                     session_id=session_id,
                     task=task,
@@ -317,6 +184,7 @@ class SendMessageUseCase:
                     parent_system_prompt=parent_system_prompt,
                     allowed_tools=allowed_tools,
                     persist_session_messages=persist_session_messages,
+                    send_message_use_case=self,
                 )
             )
             self.running_tasks[task.id] = asyncio_task
@@ -332,530 +200,3 @@ class SendMessageUseCase:
             "task_id": task.id,
             "asyncio_task": asyncio_task if (self.event_emitter and self.tool_registry) else None,
         }
-
-    def _build_llm(self, model: Optional[str], tool_registry: Optional[IToolRegistry], agent_id: str):
-        # 使用注入的 LLM Provider
-        llm = self.llm_provider.create_chat_model(
-            model=model or None) if self.llm_provider else None
-        if llm is None:
-            raise RuntimeError("LLM Provider is not configured")
-
-        if tool_registry and tool_registry.tool_count > 0:
-            tool_schemas = _tool_defs_to_openai_functions(tool_registry)
-            llm = llm.bind_tools(tool_schemas)
-            logger.info("binding-tools agent %s Tool schemas: %s",
-                        agent_id, tool_schemas)
-        return llm
-
-    def _build_system_prompt(
-        self,
-        is_sub_agent: bool,
-        parent_system_prompt: Optional[str],
-        sub_agent_description: Optional[str],
-        agent_system_prompt: str,
-    ) -> str:
-        """根据模式构建 system prompt
-
-        Args:
-            is_sub_agent: 是否为 sub-agent 模式
-            parent_system_prompt: 父 agent 的 system prompt
-            sub_agent_description: sub-agent 任务描述
-            agent_system_prompt: 当前 agent 的 system prompt（通过 PromptAssembleService 生成）
-
-        Returns:
-            构建后的 system prompt
-        """
-        if not is_sub_agent:
-            return agent_system_prompt
-
-        # Sub-agent 模式：复用父 prompt + 添加任务说明
-        from src.subagent.sub_agent_orchestrator import SubAgentOrchestrator
-        orchestrator = SubAgentOrchestrator()
-        return orchestrator.build_sub_agent_system_prompt(
-            parent_system_prompt=parent_system_prompt or "",
-            description=sub_agent_description or "",
-        )
-
-    def _build_tool_registry(
-        self,
-        is_sub_agent: bool,
-        allowed_tools: Optional[list[str]] = None,
-    ) -> Optional[IToolRegistry]:
-        """根据模式构建工具注册表
-
-        Args:
-            is_sub_agent: 是否为 sub-agent 模式
-            allowed_tools: 允许的工具列表
-
-        Returns:
-            工具注册表
-        """
-        if not is_sub_agent:
-            return self.tool_registry
-
-        # Sub-agent 模式：排除特定工具
-        from src.subagent.sub_agent_orchestrator import SubAgentOrchestrator
-        from src.infrastructure.tools.registry import ToolRegistry
-        orchestrator = SubAgentOrchestrator()
-        return orchestrator.create_sub_agent_tool_registry(
-            self.tool_registry,
-            registry_factory=lambda: ToolRegistry(),
-            allowed_tools=allowed_tools,
-        )
-
-    def _build_event_emitter(
-        self,
-        is_sub_agent: bool,
-        parent_task_id: Optional[str],
-        sub_task_id: Optional[str],
-    ) -> Optional[IEventEmitter]:
-        """根据模式构建事件发射器
-
-        Args:
-            is_sub_agent: 是否为 sub-agent 模式
-            parent_task_id: 父 task ID
-            sub_task_id: 子 task ID
-
-        Returns:
-            事件发射器
-        """
-        if not is_sub_agent:
-            return self.event_emitter
-
-        # Sub-agent 模式：使用代理转发器
-        return ProxyEventEmitter(
-            self.event_emitter,
-            parent_task_id=parent_task_id or "",
-            sub_task_id=sub_task_id or "",
-        )
-
-    async def _generate_session_title(self, session_id: str, user_message: str) -> None:
-        """使用 LLM 生成会话标题
-
-        Args:
-            session_id: 会话 ID
-            user_message: 用户的第一条消息
-        """
-        try:
-            from langchain_core.prompts import PromptTemplate
-
-            if not self.llm_provider:
-                logger.warning(
-                    "LLM Provider not configured, skipping title generation")
-                return
-
-            # 创建 LLM 实例（不绑定工具）
-            llm = self.llm_provider.create_chat_model()
-
-            # 构建提示词
-            prompt = PromptTemplate.from_template(
-                "请根据用户的消息内容，生成一个简洁的会话标题（不超过15个中文字符或30个英文字符）。\n"
-                "要求：\n"
-                "1. 准确概括用户的核心需求或意图\n"
-                "2. 简洁明了，适合作为会话列表的显示标题\n"
-                "3. 只返回标题文本，不要添加任何解释或其他内容\n\n"
-                "用户消息：{message}\n\n"
-                "标题："
-            )
-
-            # 调用 LLM
-            # 限制输入长度
-            response = await llm.ainvoke(prompt.format(message=user_message[:500]))
-
-            # 提取标题（去除前后空白和可能的引号）
-            title = response.content.strip().strip('"').strip("'")
-
-            # 限制标题长度
-            if len(title) > 30:
-                title = title[:30].rstrip()
-
-            # 更新会话标题
-            session = await self.session_repo.get_by_id(session_id)
-            if session and not session.title:  # 只在还没有标题时更新
-                session.title = title
-                await self.session_repo.update(session)
-                logger.info("Generated session title: %s", title)
-
-        except Exception as e:
-            logger.exception("Failed to generate session title: %s", e)
-            # 如果生成失败，使用默认的截取方式
-            session = await self.session_repo.get_by_id(session_id)
-            if session and not session.title:
-                session.auto_title(user_message)
-                await self.session_repo.update(session)
-
-    async def _finalize_terminal_result(
-        self,
-        *,
-        task: Task,
-        session_id: str,
-        result: Dict[str, Any],
-        event_emitter: Optional[IEventEmitter] = None,
-        persist_session_messages: bool = True,
-    ) -> None:
-        """处理终态结果
-
-        Args:
-            task: Task 实体
-            session_id: Session ID
-            result: LangGraph 执行结果
-            event_emitter: 事件发射器（可选，默认使用 self.event_emitter）
-        """
-        emitter = event_emitter or self.event_emitter
-        final_result = result.get("final_result")
-        error = result.get("error")
-        final_turn = result.get("current_turn", task.current_turn)
-        previous_phase = result.get("phase", "thinking")
-
-        all_tool_calls = []
-        all_tool_results = []
-        for msg in result.get("messages", []):
-            tc = None
-            if isinstance(msg, dict):
-                tc = msg.get("tool_calls")
-            elif hasattr(msg, "tool_calls"):
-                tc = msg.tool_calls
-            if tc:
-                for t in tc:
-                    if isinstance(t, dict):
-                        all_tool_calls.append(
-                            {"name": t.get("name", ""), "args": t.get(
-                                "args", {}), "id": t.get("id", "")}
-                        )
-                    else:
-                        all_tool_calls.append(
-                            {
-                                "name": getattr(t, "name", ""),
-                                "args": getattr(t, "args", {}) or {},
-                                "id": getattr(t, "id", ""),
-                            }
-                        )
-
-        # 分离 clarify 输出与普通工具结果：
-        # - clarify 的输出作为 assistant 正文呈现给用户，不进入 tool_results
-        # - 其他工具正常收集到 all_tool_results
-        clarify_outputs: list[str] = []
-        for tool_call_id, tool_result in (result.get("tool_results") or {}).items():
-            output = _tool_output_text(tool_result)
-            if tool_result.get("tool_name") == "clarify":
-                if output:
-                    clarify_outputs.append(output)
-                continue
-            all_tool_results.append(
-                {
-                    "tool_name": tool_result.get("tool_name", ""),
-                    "id": tool_call_id,
-                    "status": tool_result.get("status", "success"),
-                    "result": output,
-                }
-            )
-
-        # 计算 assistant 正文：
-        # 1. 如果有 clarify 输出，直接使用 clarify 输出（final_result 已包含 clarify 内容，避免重复）
-        # 2. 否则用终态输出 (final_result 或 error)
-        # 3. 最后回溯取最后一条非空消息内容
-        if clarify_outputs:
-            # clarify 输出已经通过 final_result 设置，直接使用 clarify_outputs 避免重复
-            assistant_content = "\n\n".join(clarify_outputs)
-        else:
-            assistant_content = (
-                final_result
-                or error
-                or _extract_last_message_content(result.get("messages", []))
-            )
-        terminal_result = final_result or assistant_content
-
-        thinking_text = result.get("thinking_text", "")
-
-        assistant_msg: Optional[SessionMessage] = None
-        if persist_session_messages:
-            assistant_msg = SessionMessage(
-                session_id=session_id,
-                task_id=task.id,
-                role=SessionMessageRole.ASSISTANT,
-                content=assistant_content,
-                thinking_content=thinking_text,
-                has_thinking=bool(thinking_text),
-                tool_calls=all_tool_calls,
-                tool_results=all_tool_results,
-                status=MessageStatus.ERROR if error else MessageStatus.COMPLETED,
-                error=error,
-            )
-            assistant_msg = await self.message_repo.add(assistant_msg)
-
-        if self.task_repo:
-            task.status = TaskStatus.FAILED if error else TaskStatus.COMPLETED
-            task.current_turn = final_turn
-            task.completed_at = datetime.now()
-            task.result = None if error else terminal_result
-            task.error = error
-            await self.task_repo.update(task)
-
-        if persist_session_messages:
-            session = await self.session_repo.get_by_id(session_id)
-            if session:
-                session.update_metadata(assistant_content)
-                await self.session_repo.update(session)
-
-        await emitter.emit_phase_changed(
-            task.id,
-            "failed" if error else "complete",
-            previous_phase,
-            final_turn,
-        )
-        if assistant_msg is not None:
-            await emitter.emit(
-                task.id,
-                AgentEventType.SESSION_MESSAGE_SAVED,
-                _build_message_event_payload(assistant_msg),
-            )
-        if error:
-            await emitter.emit(task.id, AgentEventType.TASK_FAILED, {"error": error})
-            if self.event_publisher:
-                await self.event_publisher.publish(TaskFailed(
-                    task_id=task.id,
-                    error=error,
-                    failed_at=task.completed_at,
-                ))
-        else:
-            await emitter.emit(task.id, AgentEventType.TASK_COMPLETED, {"result": terminal_result})
-            if self.event_publisher:
-                await self.event_publisher.publish(TaskCompleted(
-                    task_id=task.id,
-                    result=terminal_result or "",
-                    completed_at=task.completed_at,
-                ))
-
-    async def _run_agent_loop(
-        self,
-        agent_id: str,
-        session_id: str,
-        task: Task,
-        content: str,
-        model: Optional[str],
-        max_turns: int,
-        workspace: str,
-        skill_ids: Optional[list[str]] = None,
-        # Sub-agent 模式参数
-        is_sub_agent: bool = False,
-        parent_task_id: Optional[str] = None,
-        sub_agent_description: Optional[str] = None,
-        parent_system_prompt: Optional[str] = None,
-        allowed_tools: Optional[list[str]] = None,
-        persist_session_messages: bool = True,
-    ) -> None:
-        """后台 Agent Loop Runner"""
-        effective_event_emitter = self._build_event_emitter(
-            is_sub_agent=is_sub_agent,
-            parent_task_id=parent_task_id,
-            sub_task_id=task.id,
-        )
-        if model is None:
-            model = self.default_model
-
-        try:
-            # 步骤 A: 构建 system_prompt（使用 11 层 Prompt 架构）
-            agent = await self.agent_repo.get_by_id(agent_id)
-            if not agent:
-                raise ValueError(f"Agent {agent_id} not found")
-
-            # 使用新的 PromptAssembleService 组装 11 层 system_message
-            template = PromptTemplate.from_agent(agent)
-            assemble_service = PromptAssembleService()
-
-            # 从 ToolRegistry 获取 ToolDef 列表（用于 Layer 5 工具描述）
-            tool_defs = []
-            if self.tool_registry:
-                tool_defs = self.tool_registry.get_tool_defs()
-
-            # 从 SkillRepository 获取选中的 SkillDef 列表（用于 Layer 8 注入）
-            skill_defs = []
-            if self.skill_repo and skill_ids:
-                skill_defs = await self.skill_repo.get_by_ids(skill_ids)
-
-            assembly_result = assemble_service.assemble(
-                template=template,
-                tools=tool_defs,  # 注入工具定义到 Layer 5
-                skills=skill_defs,  # 注入选中的 Skills 到 Layer 8
-                workspace=workspace,
-                environment={
-                    "platform": "darwin",
-                    "date": datetime.now().strftime("%Y-%m-%d"),
-                    "timezone": "Asia/Shanghai",
-                },
-                memory_enabled=bool(template.memory_md),
-            )
-            agent_system_prompt = assembly_result.system_message
-
-            # 根据模式构建 system prompt
-            system_prompt = self._build_system_prompt(
-                is_sub_agent=is_sub_agent,
-                parent_system_prompt=parent_system_prompt,
-                sub_agent_description=sub_agent_description,
-                agent_system_prompt=agent_system_prompt,
-            )
-
-            logger.info(
-                "[Prompt Assembly] agent=%s | layers=%s | total_tokens=%d | static_prefix_tokens=%d",
-                agent_id,
-                assembly_result.layers,
-                assembly_result.total_token_estimate,
-                assembly_result.static_prefix_tokens,
-            )
-
-            # 步骤 B: 加载会话历史 → 通过 PromptContextInterface 构建 messages
-            if is_sub_agent:
-                # Sub-agent 是主 agent 的工具调用执行单元，只接收本次原子任务，
-                # 不继承父 session 的 user/assistant/tool 历史。
-                messages = [HumanMessage(content=content)]
-            elif self.prompt_context:
-                # 使用 PromptContextInterface 进行 Token 预算管理 + 裁剪
-                history_messages = await self.message_repo.list_by_session(
-                    session_id, limit=100
-                )
-                conversation_history = _session_messages_to_conversation(
-                    history_messages
-                )
-                max_tokens = 8000  # TODO: 从配置读取
-                api_messages = await self.prompt_context.build_messages(
-                    system_message=system_prompt,
-                    history=conversation_history,
-                    max_tokens=max_tokens,
-                )
-                messages = _dict_messages_to_langchain(api_messages)
-            else:
-                # 降级：无 PromptContextInterface 时的简单历史加载
-                messages = []
-                history_messages = await self.message_repo.list_by_session(
-                    session_id, limit=20
-                )
-                for msg in history_messages:
-                    if msg.role == SessionMessageRole.USER:
-                        messages.append(HumanMessage(content=msg.content))
-                    elif msg.role == SessionMessageRole.ASSISTANT:
-                        content_parts = [msg.content or ""]
-                        if msg.tool_calls:
-                            tool_names = list(dict.fromkeys(
-                                tc.get("name", "") for tc in msg.tool_calls if tc.get("name")
-                            ))
-                            if tool_names:
-                                tools_summary = f"\n\n[Used Tools: {', '.join(tool_names)}]"
-                                content_parts.append(tools_summary)
-                        messages.append(
-                            AIMessage(content="".join(content_parts)))
-                    elif msg.role == SessionMessageRole.TOOL_SUMMARY:
-                        messages.append(HumanMessage(
-                            content=f"[Tool Results] {msg.content}"))
-
-            # 步骤 C: 创建 LLM 实例 + 绑定工具
-            # 根据模式构建工具注册表
-            effective_tool_registry = self._build_tool_registry(
-                is_sub_agent=is_sub_agent,
-                allowed_tools=allowed_tools,
-            )
-            llm = self._build_llm(model, effective_tool_registry, agent_id)
-
-            # 步骤 D: 构建初始 AgentState
-            initial_state = {
-                "messages": messages,
-                "task_id": task.id,
-                "workspace": workspace,
-                "user_message": content,
-                "task_start_message_count": len(messages),
-                "model": model,
-                "current_turn": 0,
-                "max_turns": max_turns,
-                "phase": "idle",
-                "should_end": False,
-                "is_complete": False,
-                "pending_tool_calls": [],
-                "tool_results": {},
-                "awaiting_user_input": False,
-                "last_executed_tool_call_ids": [],
-                "loop_detection_count": 0,
-                "loop_detected": False,
-                "loop_type": None,
-                "stuck_detection_count": 0,
-                "stuck_detected": False,
-                "current_llm_text": "",
-                "empty_retry_count": 0,
-                "system_prompt": system_prompt,
-                "final_result": None,
-                "error": None,
-                "compression_strategy": None,
-                "is_sub_agent": is_sub_agent,
-                "parent_task_id": parent_task_id,
-            }
-
-            # 步骤 E: 编译并执行 LangGraph
-            if self.workflow_builder:
-                graph = self.workflow_builder.build()
-            else:
-                from src.infrastructure.agent.workflow_builder import AgentWorkflowBuilder
-                graph = AgentWorkflowBuilder.build()
-
-            graph_config = {
-                "configurable": {
-                    "llm": llm,
-                    "event_emitter": effective_event_emitter,
-                    "event_service": effective_event_emitter,
-                    "tool_registry": effective_tool_registry,
-                    "agent_id": agent_id,
-                    "llm_model": model,
-                    "session_id": session_id,
-                    # 注入 context 依赖，供工具使用
-                    "send_message_use_case": self,
-                    "task_repo": self.task_repo,
-                    "parent_state": initial_state,
-                    "parent_agent_id": agent_id,
-                    "parent_session_id": session_id,
-                    "parent_task_id": parent_task_id or task.id,
-                }
-            }
-
-            await effective_event_emitter.emit(task.id, AgentEventType.TASK_STARTED, {})
-
-            result = await graph.ainvoke(initial_state, graph_config)
-
-            await self._finalize_terminal_result(
-                task=task,
-                session_id=session_id,
-                result=result,
-                event_emitter=effective_event_emitter,
-                persist_session_messages=persist_session_messages,
-            )
-
-        except asyncio.CancelledError:
-            logger.info("Agent loop cancelled for task %s", task.id)
-            if self.task_repo:
-                task.status = TaskStatus.CANCELLED
-                task.completed_at = datetime.now()
-                task.error = "cancelled"
-                await self.task_repo.update(task)
-            if effective_event_emitter:
-                await effective_event_emitter.emit_phase_changed(
-                    task.id,
-                    "cancelled",
-                    "thinking",
-                    task.current_turn,
-                )
-                await effective_event_emitter.emit(
-                    task.id, AgentEventType.TASK_CANCELLED, {}
-                )
-        except Exception as e:
-            logger.exception("Agent loop failed for task %s: %s", task.id, e)
-            if self.task_repo:
-                task.status = TaskStatus.FAILED
-                task.completed_at = datetime.now()
-                task.error = str(e)
-                await self.task_repo.update(task)
-            if effective_event_emitter:
-                await effective_event_emitter.emit_phase_changed(
-                    task.id,
-                    "failed",
-                    "thinking",
-                    task.current_turn,
-                )
-                await effective_event_emitter.emit(
-                    task.id, AgentEventType.TASK_FAILED, {"error": str(e)}
-                )

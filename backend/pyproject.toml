@@ -23,6 +23,7 @@ dependencies = [
     "greenlet>=3.2.5",
     # 搜索工具
     "tavily-python>=0.3.0",
+    "langchain-deepseek>=1.0.1",
 ]
 
 [tool.pytest.ini_options]

@@ -211,6 +211,9 @@ async def send_message(
     返回 202 + taskId，前端通过 SSE 订阅任务事件。
     """
     from src.application.use_cases.send_message import SendMessageUseCase
+    from src.application.services.agent_loop_runner import AgentLoopRunner
+    from src.application.services.session_title_generator import SessionTitleGenerator
+    from src.application.services.task_completion_service import TaskCompletionService
     from src.presentation.dependencies import (
         create_tool_registry,
     )
@@ -253,17 +256,41 @@ async def send_message(
     bg_tool_registry = create_tool_registry()
     bg_llm_provider = get_llm_provider()
     bg_llm_settings = get_llm_settings()
+    bg_prompt_context = get_prompt_context()
+
+    # 构建应用服务
+    title_generator = SessionTitleGenerator(
+        llm_provider=bg_llm_provider,
+        session_repo=bg_session_repo,
+    )
+    completion_service = TaskCompletionService(
+        message_repo=bg_message_repo,
+        task_repo=bg_task_repo,
+        session_repo=bg_session_repo,
+    )
+    loop_runner = AgentLoopRunner(
+        agent_repo=bg_agent_repo,
+        llm_provider=bg_llm_provider,
+        prompt_context=bg_prompt_context,
+        message_repo=bg_message_repo,
+        skill_repo=bg_skill_repo,
+        task_repo=bg_task_repo,
+        session_repo=bg_session_repo,
+        event_emitter=bg_event_emitter,
+        tool_registry=bg_tool_registry,
+        workflow_builder=None,
+        task_completion_service=completion_service,
+        default_model=bg_llm_settings.default_model,
+    )
 
     use_case = SendMessageUseCase(
-        agent_repo=bg_agent_repo,
         session_repo=bg_session_repo,
         message_repo=bg_message_repo,
         task_repo=bg_task_repo,
         event_emitter=bg_event_emitter,
         tool_registry=bg_tool_registry,
-        skill_repo=bg_skill_repo,
-        llm_provider=bg_llm_provider,
-        prompt_context=get_prompt_context(),
+        loop_runner=loop_runner,
+        title_generator=title_generator,
         default_model=bg_llm_settings.default_model,
         running_tasks=request.app.state.running_tasks,
     )

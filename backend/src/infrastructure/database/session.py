@@ -23,9 +23,14 @@ sync_engine = create_engine(
 )
 
 # 异步引擎 (用于异步操作)
+# pool_size + max_overflow: 支持 sub-agent 并发场景（每 sub-agent 一个独立 session）
+# WAL 模式通过 _init_wal() 在引擎创建后立即设置
 async_engine = create_async_engine(
     SQLALCHEMY_ASYNC_DATABASE_URL,
     connect_args=_SQLITE_CONNECT_ARGS,
+    pool_size=10,
+    max_overflow=20,
+    pool_timeout=30,
 )
 
 # Session 工厂 (同步)
@@ -73,8 +78,33 @@ async def get_async_db():
             await session.close()
 
 
+def _init_wal() -> None:
+    """启用 SQLite WAL 模式 + 性能优化 PRAGMA。
+
+    WAL (Write-Ahead Logging) 允许读写并发，是 sub-agent 并行场景的核心优化。
+    同时设置 synchronous=NORMAL（WAL 模式下安全）以提高写入性能。
+    """
+    from sqlalchemy import text
+
+    with sync_engine.connect() as conn:
+        # WAL 模式：持久化设置，影响所有后续连接
+        result = conn.execute(text("PRAGMA journal_mode=WAL"))
+        row = result.fetchone()
+        if row and row[0].upper() != "WAL":
+            # 某些配置下 WAL 可能被禁用（如只读文件系统），降级为 delete 模式
+            import logging
+            logging.getLogger(__name__).warning(
+                "WAL mode not available (got: %s). Concurrent sub-agent performance may degrade.", row[0])
+
+        # synchronous=NORMAL: WAL 模式下的安全降级，提升写入性能
+        conn.execute(text("PRAGMA synchronous=NORMAL"))
+        # cache_size: 增大页面缓存（单位：页，每页 4KB，-64000 ≈ 256MB）
+        conn.execute(text("PRAGMA cache_size=-64000"))
+        conn.commit()
+
+
 def init_db():
-    """初始化数据库(创建所有表 + 轻量列迁移)"""
+    """初始化数据库(创建所有表 + 轻量列迁移 + WAL 优化)"""
     # 导入所有模型以注册
     from src.infrastructure.database.models.agent_model import (  # noqa: F401
         TaskModel,
@@ -84,6 +114,9 @@ def init_db():
         SessionMessageModel,
         SkillModel,
     )
+
+    # 启用 WAL 模式（必须在任何写入之前执行）
+    _init_wal()
 
     Base.metadata.create_all(bind=sync_engine)
 

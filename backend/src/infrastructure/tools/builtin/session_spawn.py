@@ -32,6 +32,12 @@ from src.infrastructure.tools.decorator import tool
 
 logger = logging.getLogger(__name__)
 
+# Sub-agent 并发控制：防止 SQLite 连接池耗尽（默认 pool_size=10）
+# 每个 sub-agent 占用一个独立 DB session，同时过多会导致 QueuePool overflow。
+# Semaphore(5) 确保最多 5 个 sub-agent 同时执行。
+_SUB_AGENT_MAX_CONCURRENT = 5
+_SUB_AGENT_SEMAPHORE = asyncio.Semaphore(_SUB_AGENT_MAX_CONCURRENT)
+
 
 def _is_sqlite_task_repo(task_repo: Any) -> bool:
     return task_repo.__class__.__name__ == "SQLiteTaskRepository"
@@ -39,17 +45,18 @@ def _is_sqlite_task_repo(task_repo: Any) -> bool:
 
 def _can_build_isolated_use_case(send_message_use_case: Any) -> bool:
     required_attrs = (
-        "agent_repo",
         "session_repo",
         "message_repo",
         "task_repo",
         "event_emitter",
         "tool_registry",
-        "skill_repo",
-        "llm_provider",
+        "loop_runner",
         "running_tasks",
     )
-    return all(hasattr(send_message_use_case, attr) for attr in required_attrs)
+    if not all(hasattr(send_message_use_case, attr) for attr in required_attrs):
+        return False
+    lr = send_message_use_case.loop_runner
+    return lr is not None and hasattr(lr, "llm_provider")
 
 
 @asynccontextmanager
@@ -67,6 +74,9 @@ async def _sub_agent_runtime_scope(
         return
 
     from src.application.use_cases.send_message import SendMessageUseCase
+    from src.application.services.agent_loop_runner import AgentLoopRunner
+    from src.application.services.session_title_generator import SessionTitleGenerator
+    from src.application.services.task_completion_service import TaskCompletionService
     from src.infrastructure.database.session import AsyncSessionLocal
     from src.infrastructure.repositories.sqlite_agent_repo import SQLiteAgentRepository
     from src.infrastructure.repositories.sqlite_session_repo import SQLiteSessionRepository
@@ -78,17 +88,51 @@ async def _sub_agent_runtime_scope(
 
     async with AsyncSessionLocal() as db_session:
         isolated_task_repo = SQLiteTaskRepository(db_session)
-        isolated_use_case = SendMessageUseCase(
-            agent_repo=SQLiteAgentRepository(db_session),
-            session_repo=SQLiteSessionRepository(db_session),
-            message_repo=SQLiteSessionMessageRepository(db_session),
+        isolated_agent_repo = SQLiteAgentRepository(db_session)
+        isolated_session_repo = SQLiteSessionRepository(db_session)
+        isolated_message_repo = SQLiteSessionMessageRepository(db_session)
+        isolated_skill_repo = SQLiteSkillRepository(db_session)
+
+        # 共享资源从父 use_case 获取
+        shared_llm_provider = send_message_use_case.loop_runner.llm_provider
+        shared_event_emitter = send_message_use_case.event_emitter
+        shared_tool_registry = send_message_use_case.tool_registry
+        shared_running_tasks = send_message_use_case.running_tasks
+
+        # 构建应用服务（isolated repos + shared singletons）
+        title_generator = SessionTitleGenerator(
+            llm_provider=shared_llm_provider,
+            session_repo=isolated_session_repo,
+        )
+        completion_service = TaskCompletionService(
+            message_repo=isolated_message_repo,
             task_repo=isolated_task_repo,
-            event_emitter=send_message_use_case.event_emitter,
-            tool_registry=send_message_use_case.tool_registry,
-            skill_repo=SQLiteSkillRepository(db_session),
-            llm_provider=send_message_use_case.llm_provider,
+            session_repo=isolated_session_repo,
+        )
+        loop_runner = AgentLoopRunner(
+            agent_repo=isolated_agent_repo,
+            llm_provider=shared_llm_provider,
+            prompt_context=None,
+            message_repo=isolated_message_repo,
+            skill_repo=isolated_skill_repo,
+            task_repo=isolated_task_repo,
+            session_repo=isolated_session_repo,
+            event_emitter=shared_event_emitter,
+            tool_registry=shared_tool_registry,
+            workflow_builder=None,
+            task_completion_service=completion_service,
             default_model=send_message_use_case.default_model,
-            running_tasks=send_message_use_case.running_tasks,
+        )
+
+        isolated_use_case = SendMessageUseCase(
+            session_repo=isolated_session_repo,
+            message_repo=isolated_message_repo,
+            task_repo=isolated_task_repo,
+            event_emitter=shared_event_emitter,
+            tool_registry=shared_tool_registry,
+            loop_runner=loop_runner,
+            title_generator=title_generator,
+            running_tasks=shared_running_tasks,
         )
         yield isolated_use_case, isolated_task_repo
 
@@ -209,6 +253,21 @@ async def session_spawn(
         )
 
     sub_task_id = f"sub-{uuid.uuid4().hex[:12]}"
+
+    # 并发控制：Semaphore 限制同时执行的 sub-agent 数量
+    # 防止 SQLite 连接池耗尽（QueuePool overflow）
+    semaphore_wait_start = datetime.now()
+    await _SUB_AGENT_SEMAPHORE.acquire()
+    try:
+        semaphore_wait_ms = (datetime.now() -
+                             semaphore_wait_start).total_seconds() * 1000
+        if semaphore_wait_ms > 100:
+            logger.info(
+                "session_spawn semaphore: waited %.0fms for slot (sub_task=%s)",
+                semaphore_wait_ms, sub_task_id,
+            )
+    except Exception:
+        pass
 
     try:
         from src.infrastructure.llm.config import LLMSettings
@@ -357,3 +416,5 @@ async def session_spawn(
             success=False,
             error=str(e),
         )
+    finally:
+        _SUB_AGENT_SEMAPHORE.release()

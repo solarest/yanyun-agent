@@ -3,6 +3,8 @@ from unittest.mock import AsyncMock
 
 from langchain_core.messages import AIMessage, HumanMessage
 
+from src.application.services.agent_loop_runner import AgentLoopRunner
+from src.application.services.task_completion_service import TaskCompletionService
 from src.application.use_cases.send_message import SendMessageUseCase
 from src.domain.aggregates.agent.agent import Agent
 from src.domain.aggregates.session.session_message import (
@@ -136,20 +138,50 @@ class CapturingGraph:
         }
 
 
+def _make_use_case(**overrides) -> SendMessageUseCase:
+    """构建带 mock loop_runner 的 SendMessageUseCase，便于测试 execute() 编排逻辑。"""
+    loop_runner = AgentLoopRunner(
+        agent_repo=FakeAgentRepository(),
+        llm_provider=FakeLLMProvider(),
+        prompt_context=None,
+        message_repo=FakeMessageRepository(),
+        skill_repo=FakeSkillRepository(),
+        task_repo=FakeTaskRepository(),
+        session_repo=FakeSessionRepository(),
+        event_emitter=FakeEmitter(),
+        tool_registry=FakeToolRegistry(),
+        workflow_builder=None,
+        task_completion_service=TaskCompletionService(
+            message_repo=FakeMessageRepository(),
+            task_repo=FakeTaskRepository(),
+            session_repo=FakeSessionRepository(),
+        ),
+    )
+    loop_runner.run = AsyncMock()  # type: ignore[method-assign]
+
+    kwargs = dict(
+        session_repo=FakeSessionRepository(),
+        message_repo=FakeMessageRepository(),
+        event_emitter=FakeEmitter(),
+        tool_registry=FakeToolRegistry(),
+        loop_runner=loop_runner,
+    )
+    kwargs.update(overrides)
+    return SendMessageUseCase(**kwargs)
+
+
 @pytest.mark.asyncio
 async def test_sub_agent_execute_reuses_task_and_passes_runtime_state() -> None:
     session_repo = FakeSessionRepository()
     message_repo = FakeMessageRepository()
     task_repo = FakeTaskRepository()
-    use_case = SendMessageUseCase(
-        agent_repo=FakeAgentRepository(),
+    use_case = _make_use_case(
         session_repo=session_repo,
         message_repo=message_repo,
         task_repo=task_repo,
         event_emitter=FakeEmitter(),
         tool_registry=FakeToolRegistry(),
     )
-    use_case._run_agent_loop = AsyncMock()  # type: ignore[method-assign]
 
     sub_task = Task(
         id="sub-task-1",
@@ -186,7 +218,7 @@ async def test_sub_agent_execute_reuses_task_and_passes_runtime_state() -> None:
     assert session_repo.get_calls == 0
 
     # type: ignore[attr-defined]
-    run_kwargs = use_case._run_agent_loop.call_args.kwargs
+    run_kwargs = use_case.loop_runner.run.call_args.kwargs
     assert run_kwargs["task"] is sub_task
     assert run_kwargs["is_sub_agent"] is True
     assert run_kwargs["parent_task_id"] == "parent-task-1"
@@ -198,16 +230,15 @@ async def test_sub_agent_execute_reuses_task_and_passes_runtime_state() -> None:
 
 @pytest.mark.asyncio
 async def test_execute_passes_effective_default_model_into_runtime_state(monkeypatch) -> None:
-    use_case = SendMessageUseCase(
-        agent_repo=FakeAgentRepository(),
+    task_repo = FakeTaskRepository()
+    use_case = _make_use_case(
         session_repo=FakeSessionRepository(),
         message_repo=FakeMessageRepository(),
-        task_repo=FakeTaskRepository(),
+        task_repo=task_repo,
         event_emitter=FakeEmitter(),
         tool_registry=FakeToolRegistry(),
         default_model="qwen3-max",
     )
-    use_case._run_agent_loop = AsyncMock()  # type: ignore[method-assign]
 
     result = await use_case.execute(
         agent_id="agent-1",
@@ -219,7 +250,7 @@ async def test_execute_passes_effective_default_model_into_runtime_state(monkeyp
     await result["asyncio_task"]
 
     # type: ignore[attr-defined]
-    run_kwargs = use_case._run_agent_loop.call_args.kwargs
+    run_kwargs = use_case.loop_runner.run.call_args.kwargs
     assert run_kwargs["model"] == "qwen3-max"
     assert run_kwargs["task"].model == "qwen3-max"
 
@@ -229,16 +260,31 @@ async def test_sub_agent_runtime_uses_only_assigned_task_and_stores_final_answer
     message_repo = FakeMessageRepository()
     task_repo = FakeTaskRepository()
     graph = CapturingGraph()
-    use_case = SendMessageUseCase(
-        agent_repo=FakeAgentRepository(),
-        session_repo=FakeSessionRepository(),
+
+    monkeypatch.setattr(
+        "src.infrastructure.agent.workflow_builder.AgentWorkflowBuilder.build",
+        lambda: graph,
+    )
+
+    completion_service = TaskCompletionService(
         message_repo=message_repo,
         task_repo=task_repo,
+        session_repo=FakeSessionRepository(),
+    )
+    loop_runner = AgentLoopRunner(
+        agent_repo=FakeAgentRepository(),
+        llm_provider=FakeLLMProvider(),
+        prompt_context=None,
+        message_repo=message_repo,
+        skill_repo=FakeSkillRepository(),
+        task_repo=task_repo,
+        session_repo=FakeSessionRepository(),
         event_emitter=FakeEmitter(),
         tool_registry=FakeToolRegistry(),
-        skill_repo=FakeSkillRepository(),
-        llm_provider=FakeLLMProvider(),
+        workflow_builder=None,
+        task_completion_service=completion_service,
     )
+
     task = Task(
         id="sub-task-1",
         message="query one day weather",
@@ -251,12 +297,7 @@ async def test_sub_agent_runtime_uses_only_assigned_task_and_stores_final_answer
         session_id="session-1",
     )
 
-    monkeypatch.setattr(
-        "src.infrastructure.agent.workflow_builder.AgentWorkflowBuilder.build",
-        lambda: graph,
-    )
-
-    await use_case._run_agent_loop(
+    await loop_runner.run(
         agent_id="agent-1",
         session_id="session-1",
         task=task,
