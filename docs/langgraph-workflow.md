@@ -2,190 +2,166 @@
 
 ## 概述
 
-本文档描述了基于 LangGraph 的 Agent 工作流架构。工作流由 **4 个核心节点** 组成，所有评估逻辑采用规则判断，消除 LLM 评估调用。
+本文档描述了基于 LangGraph 的 Agent 工作流架构。工作流由 **4 个核心节点** 组成，context_compact 作为每轮 LLM 调用的前置守门节点。
 
-**核心节点**: `llm_call` / `tool_execute` / `loop_detect` / `context_compact`
+**核心节点**: `context_compact` / `llm_call` / `loop_detect` / `tool_execute`
 
 ## 工作流流程图
 
 ```mermaid
 graph TB
-    Start([开始]) --> llm_call["llm_call_node<br/>LLM调用"]
-    
-    llm_call --> route_after_llm{LLM后路由<br/>双分支}
-    
+    Start([开始]) --> context_compact["context_compact_node<br/>上下文守门（每轮前置）"]
+
+    context_compact --> llm_call["llm_call_node<br/>LLM调用"]
+
+    llm_call --> route_after_llm{LLM后路由<br/>三分支}
+
+    route_after_llm -->|emergency_compact_requested| context_compact
     route_after_llm -->|should_end 或无tool_calls| End0([结束])
-    route_after_llm -->|有tool_calls| loop_detect["loop_detect_node<br/>循环检测+工具评估"]
-    
-    loop_detect --> route_loop{循环检测路由<br/>四分支}
+    route_after_llm -->|有tool_calls| loop_detect["loop_detect_node<br/>循环检测"]
+
+    loop_detect --> route_loop{循环检测路由<br/>三分支}
     route_loop -->|无循环| tool_execute["tool_execute_node<br/>工具执行"]
-    route_loop -->|count=1 注入反馈| llm_call
-    route_loop -->|count=2 压缩上下文| context_compact["context_compact_node<br/>上下文压缩"]
-    route_loop -->|count>=3 终止| End1([结束])
-    
+    route_loop -->|检测到循环（feedback/compact）| context_compact
+    route_loop -->|should_end（count≥3）| End1([结束])
+
     tool_execute --> route_tool{工具执行路由<br/>两分支}
     route_tool -->|awaiting_user_input| End2([结束])
-    route_tool -->|工具执行完毕| llm_call
+    route_tool -->|工具执行完毕| context_compact
 
-    context_compact --> llm_call
-    
+    style context_compact fill:#fce4ec
     style llm_call fill:#e1f5fe
     style tool_execute fill:#f3e5f5
     style loop_detect fill:#fff3e0
-    style context_compact fill:#fce4ec
 ```
 
 ### 设计原则
 
-- **极简路由**: `route_after_llm` 只做 "有无 tool_calls" 的双分支判断，有 tool_calls → `loop_detect`，否则 → END
-- **规则替代LLM**: 所有评估逻辑采用规则判断(关键词/正则/阈值)，消除 LLM 评估调用
-- **检测内聚**: 反馈注入逻辑内聚到 `loop_detect_node`
-- **Plan 降级**: `plan_execute` 已降级为闭包工具，不再是图节点
-- **工具执行简化**: `route_after_tool_execute` 只有两分支，工具执行后直接回 `llm_call`，由下轮 LLM 返回后再检测循环
+- **前置守门**: `context_compact` 是入口节点，每轮 LLM 调用前都经过 Token 水位检查
+- **多层压缩**: 4 级水位策略（skip / soft-prune / micro-compact / emergency-compact）
+- **极简路由**: `route_after_llm` 3 分支；`route_after_loop_detect` 3 分支；`route_after_tool_execute` 2 分支
+- **规则替代LLM**: 所有评估逻辑采用规则判断，消除 LLM 评估调用
+- **Token 校准**: LLM 返回后写回真实 `prompt_tokens` 作为后续增量估算 baseline
 
-### 反馈机制说明
-
-| 检测场景 | 处理位置 | 反馈策略 |
-|---------|---------|----------|
-| 循环检测 | `loop_detect_node` 内部 | count=1: 注入警告; count=2: context_compact; count≥3: 终止 |
-| 空结果循环 | `loop_detect_node` 内部 | 工具连续空结果，同样遵循 3 级升级策略 |
-| 致命错误 | `loop_detect_node` | permission 等致命错误 → terminate |
-| 工具质量评估 | `loop_detect_node` | 规则评估质量并记录 → 路由回 tool_execute |
-| 工具执行完毕 | `route_after_tool_execute` | 直接路由回 `llm_call`，由下轮 LLM 后再检测循环 |
-| 无 tool_calls | `route_after_llm` | 直接 END 终止 |
-
-## 系统提示词（System Prompt）
-
-LLM 调用节点的 system prompt 由 **PromptAssembleService** 组装，采用 **11 层 Prompt 架构**。
-
-详见: `backend/src/domain/services/prompt_assemble_service.py`
-
-在 `llm_call_node` 中，LLM 接收的 messages 数组为：
+### Token 估算流程
 
 ```
-[
-  SystemMessage(content=system_prompt),    // 上述 7 文件组装
-  ...history_messages,                     // 会话历史（最近 20 条）
-  HumanMessage(content=user_message),       // 当前用户消息
-  ...previous_turns,                       // 本轮之前的工具调用轮次
-]
+初始阶段:  char/4 启发式估算
+    ↓
+首次 LLM 调用成功:  提取 API 返回的真实 prompt_tokens → 写回 context_token_baseline
+    ↓
+后续每轮:  baseline + 新增消息 char/4（增量估算）
+    ↓
+发生 RemoveMessage 或 compact:  baseline 失效 → 回退全量 char/4 估算
 ```
-
-同时在 `llm.astream()` 调用时通过 `bind_tools()` 绑定运行时工具 schema（JSON Schema 格式）。**每次调用都重新传递 tools**，因为 OpenAI Chat Completions API 是无状态的。
 
 ## 节点说明
 
-### 1. LLM 调用节点 (llm_call_node)
+### 1. 上下文压缩节点 (context_compact_node) — 入口节点
+
+- **文件**: `backend/src/infrastructure/agent/nodes/context_compact_node.py`
+- **职责**: 每轮 LLM 调用前检查 Token 水位，执行对应压缩策略
+- **4 级压缩策略**:
+
+| 策略 | 触发条件 | 行为 |
+|------|---------|------|
+| `skip` | token < 40% 水线 | 发事件，不改消息 |
+| `soft_prune` | token 40%–60% | 裁剪 > 20000 字符的 ToolMessage 内容（head 4000 + tail 4000），保留 tool_call_id |
+| `micro_compact` | token > 60% | 保留 SystemMessage + 最近 10 条；对最多 90 条旧消息 LLM 摘要 → `HumanMessage`；其余 `RemoveMessage` |
+| `emergency_compact` | 上下文超限 | 保留 SystemMessage + 最近 3 条；摘要同 micro-compact；`context_compaction_attempts += 1` |
+
+- **摘要 prompt**: 任务聚焦，保留：已完成任务、进行中任务、文件/路径/命令、工具结果（成功/失败/错误）、用户约束、下一步
+- **固化出边**: `context_compact` → `llm_call`
+- **返回状态**: `last_context_strategy` / `context_token_estimate` / `context_token_baseline`（compact 后重置为 None）/ `context_compaction_attempts` / `emergency_compact_requested（重置为 False）`
+- **事件**: `CONTEXT_COMPACTING`，payload 含 `strategy` / `beforeTokens` / `afterTokens` / `maxContextTokens` / `beforeCount` / `afterCount` / `removedCount` / `prunedToolResults` / `summaryLength` / `reason`
+
+### 2. LLM 调用节点 (llm_call_node)
+
 - **文件**: `backend/src/infrastructure/agent/nodes/llm_call_node.py`
-- **职责**: 调用大语言模型并流式输出文本到前端
+- **职责**: 调用 LLM 并流式输出；写回 usage baseline；异常委托给错误处理器工厂
 - **功能**:
   1. 发射 `phase:changed` 事件（phase=thinking）
   2. 防御性注入 SystemMessage
   3. 流式调用 LLM，发射每个 token 片段（`llm:chunk`）
-  4. 使用 `AIMessageChunk` 聚合流式输出
-  5. 从聚合消息中提取 `tool_calls` 并转为 `pending_tool_calls`
-  6. 发射 LLM 完成事件（`llm:complete`）
-  7. 更新 `current_llm_text` 和 `current_turn`
-- **返回状态**:
-  - `messages`: `[AIMessage(content=full_text, tool_calls=...)]`
-  - `pending_tool_calls`: 待执行工具列表
-  - `current_llm_text`: 当前 LLM 输出文本
-  - `phase`: "thinking"
-  - `current_turn`: 当前轮次 +1
-
-### 2. 工具执行节点 (tool_execute_node)
-- **文件**: `backend/src/infrastructure/agent/nodes/tool_execute_node.py`
-- **职责**: 统一执行所有工具调用并返回结果（含 plan_execute 闭包工具）
-- **功能**:
-  1. 发射 `phase:changed` 事件（phase=tool_executing）
-  2. 遍历 `pending_tool_calls`，为每个工具构建 `ToolContext`
-  3. 调用 `tool_registry.execute()` 执行工具
-  4. 发射工具结果事件
-  5. 构建 `ToolMessage` 列表
-  6. 若某工具标记 `awaiting_user_input`，则设置该状态
-  7. 记录 `last_executed_tool_call_ids` 供后续使用
-- **返回状态**:
-  - `messages`: `[ToolMessage(content=..., tool_call_id=...)]`
-  - `tool_results`: 结构化结果字典
-  - `pending_tool_calls`: `[]`（清空）
-  - `awaiting_user_input`: 是否等待用户输入
-  - `last_executed_tool_call_ids`: 最近执行的工具调用ID列表
-  - `phase`: "tool_executing"
-- **路由说明**: 工具执行后直接路由回 `llm_call`，由下一轮 LLM 返回后再进入 `loop_detect` 进行循环检测
+  4. 使用 `AIMessageChunk` 聚合流式输出，提取 tool_calls
+  5. 发射 LLM 完成事件（`llm:complete`）
+  6. **Token 校准**: 从 `accumulated.usage_metadata.input_tokens` 提取真实 prompt_tokens → 写回 `context_token_baseline` / `context_token_estimate`
+  7. **异常处理**: 委托给 `LLMErrorHandlerRegistry`（ContextLimitErrorHandler / TimeoutErrorHandler / DefaultErrorHandler）
+- **上下文超限处理**:
+  - 首次: `ContextLimitErrorHandler` → `emergency_compact_requested=True, should_end=False` → 路由回 `context_compact` 紧急压缩
+  - 二次: `should_end=True` → 终止
+- **返回状态**: `messages` / `pending_tool_calls` / `context_token_baseline` / `context_token_baseline_message_count` / `context_token_estimate`
 
 ### 3. 循环检测节点 (loop_detect_node)
+
 - **文件**: `backend/src/infrastructure/agent/nodes/loop_detect_node.py`
-- **职责**: 检测 Agent 是否进入循环模式 + 评估工具结果质量（吸收原 tool_observe）
-- **触发条件**: LLM 返回 tool_calls 后（前置守卫）
-- **工具结果评估**:
-  - 质量判定: good(成功且非空) / empty(成功但空) / failed(错误)
-  - 错误分类: permission / timeout / not_found / network / invalid_args / business_error / unknown
-  - 致命错误(permission)直接终止
-- **检测策略**:
-  1. **精确匹配**: 最近 N 轮 `tool_name + 参数 SHA256 hash` 完全一致 → `loop_type="exact_tool_repeat"`
-  2. **内容相似度**: 仅在纯文本轮次生效，文本 Jaccard 相似度 > 0.92 → `loop_type="content_repeat"`
-  3. **质量循环**: 工具连续空结果 → `loop_type="empty_tool_result"`
+- **职责**: 检测 Agent 是否进入循环模式
+- **检测策略**: 无效工具调用 / 精确匹配 / A-B-A-B 交替模式
 - **内部处理**:
-  - count=1: 注入纠正 SystemMessage → 路由 `llm_call`
+  - count=1: 注入纠正 SystemMessage → 路由 `context_compact`
   - count=2: 设置 `compression_strategy="summarize"` → 路由 `context_compact`
   - count≥3 或全局纠正预算熔断: 设置 `error`/`should_end=True` → 终止
-- **返回状态**: `loop_detected` / `loop_detection_count` / `loop_type` / `messages` / `observation_summary` / `observation_quality`
+- **返回状态**: `loop_detected` / `loop_detection_count` / `loop_type` / `messages`
 
-### 4. 上下文压缩节点 (context_compact_node)
-- **文件**: `backend/src/infrastructure/agent/nodes/context_compact_node.py`
-- **职责**: 当上下文消息过多时压缩对话历史
-- **压缩策略**:
-  | 策略 | 触发条件 | 行为 |
-  |------|---------|------|
-  | `trim`（默认） | `compression_strategy` 为空或 "trim" | 保留首条+最近 N 条，`RemoveMessage` 删除中间 |
-  | `summarize` | `compression_strategy="summarize"` | LLM 生成摘要 + `RemoveMessage` 删除原文 |
-- **固定出边**: `context_compact` → `llm_call`
-- **返回状态**: `messages`（RemoveMessage 列表）/ `compression_strategy: None`（重置）
+### 4. 工具执行节点 (tool_execute_node)
+
+- **文件**: `backend/src/infrastructure/agent/nodes/tool_execute_node.py`
+- **职责**: 统一执行所有工具调用并返回结果
+- **功能**:
+  1. 发射 `phase:changed` 事件（phase=tool_executing）
+  2. 遍历 `pending_tool_calls`，并发执行工具
+  3. 构建 `ToolMessage` 列表
+  4. 若某工具标记 `awaiting_user_input`，则设置该状态
+- **路由说明**: 工具执行后路由到 `context_compact`（每轮 LLM 前置守门），而非直接回 `llm_call`
 
 ## 路由逻辑
 
-### route_after_llm（双分支）
+### route_after_llm（三分支）
 
 | 条件 | 目标 |
 |------|------|
+| `emergency_compact_requested=True` | `context_compact`（紧急压缩优先） |
 | `should_end=True` **或** 无 `tool_calls`（纯文本/空响应） | END |
 | 有 `tool_calls` | `loop_detect`（前置守卫） |
 
-### route_after_loop_detect（四分支）
+### route_after_loop_detect（三分支）
 
 | 条件 | 目标 |
 |------|------|
 | `loop_detected=False` | `tool_execute` |
 | `should_end=True` | END（count≥3 或预算耗尽） |
-| `loop_detection_count=2` | `context_compact` |
-| count<2（已注入反馈） | `llm_call` |
+| 检测到循环（count=1 或 count=2） | `context_compact`（统一走上下文守门） |
 
 ### route_after_tool_execute（两分支）
 
 | 条件 | 目标 |
 |------|------|
 | `awaiting_user_input=True` | END |
-| 工具执行完毕 | `llm_call`（继续循环，无需循环检测） |
-
-**说明**: 工具执行后直接回到 `llm_call`，由下一轮 LLM 返回后再进入 `loop_detect` 进行循环检测。这种设计避免了重复检测，保持路由逻辑极简。
+| 工具执行完毕 | `context_compact`（每轮 LLM 前置守门） |
 
 ### 固定边
 
 `context_compact` → `llm_call`
 
-## Plan 执行（闭包工具）
+## LLM 错误处理工厂
 
-Plan 执行不再是图节点，而是在 `SendMessageUseCase` 中创建的闭包工具：
+在 `llm_call_node` 中，LLM 调用异常由 `LLMErrorHandlerRegistry`（职责链模式）处理：
 
-- **注册时机**: `_run_agent_loop` 启动时注册到 `tool_registry`
-- **执行方式**: LLM 调用 `plan_execute` 工具 → `tool_execute_node` 统一执行 → 闭包内部创建 `PlanExecutor` → 同步等待所有子 Agent 完成
-- **子 Agent 限制**: 子 Agent 不注册 `plan_execute` 工具（避免嵌套 plan）
-- **工具定义位置**: `backend/src/application/use_cases/send_message.py`（通过 `_build_graph_config` 传入 `tool_registry`）
-- **子 Agent 状态**: `send_message.py` 中的子 Agent 相关方法已删除（`_run_sub_agent` / `_create_sub_agent_tool_registry` 等），子 Agent 机制当前未启用
+| Handler | 触发条件 | 行为 |
+|---------|---------|------|
+| `ContextLimitErrorHandler` | 上下文超限错误 | 首次: `emergency_compact_requested=True`；二次: 终止 |
+| `TimeoutErrorHandler` | 超时 | `should_end=True, error="LLM streaming timed out"` |
+| `DefaultErrorHandler` | 其他异常 | re-raise → `BaseNode._handle_error` 处理 |
+
+- **接口**: `domain/interfaces/llm_error_handler.py`
+- **实现**: `infrastructure/agent/error_handlers/`
+- **注入**: `AgentLoopRunner.run()` 中通过 `graph_config` 注入
 
 ## 状态管理
 
-Agent 状态定义在 `backend/src/domain/entities/agent_state.py` 中，继承 `TypedDict`：
+Agent 状态定义在 `backend/src/domain/aggregates/agent/agent_state.py` 中：
+
+### 基础字段
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
@@ -210,14 +186,28 @@ Agent 状态定义在 `backend/src/domain/entities/agent_state.py` 中，继承 
 | `system_prompt` | `str` | 系统提示词 |
 | `final_result` | `Optional[str]` | 最终结果 |
 | `error` | `Optional[str]` | 错误信息 |
+| `compression_strategy` | `Optional[str]` | 压缩策略（trim / summarize / emergency_compact） |
 | `is_sub_agent` | `bool` | 是否为子Agent |
 | `parent_task_id` | `Optional[str]` | 父Agent的task_id |
-| `observation_summary` | `Optional[str]` | 本轮观察文本总结 |
-| `observation_quality` | `Optional[str]` | 本轮观察总体质量 |
-| `observation_items` | `List[Dict[str, Any]]` | 每个tool_call的观察详情 |
-| `consecutive_empty_observations` | `int` | 连续空观察计数 |
-| `last_error_category` | `Optional[str]` | 最近一次错误分类 |
-| `compression_strategy` | `Optional[str]` | 压缩策略（trim/summarize） |
+
+### 上下文管理字段（新增）
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `max_context_tokens` | `int` | 当前模型上下文窗口 Token 上限（由 `resolve_max_context_tokens` 解析） |
+| `context_token_estimate` | `int` | 当前 messages 的 Token 估算值 |
+| `context_token_baseline` | `Optional[int]` | 最近一次成功 LLM 调用返回的真实 `prompt_tokens` |
+| `context_token_baseline_message_count` | `int` | baseline 对应的消息数量，用于增量估算 |
+| `context_compaction_attempts` | `int` | 连续紧急压缩次数（>=1 时再次超限则终止） |
+| `emergency_compact_requested` | `bool` | LLM 调用发生上下文超限后置为 True |
+| `last_context_strategy` | `Optional[str]` | 最近一次实际执行的压缩策略 |
+
+## 系统提示词（System Prompt）
+
+LLM 调用节点的 system prompt 由 **PromptAssembleService** 组装，采用 **11 层 Prompt 架构**。
+详见: `backend/src/domain/services/prompt_assemble_service.py`
+
+初始历史加载预算：`int(max_context_tokens * 0.25)`，替代原硬编码 `8000`。
 
 ## 维护说明
 
@@ -226,4 +216,4 @@ Agent 状态定义在 `backend/src/domain/entities/agent_state.py` 中，继承 
 2. 更新节点说明（如修改节点职责或功能）
 3. 更新路由逻辑（如修改路由条件）
 4. 更新状态管理（如修改状态结构）
-5. **确认新节点是否注册**: 代码中写好的节点未必接入工作流，需检查 `agent_workflow.py` 中的 `workflow.add_node()` 和 `add_conditional_edges()` 调用
+5. **确认新节点是否注册**: 代码中写好的节点未必接入工作流，需检查 `workflow_builder.py` 中的 `workflow.add_node()` 和 `add_conditional_edges()` 调用

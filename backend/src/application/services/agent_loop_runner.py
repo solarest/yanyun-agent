@@ -28,8 +28,15 @@ from src.domain.repositories.tool_registry import IToolRegistry
 from src.domain.services import IEventEmitter, ProxyEventEmitter
 from src.domain.services.conversation_assembly import ConversationAssemblyService
 from src.domain.services.prompt_assemble_service import PromptAssembleService
+from src.domain.interfaces.llm_error_handler import LLMErrorHandlerRegistry
+from src.domain.services.token_utils import count_tokens, resolve_max_context_tokens
 from src.domain.value_objects.prompt_template import PromptTemplate
 from src.infrastructure.adapters.langchain_adapter import LangChainAdapter
+from src.infrastructure.agent.error_handlers import (
+    ContextLimitErrorHandler,
+    DefaultErrorHandler,
+    TimeoutErrorHandler,
+)
 from src.skills.skill_repository import ISkillRepository
 
 logger = logging.getLogger(__name__)
@@ -187,11 +194,12 @@ class AgentLoopRunner:
                 conversation_history = ConversationAssemblyService.assemble(
                     history_messages
                 )
-                max_tokens = 8000  # TODO: 从配置读取
+                max_context_tokens = resolve_max_context_tokens(model or self.default_model)
+                initial_history_budget = int(max_context_tokens * 0.25)
                 api_messages = await self.prompt_context.build_messages(
                     system_message=system_prompt,
                     history=conversation_history,
-                    max_tokens=max_tokens,
+                    max_tokens=initial_history_budget,
                 )
                 messages = LangChainAdapter.dict_messages_to_langchain(api_messages)
             else:
@@ -234,6 +242,12 @@ class AgentLoopRunner:
                     "agent_id": agent_id,
                     "llm_model": model,
                     "session_id": session_id,
+                    # LLM 错误处理器工厂
+                    "llm_error_handlers": LLMErrorHandlerRegistry([
+                        ContextLimitErrorHandler(),
+                        TimeoutErrorHandler(timeout_sec=300),
+                        DefaultErrorHandler(),
+                    ]),
                     # 注入 context 依赖，供工具使用
                     "send_message_use_case": send_message_use_case or self,
                     "task_repo": self.task_repo,
@@ -378,6 +392,10 @@ class AgentLoopRunner:
         parent_task_id: Optional[str],
     ) -> dict:
         """构建 LangGraph 初始 AgentState。"""
+        max_context_tokens = resolve_max_context_tokens(model or "")
+        initial_estimate = sum(
+            count_tokens(str(msg)) for msg in messages
+        )
         return {
             "messages": messages,
             "task_id": task.id,
@@ -405,6 +423,15 @@ class AgentLoopRunner:
             "final_result": None,
             "error": None,
             "compression_strategy": None,
+            # === 上下文管理 ===
+            "max_context_tokens": max_context_tokens,
+            "context_token_estimate": initial_estimate,
+            "context_token_baseline": None,
+            "context_token_baseline_message_count": len(messages),
+            "context_compaction_attempts": 0,
+            "emergency_compact_requested": False,
+            "last_context_strategy": None,
+            # === Sub-Agent ===
             "is_sub_agent": is_sub_agent,
             "parent_task_id": parent_task_id,
         }

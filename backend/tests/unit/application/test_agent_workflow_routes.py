@@ -34,6 +34,15 @@ def make_state(**overrides):
         "final_result": None,
         "error": None,
         "compression_strategy": None,
+        # === 上下文管理 ===
+        "max_context_tokens": 128_000,
+        "context_token_estimate": 0,
+        "context_token_baseline": None,
+        "context_token_baseline_message_count": 0,
+        "context_compaction_attempts": 0,
+        "emergency_compact_requested": False,
+        "last_context_strategy": None,
+        # === Sub-Agent ===
         "is_sub_agent": False,
         "parent_task_id": None,
     }
@@ -72,10 +81,16 @@ def test_route_after_llm_should_end() -> None:
     assert route_after_llm(state) == "__end__"
 
 
-def test_route_after_llm_empty_messages() -> None:
-    """消息为空时路由到 END"""
-    state = make_state(messages=[])
-    assert route_after_llm(state) == "__end__"
+def test_route_after_llm_emergency_compact() -> None:
+    """emergency_compact_requested=True 时路由到 context_compact（优先）"""
+    state = make_state(emergency_compact_requested=True)
+    assert route_after_llm(state) == "context_compact"
+
+
+def test_route_after_llm_emergency_overrides_should_end() -> None:
+    """emergency_compact_requested 优先于 should_end"""
+    state = make_state(emergency_compact_requested=True, should_end=True)
+    assert route_after_llm(state) == "context_compact"
 
 
 # === route_after_loop_detect 测试 ===
@@ -101,9 +116,9 @@ def test_route_after_loop_detect_count_2() -> None:
 
 
 def test_route_after_loop_detect_count_1() -> None:
-    """loop_detection_count=1 时路由回 llm_call(已注入反馈)"""
+    """loop_detection_count=1 时路由到 context_compact（统一走上下文守门）"""
     state = make_state(loop_detected=True, loop_detection_count=1)
-    assert route_after_loop_detect(state) == "llm_call"
+    assert route_after_loop_detect(state) == "context_compact"
 
 
 # === route_after_tool_execute 测试 ===
@@ -115,19 +130,19 @@ def test_route_after_tool_execute_awaiting_user() -> None:
     assert route_after_tool_execute(state) == "__end__"
 
 
-def test_route_after_tool_execute_goes_to_llm_call() -> None:
-    """有工具执行结果时路由到 llm_call(继续循环)"""
+def test_route_after_tool_execute_goes_to_context_compact() -> None:
+    """有工具执行结果时路由到 context_compact（每轮 LLM 前置守门）"""
     state = make_state(
         awaiting_user_input=False,
         last_executed_tool_call_ids=["call-1", "call-2"],
     )
-    assert route_after_tool_execute(state) == "llm_call"
+    assert route_after_tool_execute(state) == "context_compact"
 
 
-def test_route_after_tool_execute_no_tools_goes_to_llm_call() -> None:
-    """无工具执行结果时路由到 llm_call(无需循环检测)"""
+def test_route_after_tool_execute_no_tools_goes_to_context_compact() -> None:
+    """无工具执行结果时路由到 context_compact"""
     state = make_state(
         awaiting_user_input=False,
         last_executed_tool_call_ids=[],
     )
-    assert route_after_tool_execute(state) == "llm_call"
+    assert route_after_tool_execute(state) == "context_compact"

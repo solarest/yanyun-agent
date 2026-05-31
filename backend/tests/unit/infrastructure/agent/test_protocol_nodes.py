@@ -1,7 +1,14 @@
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessage, AIMessageChunk, RemoveMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    HumanMessage,
+    RemoveMessage,
+    SystemMessage,
+    ToolMessage,
+)
 
 from src.infrastructure.agent.nodes.context_compact_node import context_compact_node
 from src.infrastructure.agent.nodes.llm_call_node import llm_call_node
@@ -98,6 +105,15 @@ def make_state(**overrides):
         "system_prompt": "",
         "final_result": None,
         "error": None,
+        "compression_strategy": None,
+        # === 上下文管理 ===
+        "max_context_tokens": 128_000,
+        "context_token_estimate": 0,
+        "context_token_baseline": None,
+        "context_token_baseline_message_count": 0,
+        "context_compaction_attempts": 0,
+        "emergency_compact_requested": False,
+        "last_context_strategy": None,
     }
     state.update(overrides)
     return state
@@ -419,14 +435,18 @@ async def test_loop_detect_node_ignores_tool_history_before_current_task() -> No
 
 
 @pytest.mark.asyncio
-async def test_context_compact_node_emits_phase_and_compaction_event() -> None:
+async def test_context_compact_node_skip_when_below_watermark() -> None:
+    """Token 低于 40% 水线时，只发 skip 事件，不改消息"""
     emitter = RecordingEmitter()
-    # 使用真实 LangChain 消息对象（带 id）以测试 RemoveMessage 逻辑
     messages = [
-        AIMessage(content=f"msg-{i}", id=f"msg-id-{i}") for i in range(12)]
+        AIMessage(content=f"msg-{i}", id=f"msg-id-{i}") for i in range(12)
+    ]
 
     result = await context_compact_node(
-        make_state(messages=messages, phase="thinking", current_turn=4),
+        make_state(
+            messages=messages, phase="thinking", current_turn=4,
+            max_context_tokens=128_000,
+        ),
         {"configurable": {"event_emitter": emitter}},
     )
 
@@ -435,7 +455,116 @@ async def test_context_compact_node_emits_phase_and_compaction_event() -> None:
         AgentEventType.CONTEXT_COMPACTING,
     ]
     assert result["phase"] == "context_compacting"
-    # 应该删除 messages[1:-10]（即 msg-1），保留第 1 条和最近 10 条
-    assert all(isinstance(m, RemoveMessage) for m in result["messages"])
-    # 12 - 1(first) - 10(recent) = 1 to remove
-    assert len(result["messages"]) == 1
+    assert result["last_context_strategy"] == "skip"
+    # skip 策略不改消息，result 中不应有 messages key
+    assert "messages" not in result
+
+    payload = emitter.events[1]["payload"]
+    assert payload["strategy"] == "skip"
+    assert payload["reason"] == "below_watermark"
+
+
+@pytest.mark.asyncio
+async def test_context_compact_node_soft_prune() -> None:
+    """Token 超过 40% 但有超长 ToolMessage 时，触发 soft-prune"""
+    emitter = RecordingEmitter()
+    # 创建超长 tool result（~5500 tokens 估算），max=10000 即 40%=4000, 60%=6000
+    # 控制 content 长度使其落在 40%-60% 区间
+    large_content = "x" * 22000
+    messages = [
+        HumanMessage(content="hello", id="msg-0"),
+        AIMessage(content="ok", id="msg-1"),
+        ToolMessage(
+            content=large_content,
+            tool_call_id="call-1",
+            name="file_read",
+            id="msg-2",
+        ),
+    ]
+
+    result = await context_compact_node(
+        make_state(
+            messages=messages, phase="thinking", current_turn=4,
+            max_context_tokens=10_000,
+        ),
+        {"configurable": {"event_emitter": emitter}},
+    )
+
+    assert result["phase"] == "context_compacting"
+    assert result["last_context_strategy"] == "soft_prune"
+
+    payload = emitter.events[1]["payload"]
+    assert payload["strategy"] == "soft_prune"
+    assert payload["prunedToolResults"] >= 1
+
+    # tool 结果被裁剪
+    pruned_msgs = result["messages"]
+    tool_msg = pruned_msgs[2]
+    content = tool_msg.content if hasattr(tool_msg, "content") else tool_msg.get("content", "")
+    assert "soft-pruned" in content
+    assert len(content) < len(large_content)
+    # tool_call_id 保留
+    assert getattr(tool_msg, "tool_call_id", "") == "call-1"
+
+
+@pytest.mark.asyncio
+async def test_context_compact_node_micro_compact() -> None:
+    """Token 超过 60% 水线时，触发 micro-compact（摘要 + RemoveMessage）"""
+    emitter = RecordingEmitter()
+    # 创建足够多的消息让 token 超过 60%: max=20_000, 60%=12_000
+    # 每个消息 ~250 tokens 估算, 100条 ≈ 25000 tokens > 12000
+    messages = [SystemMessage(content="system", id="msg-sys")]
+    for i in range(100):
+        messages.append(
+            AIMessage(
+                content=f"message number {i} " + "x" * 1000,
+                id=f"msg-{i}",
+            )
+        )
+
+    result = await context_compact_node(
+        make_state(
+            messages=messages, phase="thinking", current_turn=4,
+            max_context_tokens=20_000,
+        ),
+        {"configurable": {"event_emitter": emitter}},
+    )
+
+    assert result["phase"] == "context_compacting"
+    assert result["last_context_strategy"] == "micro_compact"
+
+    payload = emitter.events[1]["payload"]
+    assert payload["strategy"] == "micro_compact"
+    assert payload["reason"] == "watermark_60"
+    # baseline 在 compact 后失效
+    assert result["context_token_baseline"] is None
+
+
+@pytest.mark.asyncio
+async def test_context_compact_node_emergency_compact() -> None:
+    """emergency_compact_requested=True 时，保留最近 3 条消息"""
+    emitter = RecordingEmitter()
+    messages = [SystemMessage(content="system", id="msg-sys")]
+    for i in range(20):
+        messages.append(
+            AIMessage(content=f"msg-{i}", id=f"msg-id-{i}")
+        )
+
+    result = await context_compact_node(
+        make_state(
+            messages=messages, phase="thinking", current_turn=5,
+            max_context_tokens=128_000,
+            emergency_compact_requested=True,
+        ),
+        {"configurable": {"event_emitter": emitter}},
+    )
+
+    assert result["phase"] == "context_compacting"
+    assert result["last_context_strategy"] == "emergency_compact"
+    assert result["emergency_compact_requested"] is False
+    assert result["context_compaction_attempts"] == 1
+    assert result["compression_strategy"] is None
+
+    payload = emitter.events[1]["payload"]
+    assert payload["strategy"] == "emergency_compact"
+    assert payload["reason"] == "context_overflow"

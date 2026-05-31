@@ -13,9 +13,10 @@ from langchain_core.messages import AIMessage, AIMessageChunk, SystemMessage
 from langgraph.types import RunnableConfig
 
 from src.domain.aggregates.agent.agent_state import AgentState
-from src.infrastructure.agent.nodes.base_node import BaseNode, NodeContext
-
 from src.domain.entities.event_types import AgentEventType
+from src.domain.interfaces.llm_error_handler import LLMErrorHandlerRegistry
+from src.domain.services.token_utils import count_tokens, render_message
+from src.infrastructure.agent.nodes.base_node import BaseNode, NodeContext
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,8 @@ class LLMCallNode(BaseNode):
         1. 防御性注入 SystemMessage(如果 state 中有 system_prompt)
         2. 流式调用 LLM(通过 metadata 将上下文透传给 LLMCallLogger)
         3. 发射每个 token (llm-chunk)
-        4. 返回累积文本
+        4. 写回 usage baseline 进行 Token 校准
+        5. 异常委托给 LLMErrorHandlerRegistry 处理
 
         Args:
             state: 当前 Agent 状态
@@ -48,6 +50,9 @@ class LLMCallNode(BaseNode):
             状态更新字典
         """
         llm = config["configurable"]["llm"]
+        error_registry: LLMErrorHandlerRegistry | None = config.get("configurable", {}).get(
+            "llm_error_handlers"
+        )
         current_turn = context.current_turn + 1
 
         # 防御性 SystemMessage 注入
@@ -122,22 +127,11 @@ class LLMCallNode(BaseNode):
                         accumulated = chunk
                     else:
                         accumulated = accumulated + chunk
-        except TimeoutError:
-            logger.error(
-                "[NODE:llm_call] LLM_CALL_ERROR | agent_id=%s | task_id=%s | turn=%d | "
-                "error=timeout | timeout_sec=%d",
-                context.agent_id, context.task_id, current_turn, llm_timeout_sec,
-            )
-            return {
-                "messages": [AIMessage(content=full_text or "LLM call timed out.")],
-                "pending_tool_calls": [],
-                "current_llm_text": full_text,
-                "thinking_text": thinking_text,
-                "phase": "thinking",
-                "current_turn": current_turn,
-                "error": f"LLM streaming timed out after {llm_timeout_sec}s",
-                "should_end": True,
-            }
+        except Exception as e:
+            # 委托给错误处理器工厂
+            if error_registry:
+                return error_registry.handle(e, state, context)
+            raise
 
         # 从聚合后的消息中提取完整的 tool_calls
         tool_calls_list = []
@@ -190,8 +184,11 @@ class LLMCallNode(BaseNode):
         should_end = len(pending_tool_calls) == 0
         is_complete = should_end
 
+        # ── Token 校准：提取 LLM 返回的真实 prompt_tokens ──
+        prompt_tokens = _extract_prompt_tokens(accumulated)
+
         # 返回状态更新(包含 pending_tool_calls 供 tool_execute_node 使用)
-        return {
+        result = {
             "messages": [
                 AIMessage(content=full_text, tool_calls=tool_calls_list or [])
             ],
@@ -205,6 +202,51 @@ class LLMCallNode(BaseNode):
             "should_end": should_end,
             "is_complete": is_complete,
         }
+
+        if prompt_tokens is not None:
+            result.update({
+                "context_token_baseline": prompt_tokens,
+                "context_token_baseline_message_count": message_count,
+                "context_token_estimate": prompt_tokens,
+            })
+        else:
+            # 降级：全量 char/4 估算
+            result["context_token_estimate"] = sum(
+                count_tokens(render_message(m)) for m in messages
+            )
+
+        return result
+
+
+def _extract_prompt_tokens(accumulated) -> int | None:
+    """从聚合的 AIMessageChunk 中提取 prompt_tokens
+
+    兼容多种 LangChain 版本和 provider 的 usage 返回格式。
+
+    Args:
+        accumulated: 聚合后的 AIMessageChunk
+
+    Returns:
+        prompt_tokens 数量，提取失败返回 None
+    """
+    if accumulated is None:
+        return None
+
+    # LangChain 0.3+ : usage_metadata 在 AIMessageChunk 上
+    if hasattr(accumulated, "usage_metadata") and accumulated.usage_metadata:
+        usage = accumulated.usage_metadata
+        if isinstance(usage, dict):
+            return usage.get("input_tokens")
+
+    # 旧版 LangChain : response_metadata.token_usage
+    if hasattr(accumulated, "response_metadata") and accumulated.response_metadata:
+        token_usage = accumulated.response_metadata.get("token_usage", {})
+        if isinstance(token_usage, dict):
+            pt = token_usage.get("prompt_tokens")
+            if pt is not None:
+                return pt
+
+    return None
 
 
 # 保持向后兼容的实例导出

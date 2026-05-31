@@ -65,6 +65,22 @@ class AgentState(TypedDict):
     compression_strategy: Optional[str]
     """context_compact 使用的压缩策略：trim / summarize"""
 
+    # === 上下文管理 ===
+    max_context_tokens: int
+    """当前模型上下文窗口 Token 数上限"""
+    context_token_estimate: int
+    """当前 messages 的 Token 估算值"""
+    context_token_baseline: Optional[int]
+    """最近一次成功 LLM 调用返回的 prompt_tokens"""
+    context_token_baseline_message_count: int
+    """baseline 对应的消息数量，用于增量估算"""
+    context_compaction_attempts: int
+    """连续紧急压缩次数"""
+    emergency_compact_requested: bool
+    """LLM 调用发生上下文超限后置为 True"""
+    last_context_strategy: Optional[str]
+    """最近一次实际执行的压缩策略"""
+
     # === Sub-Agent 状态 ===
     is_sub_agent: bool
     """是否为子Agent"""

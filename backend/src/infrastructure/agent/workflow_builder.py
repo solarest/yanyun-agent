@@ -37,25 +37,25 @@ class AgentWorkflowBuilder(IAgentWorkflowBuilder):
         workflow.add_node("loop_detect", loop_detect_node)
         workflow.add_node("context_compact", context_compact_node)
 
-        workflow.set_entry_point("llm_call")
+        # 入口改为 context_compact，每轮 LLM 调用前都经过上下文守门
+        workflow.set_entry_point("context_compact")
 
         workflow.add_conditional_edges(
             "llm_call",
             route_after_llm,
-            {"loop_detect": "loop_detect", END: END},
+            {"loop_detect": "loop_detect", "context_compact": "context_compact", END: END},
         )
 
         workflow.add_conditional_edges(
             "loop_detect",
             route_after_loop_detect,
-            {"tool_execute": "tool_execute", "llm_call": "llm_call",
-             "context_compact": "context_compact", END: END},
+            {"tool_execute": "tool_execute", "context_compact": "context_compact", END: END},
         )
 
         workflow.add_conditional_edges(
             "tool_execute",
             route_after_tool_execute,
-            {"llm_call": "llm_call", END: END},
+            {"context_compact": "context_compact", END: END},
         )
 
         workflow.add_edge("context_compact", "llm_call")
