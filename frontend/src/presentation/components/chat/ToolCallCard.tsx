@@ -1,10 +1,10 @@
 /**
- * 表现层 - 工具调用卡片（时间线嵌套展开样式）
+ * 表现层 - 工具调用卡片（内敛风格）
  *
- * 结构：
- * 第一层：工具名 + 状态 + 展开箭头
- * 第二层：参数（如果有）
- * 第三层：嵌套结果（如果有）
+ * 与 ThinkingBlock 统一的内敛设计：
+ * - 单行显示工具名 + 状态指示 + 展开箭头
+ * - 展开后显示参数和结果
+ * - 无卡片背景，仅左边框线分隔层级
  */
 import React, { useState, useEffect, useCallback } from 'react';
 
@@ -48,77 +48,59 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({
   const paramsJson = hasParams ? JSON.stringify(params, null, 2) : null;
 
   return (
-    <div className="rounded-xl border border-border/30 bg-muted/20 overflow-hidden">
-      {/* 第一层：工具名 + 状态 + 展开箭头 */}
+    <div className="text-xs">
+      {/* 工具名称行 */}
       <button
         onClick={handleToggle}
         disabled={!hasContent}
-        className={`w-full flex items-center gap-2 px-3 py-2 transition-colors text-left ${
-          !hasContent ? 'cursor-default' : 'cursor-pointer hover:bg-muted/40'
+        className={`w-full flex items-center gap-1.5 py-0.5 text-left transition-colors ${
+          !hasContent ? 'cursor-default' : 'cursor-pointer hover:text-foreground'
         }`}
       >
-        {/* 状态图标 */}
-        <div className="flex items-center justify-center w-4 h-4 shrink-0">
-          {isRunning && (
-            <svg className="h-3.5 w-3.5 animate-spin text-blue-500" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-            </svg>
-          )}
-          {isSuccess && (
-            <svg className="h-3.5 w-3.5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-            </svg>
-          )}
-          {isError && (
-            <svg className="h-3.5 w-3.5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          )}
-        </div>
+        {/* 状态点 */}
+        <span
+          className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${
+            isRunning ? 'bg-blue-400 animate-pulse' :
+            isSuccess ? 'bg-emerald-400' :
+            isError ? 'bg-red-400' :
+            'bg-muted-foreground/30'
+          }`}
+        />
 
-        {/* 工具名称 */}
-        <span className="text-xs text-muted-foreground">{name}</span>
+        {/* 工具名 */}
+        <span className="text-muted-foreground/80 min-w-0 truncate">{name}</span>
 
-        {/* 右侧展开箭头 */}
+        {/* 状态文本 */}
+        <span className="text-muted-foreground/40 shrink-0">
+          {isRunning ? '执行中' : isSuccess ? '' : isError ? '失败' : ''}
+        </span>
+
+        {/* 展开箭头 */}
         {hasContent && (
           <svg
-            className={`ml-auto h-3.5 w-3.5 text-muted-foreground/50 transition-transform duration-200 ${
+            className={`ml-auto h-3 w-3 shrink-0 text-muted-foreground/40 transition-transform duration-150 ${
               isExpanded ? 'rotate-180' : ''
             }`}
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
+            fill="none" stroke="currentColor" viewBox="0 0 24 24"
           >
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
           </svg>
         )}
       </button>
 
-      {/* 第二层和第三层：嵌套内容 */}
-      {hasContent && (
-        <div
-          className={`overflow-hidden transition-all duration-200 ${
-            isExpanded ? 'max-h-[800px]' : 'max-h-0'
-          }`}
-        >
-          <div className="border-t border-border/20">
-            {hasParams && (
-              <div className="px-3 py-2.5 bg-muted/10 border-b border-border/20">
-                <pre className="text-xs font-mono text-muted-foreground whitespace-pre-wrap break-all">
-                  {paramsJson}
-                </pre>
-              </div>
-            )}
-
-            {hasResult && (
-              <div className="px-3 py-2.5">
-                <div className="max-h-80 overflow-y-auto whitespace-pre-wrap rounded-lg bg-muted/20 px-3 py-2.5 text-xs font-mono text-muted-foreground border border-border/30">
-                  {result}
-                </div>
-              </div>
-            )}
-          </div>
+      {/* 展开内容 */}
+      {hasContent && isExpanded && (
+        <div className="ml-3.5 pl-3 border-l border-muted-foreground/15 space-y-1.5 mt-1 mb-1.5">
+          {hasParams && (
+            <pre className="text-[11px] font-mono text-muted-foreground/60 whitespace-pre-wrap break-all leading-relaxed">
+              {paramsJson}
+            </pre>
+          )}
+          {hasResult && (
+            <div className="max-h-60 overflow-y-auto whitespace-pre-wrap text-[11px] font-mono text-muted-foreground/70 leading-relaxed">
+              {result}
+            </div>
+          )}
         </div>
       )}
     </div>

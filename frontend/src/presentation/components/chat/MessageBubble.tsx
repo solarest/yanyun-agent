@@ -4,7 +4,7 @@
 import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { SessionMessage } from '@domain/entities/session';
+import type { SessionMessage, MessageSegment } from '@domain/entities/session';
 import { ClarifyCard } from './ClarifyCard';
 import { MultiClarifyCard, parseAllClarifyPrompts } from './MultiClarifyCard';
 import { ToolCallGroup } from './ToolCallGroup';
@@ -172,6 +172,70 @@ const EmbeddedSubAgentList: React.FC<EmbeddedSubAgentListProps> = ({ messages })
   );
 };
 
+// ── 时间线片段工具函数 ──────────────────────────────────────
+
+/** 将 segments 转换为可渲染的时间线项，连续 tool 片段自动合并为 ToolCallGroup */
+interface TimelineRenderItem {
+  type: 'thinking' | 'text' | 'tool_group';
+  /** thinking/text: 文本内容 */
+  content?: string;
+  /** tool_group: 工具列表 */
+  tools?: ToolTimelineItem[];
+}
+
+function buildTimelineFromSegments(
+  segments: MessageSegment[],
+): TimelineRenderItem[] {
+  const items: TimelineRenderItem[] = [];
+
+  for (const seg of segments) {
+    if (seg.type === 'tool') {
+      const lastItem = items[items.length - 1];
+      if (lastItem && lastItem.type === 'tool_group') {
+        // 追加到上一个工具组
+        lastItem.tools!.push({
+          key: seg.toolCallId || seg.content || '',
+          name: seg.content || '',
+          status: seg.toolStatus || 'running',
+          result: seg.toolResult,
+          input: seg.toolInput,
+        });
+      } else {
+        // 新建工具组
+        items.push({
+          type: 'tool_group',
+          tools: [{
+            key: seg.toolCallId || seg.content || '',
+            name: seg.content || '',
+            status: seg.toolStatus || 'running',
+            result: seg.toolResult,
+            input: seg.toolInput,
+          }],
+        });
+      }
+    } else if (seg.type === 'thinking') {
+      const lastItem = items[items.length - 1];
+      if (lastItem?.type === 'thinking') {
+        // 合并连续 thinking 片段
+        lastItem.content = (lastItem.content || '') + (seg.content || '');
+      } else {
+        items.push({ type: 'thinking', content: seg.content || '' });
+      }
+    } else {
+      // text segment
+      const lastItem = items[items.length - 1];
+      if (lastItem?.type === 'text') {
+        // 合并连续 text 片段
+        lastItem.content = (lastItem.content || '') + (seg.content || '');
+      } else {
+        items.push({ type: 'text', content: seg.content || '' });
+      }
+    }
+  }
+
+  return items;
+}
+
 /** 时间线圆点组件 */
 const TimelineDot: React.FC<{ variant: 'user' | 'assistant' | 'error' | 'thinking' }> = ({ variant }) => {
   const colorMap = {
@@ -314,59 +378,144 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
             </button>
           )}
 
-          {/* 工具调用摘要 */}
-          {!isUser && showSubAgentBody && hasVisibleTools && (
-            <div className="mb-2">
-              <ToolCallGroup
-                items={toolTimeline}
-                isStreaming={isStreaming}
-              />
-            </div>
-          )}
-
           {!isUser && !isSubAgent && embeddedSubAgents.length > 0 && (
             <EmbeddedSubAgentList messages={embeddedSubAgents} />
           )}
 
-          {/* 深度思考内容 */}
-          {!isUser && showSubAgentBody && hasThinking && (
-            <ThinkingBlock
-              content={message.thinking_content || ''}
-              isStreaming={Boolean(isThinking)}
-            />
-          )}
+          {/* ── 时间线渲染：segments 可用时按实际事件顺序渲染，否则回退为旧布局 ── */}
+          {!isUser && showSubAgentBody && (() => {
+            const segments = message.segments;
+            const hasSegments = segments && segments.length > 0;
 
-          {!isUser && showSubAgentBody && clarifyPrompt && !clarifySubmitted && (
-            <div className={hasVisibleTools ? 'mt-2' : ''}>
-              <ClarifyCard
-                prompt={clarifyPrompt}
-                disabled={clarifyDisabled || !onClarifyAnswer}
-                timestamp={message.created_at}
-                onAnswer={(answer: string) => {
-                  setClarifySubmitted(true);
-                  onClarifyAnswer?.(answer);
-                }}
-              />
-            </div>
-          )}
+            // 有 segments 时：按时间线顺序渲染
+            if (hasSegments) {
+              const timeline = buildTimelineFromSegments(segments!);
+              return (
+                <div className="space-y-1.5">
+                  {timeline.map((item, idx) => {
+                    if (item.type === 'thinking') {
+                      return (
+                        <ThinkingBlock
+                          key={`thinking-${idx}`}
+                          content={item.content || ''}
+                          isStreaming={Boolean(isThinking)}
+                        />
+                      );
+                    }
+                    if (item.type === 'tool_group') {
+                      return (
+                        <ToolCallGroup
+                          key={`tools-${idx}`}
+                          items={item.tools!}
+                          isStreaming={isStreaming}
+                        />
+                      );
+                    }
+                    if (item.type === 'text') {
+                      const textContent = item.content || '';
+                      // 检查是否仅为 clarify 提示（无其他内容）
+                      const allClarify = parseAllClarifyPrompts(textContent);
+                      if (!clarifySubmitted && allClarify.length > 0) {
+                        // 构建问题文本用于判断是否 content 只包含 clarify
+                        const questionsOnly = allClarify.map(c => c.question).join('\n');
+                        const contentWithoutQuestions = textContent.replace(questionsOnly, '').trim();
+                        const isOnlyClarify = contentWithoutQuestions.length === 0 || contentWithoutQuestions === allClarify.map(c => c.options?.join('\n') || '').join('\n');
+                        if (isOnlyClarify && allClarify.length === 1) {
+                          return (
+                            <ClarifyCard
+                              key={`text-${idx}`}
+                              prompt={allClarify[0]}
+                              disabled={clarifyDisabled || !onClarifyAnswer}
+                              timestamp={message.created_at}
+                              onAnswer={(answer: string) => {
+                                setClarifySubmitted(true);
+                                onClarifyAnswer?.(answer);
+                              }}
+                            />
+                          );
+                        }
+                        if (isOnlyClarify && allClarify.length > 1) {
+                          return (
+                            <MultiClarifyCard
+                              key={`text-${idx}`}
+                              content={textContent}
+                              disabled={clarifyDisabled || !onClarifyAnswer}
+                              timestamp={message.created_at}
+                              onAnswer={(answers: string[]) => {
+                                setClarifySubmitted(true);
+                                onClarifyAnswer?.(answers.join('\n'));
+                              }}
+                            />
+                          );
+                        }
+                      }
+                      return (
+                        <div key={`text-${idx}`} className="markdown-content text-sm leading-relaxed">
+                          {textContent ? (
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                              {textContent}
+                            </ReactMarkdown>
+                          ) : (
+                            isStreaming && <span className="inline-block h-4 w-1 animate-pulse bg-current" />
+                          )}
+                        </div>
+                      );
+                    }
+                    return null;
+                  })}
+                </div>
+              );
+            }
 
-          {/* 消息内容 */}
-          {showSubAgentBody && (displayContent.trim() || isStreaming || !clarifyPrompt) && (
-            <div className="markdown-content text-sm leading-relaxed">
-              {displayContent ? (
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                  {displayContent}
-                </ReactMarkdown>
-              ) : (
-                <>
-                  {isStreaming ? '' : '...'}
-                  {isStreaming && !displayContent && (
-                    <span className="inline-block h-4 w-1 animate-pulse bg-current" />
-                  )}
-                </>
-              )}
-            </div>
-          )}
+            // 旧布局回退：固定分区渲染
+            return (
+              <>
+                {hasVisibleTools && (
+                  <div className="mb-2">
+                    <ToolCallGroup
+                      items={toolTimeline}
+                      isStreaming={isStreaming}
+                    />
+                  </div>
+                )}
+                {hasThinking && (
+                  <ThinkingBlock
+                    content={message.thinking_content || ''}
+                    isStreaming={Boolean(isThinking)}
+                  />
+                )}
+                {clarifyPrompt && !clarifySubmitted && (
+                  <div className={hasVisibleTools ? 'mt-2' : ''}>
+                    <ClarifyCard
+                      prompt={clarifyPrompt}
+                      disabled={clarifyDisabled || !onClarifyAnswer}
+                      timestamp={message.created_at}
+                      onAnswer={(answer: string) => {
+                        setClarifySubmitted(true);
+                        onClarifyAnswer?.(answer);
+                      }}
+                    />
+                  </div>
+                )}
+                {(displayContent.trim() || isStreaming || !clarifyPrompt) && (
+                  <div className="markdown-content text-sm leading-relaxed">
+                    {displayContent ? (
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {displayContent}
+                      </ReactMarkdown>
+                    ) : (
+                      <>
+                        {isStreaming ? '' : '...'}
+                        {isStreaming && !displayContent && (
+                          <span className="inline-block h-4 w-1 animate-pulse bg-current" />
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+              </>
+            );
+          })()}
 
           {/* 错误信息 */}
           {showSubAgentBody && isError && message.error && (
