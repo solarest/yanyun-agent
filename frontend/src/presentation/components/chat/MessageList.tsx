@@ -98,10 +98,7 @@ export const MessageList: React.FC<MessageListProps> = ({
       onScroll={handleScroll}
       className="flex-1 overflow-y-auto px-4 py-6"
     >
-      <div className="mx-auto max-w-3xl relative">
-        {/* 垂直时间线 */}
-        <div className="absolute left-3 top-2 bottom-2 w-px bg-border/60" />
-
+      <div className="mx-auto max-w-3xl">
         {renderItems.map(({ message: msg, embeddedSubAgents }) => (
           <MessageBubble
             key={msg.id}
