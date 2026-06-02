@@ -27,7 +27,7 @@ from typing import Any, AsyncIterator, Optional
 from src.domain.aggregates.task.task import Task, TaskConfig, TaskStatus
 from src.domain.entities.event_types import AgentEventType
 from src.domain.entities.tool import ToolContext, ToolResult
-from src.subagent.sub_agent_launcher import ISubAgentLauncher
+from src.domain.interfaces.sub_agent_launcher import ISubAgentLauncher
 from src.infrastructure.tools.decorator import tool
 
 logger = logging.getLogger(__name__)

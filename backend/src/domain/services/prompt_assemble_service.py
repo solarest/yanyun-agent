@@ -4,7 +4,7 @@ from typing import Optional
 from src.domain.value_objects.prompt_template import PromptTemplate
 from src.domain.value_objects.prompt_assembly_result import PromptAssemblyResult
 from src.domain.entities.tool import ToolDef
-from src.skills.skill_def import SkillDef
+from src.domain.entities.skill_def import SkillDef
 from src.domain.entities.output_schema import OutputSchema
 from src.domain.services.token_utils import count_tokens
 

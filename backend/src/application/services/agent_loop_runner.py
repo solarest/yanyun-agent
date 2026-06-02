@@ -37,7 +37,7 @@ from src.infrastructure.agent.error_handlers import (
     DefaultErrorHandler,
     TimeoutErrorHandler,
 )
-from src.skills.skill_repository import ISkillRepository
+from src.domain.repositories.skill_repository import ISkillRepository
 
 logger = logging.getLogger(__name__)
 
@@ -337,7 +337,7 @@ class AgentLoopRunner:
         if not is_sub_agent:
             return agent_system_prompt
 
-        from src.subagent.sub_agent_orchestrator import SubAgentOrchestrator
+        from src.domain.services.sub_agent_orchestrator import SubAgentOrchestrator
         orchestrator = SubAgentOrchestrator()
         return orchestrator.build_sub_agent_system_prompt(
             parent_system_prompt=parent_system_prompt or "",
@@ -353,7 +353,7 @@ class AgentLoopRunner:
         if not is_sub_agent:
             return self.tool_registry
 
-        from src.subagent.sub_agent_orchestrator import SubAgentOrchestrator
+        from src.domain.services.sub_agent_orchestrator import SubAgentOrchestrator
         from src.infrastructure.tools.registry import ToolRegistry
         orchestrator = SubAgentOrchestrator()
         return orchestrator.create_sub_agent_tool_registry(

@@ -15,7 +15,7 @@ from src.domain.repositories.task_repository import ITaskRepository
 from src.domain.repositories.agent_repository import IAgentRepository
 from src.domain.repositories.session_repository import ISessionRepository
 from src.domain.repositories.session_message_repository import ISessionMessageRepository
-from src.skills.skill_repository import ISkillRepository
+from src.domain.repositories.skill_repository import ISkillRepository
 from src.domain.repositories.tool_registry import IToolRegistry
 from src.domain.interfaces.llm_provider import ILLMProvider
 from src.domain.interfaces.prompt_context_interface import PromptContextInterface

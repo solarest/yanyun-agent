@@ -3,7 +3,7 @@
 import pytest
 from src.domain.value_objects.prompt_template import PromptTemplate
 from src.domain.entities.tool import ToolDef, ToolParameter
-from src.skills.skill_def import SkillDef, SkillStep
+from src.domain.entities.skill_def import SkillDef, SkillStep
 from src.domain.entities.output_schema import OutputSchema
 from src.domain.services.prompt_assemble_service import PromptAssembleService
 

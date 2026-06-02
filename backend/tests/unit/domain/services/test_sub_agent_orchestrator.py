@@ -1,7 +1,7 @@
 """单元测试 - SubAgentOrchestrator 领域服务"""
 
 import pytest
-from src.subagent.sub_agent_orchestrator import (
+from src.domain.services.sub_agent_orchestrator import (
     SubAgentOrchestrator,
     SUB_AGENT_EXCLUDED_TOOLS,
 )
