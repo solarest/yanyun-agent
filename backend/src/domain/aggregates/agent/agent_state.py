@@ -3,7 +3,49 @@
 from typing import Annotated, Any, Dict, List, Optional
 
 from typing_extensions import TypedDict
-from langgraph.graph.message import add_messages
+
+
+def add_messages(left: list, right: list) -> list:
+    """Merge two message lists for state graph updates.
+
+    Messages in `right` with the same ID as messages in `left` replace them.
+    Messages with new IDs are appended.
+
+    This serves as a reducer for LangGraph's StateGraph when used as
+    ``Annotated[list, add_messages]``.
+    """
+    if not left:
+        return list(right) if right else []
+    if not right:
+        return list(left)
+
+    left = list(left)
+    right = list(right)
+
+    # Build ID index for right-side messages
+    right_by_id: dict = {}
+    for i, m in enumerate(right):
+        msg_id = getattr(m, "id", None)
+        if msg_id:
+            right_by_id[msg_id] = i
+
+    # Replace or keep left-side messages
+    used_right_indices: set = set()
+    merged: list = []
+    for m in left:
+        msg_id = getattr(m, "id", None)
+        if msg_id and msg_id in right_by_id:
+            merged.append(right[right_by_id[msg_id]])
+            used_right_indices.add(right_by_id[msg_id])
+        else:
+            merged.append(m)
+
+    # Append new right-side messages
+    for i, m in enumerate(right):
+        if i not in used_right_indices:
+            merged.append(m)
+
+    return merged
 
 
 class AgentState(TypedDict):

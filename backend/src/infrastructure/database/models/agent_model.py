@@ -144,3 +144,24 @@ class SessionMessageModel(Base):
 
     def __repr__(self) -> str:
         return f"<SessionMessageModel(id={self.id}, role={self.role})>"
+
+
+class MemoryModel(Base):
+    """记忆数据库模型"""
+
+    __tablename__ = "memories"
+
+    id = Column(String(36), primary_key=True)
+    agent_id = Column(String(36), nullable=False, index=True)
+    content = Column(Text, nullable=False, default="")
+    category = Column(String(50), nullable=False, default="general")
+    tags = Column(Text, nullable=False, default="[]")  # JSON 数组
+    importance = Column(Integer, nullable=False, default=50)  # 0-100
+    source_session_id = Column(String(36), nullable=False, default="")
+    access_count = Column(Integer, nullable=False, default=0)
+    last_accessed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<MemoryModel(id={self.id}, agent_id={self.agent_id}, category={self.category})>"

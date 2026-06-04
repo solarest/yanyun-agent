@@ -37,9 +37,15 @@ from src.infrastructure.agent.error_handlers import (
     DefaultErrorHandler,
     TimeoutErrorHandler,
 )
-from src.domain.repositories.skill_repository import ISkillRepository
+from src.domain.skills import ISkillRepository
 
 logger = logging.getLogger(__name__)
+
+
+def _lazy_sub_agent_runtime_scope():
+    """延迟导入 sub_agent_runtime_scope 以避免循环依赖。"""
+    from src.application.tools.sub_agent_runtime import sub_agent_runtime_scope
+    return sub_agent_runtime_scope
 
 
 class AgentLoopRunner:
@@ -249,7 +255,9 @@ class AgentLoopRunner:
                         DefaultErrorHandler(),
                     ]),
                     # 注入 context 依赖，供工具使用
+                    # 延迟导入避免循环依赖（agent_loop_runner <-> sub_agent_runtime）
                     "send_message_use_case": send_message_use_case or self,
+                    "sub_agent_runtime_scope": _lazy_sub_agent_runtime_scope(),
                     "task_repo": self.task_repo,
                     "parent_state": initial_state,
                     "parent_agent_id": agent_id,

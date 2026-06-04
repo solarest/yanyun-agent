@@ -113,6 +113,7 @@ def init_db():
         SessionModel,
         SessionMessageModel,
         SkillModel,
+        MemoryModel,
     )
 
     # 启用 WAL 模式（必须在任何写入之前执行）

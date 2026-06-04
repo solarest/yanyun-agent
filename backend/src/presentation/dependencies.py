@@ -6,16 +6,16 @@
 from contextlib import asynccontextmanager
 from functools import lru_cache
 
-from fastapi import Depends
+from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.application.use_cases.stream_event import StreamEventService
+from src.application.agent_loop.stream_event import StreamEventService
 from src.domain.repositories.event_repository import IEventRepository
 from src.domain.repositories.task_repository import ITaskRepository
 from src.domain.repositories.agent_repository import IAgentRepository
 from src.domain.repositories.session_repository import ISessionRepository
 from src.domain.repositories.session_message_repository import ISessionMessageRepository
-from src.domain.repositories.skill_repository import ISkillRepository
+from src.domain.skills import ISkillRepository
 from src.domain.repositories.tool_registry import IToolRegistry
 from src.domain.interfaces.llm_provider import ILLMProvider
 from src.domain.interfaces.prompt_context_interface import PromptContextInterface
@@ -29,10 +29,10 @@ from src.infrastructure.repositories.sqlite_session_repo import SQLiteSessionRep
 from src.infrastructure.repositories.sqlite_session_message_repo import (
     SQLiteSessionMessageRepository,
 )
-from src.infrastructure.repositories.sqlite_skill_repo import SQLiteSkillRepository
-from src.application.services.skill_storage_service import SkillStorageService
+from src.infrastructure.skills import SQLiteSkillRepository
+from src.application.skills.storage import SkillStorageService
 from src.infrastructure.tools.registry import ToolRegistry
-from src.application.use_cases.skill_upload import SkillUploadService
+from src.application.skills.upload import SkillUploadService
 
 
 # 异步数据库依赖
@@ -66,6 +66,14 @@ def get_agent_repository(
 ) -> IAgentRepository:
     """获取 Agent 仓储实例"""
     return SQLiteAgentRepository(db)
+
+
+def get_agent_use_case(
+    db: AsyncSession = Depends(get_async_db),
+):
+    """获取 Agent 管理用例实例"""
+    from src.application.agent import AgentManagementUseCase
+    return AgentManagementUseCase(agent_repo=SQLiteAgentRepository(db))
 
 
 def get_event_service() -> StreamEventService:
@@ -177,3 +185,142 @@ def create_tool_registry() -> IToolRegistry:
     registry.auto_register_collected()
 
     return registry
+
+
+# === Memory 依赖注入 ===
+
+
+def get_memory_repository(
+    db: AsyncSession = Depends(get_async_db),
+):
+    """获取 Memory 仓储实例"""
+    from src.infrastructure.memory import SQLiteMemoryRepository
+    return SQLiteMemoryRepository(db)
+
+
+def get_memory_use_case(
+    db: AsyncSession = Depends(get_async_db),
+):
+    """获取 Memory 管理用例实例"""
+    from src.application.memory.management import MemoryManagementUseCase
+    from src.domain.memory.service import MemoryService
+    from src.infrastructure.memory import SQLiteMemoryRepository
+
+    repo = SQLiteMemoryRepository(db)
+    service = MemoryService(repository=repo)
+    return MemoryManagementUseCase(memory_repo=repo, memory_service=service)
+
+
+# === SendMessageUseCase 构建工厂 ===
+
+
+def get_send_message_use_case(request: Request):
+    """构建 SendMessageUseCase — 后台任务使用独立 DB session 与完整依赖图。
+
+    每次调用创建独立的 AsyncSession，供后台 Agent Loop 长期持有。
+    所有仓储、应用服务、用例均在此组装，路由层无需了解具体实现。
+    """
+    from sqlalchemy.ext.asyncio import AsyncSession as SAAsyncSession
+
+    from src.application.agent_loop.send_message import SendMessageUseCase
+    from src.application.services.agent_loop_runner import AgentLoopRunner
+    from src.application.services.session_title_generator import SessionTitleGenerator
+    from src.application.services.task_completion_service import TaskCompletionService
+    from src.infrastructure.database.session import async_engine
+    from src.infrastructure.repositories.sqlite_task_repo import SQLiteTaskRepository
+    from src.infrastructure.repositories.sqlite_agent_repo import SQLiteAgentRepository
+    from src.infrastructure.repositories.sqlite_session_repo import SQLiteSessionRepository
+    from src.infrastructure.repositories.sqlite_session_message_repo import (
+        SQLiteSessionMessageRepository,
+    )
+    from src.infrastructure.skills import SQLiteSkillRepository
+
+    bg_db = SAAsyncSession(async_engine)
+    bg_task_repo = SQLiteTaskRepository(bg_db)
+    bg_agent_repo = SQLiteAgentRepository(bg_db)
+    bg_session_repo = SQLiteSessionRepository(bg_db)
+    bg_message_repo = SQLiteSessionMessageRepository(bg_db)
+    bg_skill_repo = SQLiteSkillRepository(bg_db)
+
+    bg_event_emitter = request.app.state.event_service
+    bg_tool_registry = create_tool_registry()
+    bg_llm_provider = get_llm_provider()
+    bg_llm_settings = get_llm_settings()
+    bg_prompt_context = get_prompt_context()
+
+    title_generator = SessionTitleGenerator(
+        llm_provider=bg_llm_provider,
+        session_repo=bg_session_repo,
+    )
+    completion_service = TaskCompletionService(
+        message_repo=bg_message_repo,
+        task_repo=bg_task_repo,
+        session_repo=bg_session_repo,
+    )
+    loop_runner = AgentLoopRunner(
+        agent_repo=bg_agent_repo,
+        llm_provider=bg_llm_provider,
+        prompt_context=bg_prompt_context,
+        message_repo=bg_message_repo,
+        skill_repo=bg_skill_repo,
+        task_repo=bg_task_repo,
+        session_repo=bg_session_repo,
+        event_emitter=bg_event_emitter,
+        tool_registry=bg_tool_registry,
+        workflow_builder=None,
+        task_completion_service=completion_service,
+        default_model=bg_llm_settings.default_model,
+    )
+
+    return SendMessageUseCase(
+        session_repo=bg_session_repo,
+        message_repo=bg_message_repo,
+        task_repo=bg_task_repo,
+        event_emitter=bg_event_emitter,
+        tool_registry=bg_tool_registry,
+        loop_runner=loop_runner,
+        title_generator=title_generator,
+        default_model=bg_llm_settings.default_model,
+        running_tasks=request.app.state.running_tasks,
+    )
+
+
+# === TaskManagementUseCase 依赖注入 ===
+
+
+def get_task_management_use_case(
+    db: AsyncSession = Depends(get_async_db),
+    request: Request = None,
+):
+    """获取 Task 管理用例实例"""
+    from src.application.tasks.management import TaskManagementUseCase
+    from src.infrastructure.repositories.sqlite_task_repo import SQLiteTaskRepository
+    from src.infrastructure.repositories.sqlite_agent_repo import SQLiteAgentRepository
+
+    task_repo = SQLiteTaskRepository(db)
+    agent_repo = SQLiteAgentRepository(db)
+
+    running_tasks = {}
+    event_emitter = None
+    if request is not None:
+        running_tasks = getattr(request.app.state, "running_tasks", {})
+        event_emitter = getattr(request.app.state, "event_service", None)
+
+    return TaskManagementUseCase(
+        task_repo=task_repo,
+        agent_repo=agent_repo,
+        running_tasks=running_tasks,
+        event_emitter=event_emitter,
+    )
+
+
+# === SkillManagementUseCase 依赖注入 ===
+
+
+def get_skill_management_use_case(
+    db: AsyncSession = Depends(get_async_db),
+):
+    """获取 Skill 管理用例实例"""
+    from src.application.skills.management import SkillManagementUseCase
+
+    return SkillManagementUseCase(skill_repo=SQLiteSkillRepository(db))

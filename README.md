@@ -150,7 +150,7 @@ npm run build
 
 ## 🤝 贡献
 
-欢迎通过 Issue / PR 参与共建。提交前请先阅读 `.qoder/rules/` 下的项目约定与架构规则。
+欢迎通过 Issue / PR 参与共建。
 
 ## 📄 许可证
 

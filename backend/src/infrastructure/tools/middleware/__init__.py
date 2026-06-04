@@ -1,9 +1,11 @@
-"""基础设施层 - 工具执行中间件"""
+"""Shim: re-exports from register.middleware for backward compatibility."""
 
-from src.infrastructure.tools.middleware.security import SecurityMiddleware
-from src.infrastructure.tools.middleware.rate_limit import RateLimitMiddleware
-from src.infrastructure.tools.middleware.timeout import TimeoutMiddleware
-from src.infrastructure.tools.middleware.sandbox import SandboxMiddleware
+from src.infrastructure.tools.register.middleware import (  # noqa: F401
+    RateLimitMiddleware,
+    SandboxMiddleware,
+    SecurityMiddleware,
+    TimeoutMiddleware,
+)
 
 __all__ = [
     "SecurityMiddleware",

@@ -1,19 +1,20 @@
 """表现层 - 任务 CRUD 路由"""
 
-from datetime import datetime
-
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from src.application.dtos.task_dto import (
     CreateTaskDTO,
     TaskListResponseDTO,
     TaskResponseDTO,
 )
-from src.domain.aggregates.task.task import Task, TaskConfig, TaskStatus
-from src.domain.entities.event_types import AgentEventType
-from src.domain.repositories.agent_repository import IAgentRepository
+from src.application.tasks.management import (
+    AgentNotFoundError,
+    TaskManagementUseCase,
+    TaskNotFoundError,
+    TaskNotRunningError,
+)
 from src.domain.repositories.task_repository import ITaskRepository
-from src.presentation.dependencies import get_agent_repository, get_task_repository
+from src.presentation.dependencies import get_task_management_use_case, get_task_repository
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -30,8 +31,7 @@ router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 )
 async def create_task(
     dto: CreateTaskDTO,
-    task_repo: ITaskRepository = Depends(get_task_repository),
-    agent_repo: IAgentRepository = Depends(get_agent_repository),
+    task_uc: TaskManagementUseCase = Depends(get_task_management_use_case),
 ):
     """创建任务
 
@@ -39,30 +39,24 @@ async def create_task(
     如果指定了 agent_id，会校验 Agent 是否存在。
     任务创建后处于 idle 状态，等待执行。
     """
-    # 如果指定了 agent_id，校验 Agent 是否存在
-    if dto.agent_id is not None:
-        agent = await agent_repo.get_by_id(dto.agent_id)
-        if agent is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={
-                    "error": {
-                        "code": "AGENT_NOT_FOUND",
-                        "message": f"Agent '{dto.agent_id}' 不存在",
-                    }
-                },
-            )
-
-    task = Task(
-        message=dto.message,
-        workspace=dto.workspace,
-        status=TaskStatus.IDLE,
-        model=dto.model or "gpt-4",
-        config=TaskConfig(max_turns=dto.max_turns or 100),
-        agent_id=dto.agent_id,
-    )
-
-    task = await task_repo.add(task)
+    try:
+        task = await task_uc.create(
+            message=dto.message,
+            workspace=dto.workspace,
+            agent_id=dto.agent_id,
+            model=dto.model or "gpt-4",
+            max_turns=dto.max_turns or 100,
+        )
+    except AgentNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": {
+                    "code": "AGENT_NOT_FOUND",
+                    "message": str(e),
+                }
+            },
+        )
 
     return TaskResponseDTO(
         id=task.id,
@@ -164,39 +158,20 @@ async def get_task(
 )
 async def cancel_task(
     task_id: str,
-    request: Request,
-    task_repo: ITaskRepository = Depends(get_task_repository),
+    task_uc: TaskManagementUseCase = Depends(get_task_management_use_case),
 ):
     """取消运行中的任务"""
-    task = await task_repo.get_by_id(task_id)
-    if not task:
+    try:
+        result = await task_uc.cancel(task_id)
+    except TaskNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"error": {"code": "TASK_NOT_FOUND", "message": "任务不存在"}},
         )
-
-    if task.status not in (TaskStatus.RUNNING, TaskStatus.PAUSED):
+    except TaskNotRunningError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={"error": {"code": "TASK_NOT_RUNNING", "message": "任务不在可取消状态"}},
         )
 
-    # 从 running_tasks 中取出 asyncio.Task 并取消
-    running_tasks: dict = request.app.state.running_tasks
-    asyncio_task = running_tasks.get(task_id)
-    if asyncio_task is not None:
-        asyncio_task.cancel()
-    elif task.status == TaskStatus.PAUSED:
-        task.status = TaskStatus.CANCELLED
-        task.completed_at = datetime.now()
-        task.error = "cancelled"
-        await task_repo.update(task)
-        await request.app.state.event_service.emit_phase_changed(
-            task_id,
-            "cancelled",
-            "paused",
-            task.current_turn,
-        )
-        await request.app.state.event_service.emit(task_id, AgentEventType.TASK_CANCELLED, {})
-
-    return {"message": "cancel requested", "task_id": task_id}
+    return {"message": "cancel requested", "task_id": result["task_id"]}

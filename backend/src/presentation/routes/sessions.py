@@ -12,7 +12,7 @@ from src.application.dtos.session_dto import (
     SessionResponseDTO,
     UpdateSessionDTO,
 )
-from src.application.use_cases.session_management import SessionManagementUseCase
+from src.application.agent_loop.session_management import SessionManagementUseCase
 from src.domain.aggregates.session.session import Session
 from src.domain.aggregates.session.session_message import SessionMessage
 from src.domain.repositories.agent_repository import IAgentRepository
@@ -24,9 +24,7 @@ from src.presentation.dependencies import (
     get_agent_repository,
     get_session_message_repository,
     get_session_repository,
-    get_llm_provider,
-    get_llm_settings,
-    get_prompt_context,
+    get_send_message_use_case,
 )
 
 router = APIRouter(prefix="/api/agents/{agent_id}/sessions", tags=["sessions"])
@@ -203,21 +201,12 @@ async def send_message(
     request: Request,
     agent_repo: IAgentRepository = Depends(get_agent_repository),
     session_repo: ISessionRepository = Depends(get_session_repository),
-    message_repo: ISessionMessageRepository = Depends(
-        get_session_message_repository),
+    send_message_uc=Depends(get_send_message_use_case),
 ):
     """发送消息并触发 Agent Loop 执行。
 
     返回 202 + taskId，前端通过 SSE 订阅任务事件。
     """
-    from src.application.use_cases.send_message import SendMessageUseCase
-    from src.application.services.agent_loop_runner import AgentLoopRunner
-    from src.application.services.session_title_generator import SessionTitleGenerator
-    from src.application.services.task_completion_service import TaskCompletionService
-    from src.presentation.dependencies import (
-        create_tool_registry,
-    )
-
     # 验证 Agent 存在
     agent = await agent_repo.get_by_id(agent_id)
     if agent is None:
@@ -234,68 +223,7 @@ async def send_message(
             detail={"error": {"code": "SESSION_NOT_FOUND"}},
         )
 
-    # 为后台任务创建独立的仓储实例
-    from src.infrastructure.database.session import async_engine
-    from sqlalchemy.ext.asyncio import AsyncSession as SAAsyncSession
-    from src.infrastructure.repositories.sqlite_task_repo import SQLiteTaskRepository
-    from src.infrastructure.repositories.sqlite_agent_repo import SQLiteAgentRepository
-    from src.infrastructure.repositories.sqlite_session_repo import SQLiteSessionRepository
-    from src.infrastructure.repositories.sqlite_session_message_repo import (
-        SQLiteSessionMessageRepository,
-    )
-    from src.infrastructure.repositories.sqlite_skill_repo import SQLiteSkillRepository
-
-    bg_db = SAAsyncSession(async_engine)
-    bg_task_repo = SQLiteTaskRepository(bg_db)
-    bg_agent_repo = SQLiteAgentRepository(bg_db)
-    bg_session_repo = SQLiteSessionRepository(bg_db)
-    bg_message_repo = SQLiteSessionMessageRepository(bg_db)
-    bg_skill_repo = SQLiteSkillRepository(bg_db)
-    # 使用全局共享的 event_service（SSE 订阅需要同一实例）
-    bg_event_emitter = request.app.state.event_service
-    bg_tool_registry = create_tool_registry()
-    bg_llm_provider = get_llm_provider()
-    bg_llm_settings = get_llm_settings()
-    bg_prompt_context = get_prompt_context()
-
-    # 构建应用服务
-    title_generator = SessionTitleGenerator(
-        llm_provider=bg_llm_provider,
-        session_repo=bg_session_repo,
-    )
-    completion_service = TaskCompletionService(
-        message_repo=bg_message_repo,
-        task_repo=bg_task_repo,
-        session_repo=bg_session_repo,
-    )
-    loop_runner = AgentLoopRunner(
-        agent_repo=bg_agent_repo,
-        llm_provider=bg_llm_provider,
-        prompt_context=bg_prompt_context,
-        message_repo=bg_message_repo,
-        skill_repo=bg_skill_repo,
-        task_repo=bg_task_repo,
-        session_repo=bg_session_repo,
-        event_emitter=bg_event_emitter,
-        tool_registry=bg_tool_registry,
-        workflow_builder=None,
-        task_completion_service=completion_service,
-        default_model=bg_llm_settings.default_model,
-    )
-
-    use_case = SendMessageUseCase(
-        session_repo=bg_session_repo,
-        message_repo=bg_message_repo,
-        task_repo=bg_task_repo,
-        event_emitter=bg_event_emitter,
-        tool_registry=bg_tool_registry,
-        loop_runner=loop_runner,
-        title_generator=title_generator,
-        default_model=bg_llm_settings.default_model,
-        running_tasks=request.app.state.running_tasks,
-    )
-
-    result = await use_case.execute(
+    result = await send_message_uc.execute(
         agent_id=agent_id,
         session_id=session_id,
         content=dto.content,

@@ -20,14 +20,12 @@
 import logging
 import asyncio
 import uuid
-from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Any, AsyncIterator, Optional
+from typing import Any, Optional
 
 from src.domain.aggregates.task.task import Task, TaskConfig, TaskStatus
 from src.domain.entities.event_types import AgentEventType
 from src.domain.entities.tool import ToolContext, ToolResult
-from src.domain.interfaces.sub_agent_launcher import ISubAgentLauncher
 from src.infrastructure.tools.decorator import tool
 
 logger = logging.getLogger(__name__)
@@ -38,103 +36,6 @@ logger = logging.getLogger(__name__)
 _SUB_AGENT_MAX_CONCURRENT = 5
 _SUB_AGENT_SEMAPHORE = asyncio.Semaphore(_SUB_AGENT_MAX_CONCURRENT)
 
-
-def _is_sqlite_task_repo(task_repo: Any) -> bool:
-    return task_repo.__class__.__name__ == "SQLiteTaskRepository"
-
-
-def _can_build_isolated_use_case(send_message_use_case: Any) -> bool:
-    required_attrs = (
-        "session_repo",
-        "message_repo",
-        "task_repo",
-        "event_emitter",
-        "tool_registry",
-        "loop_runner",
-        "running_tasks",
-    )
-    if not all(hasattr(send_message_use_case, attr) for attr in required_attrs):
-        return False
-    lr = send_message_use_case.loop_runner
-    return lr is not None and hasattr(lr, "llm_provider")
-
-
-@asynccontextmanager
-async def _sub_agent_runtime_scope(
-    send_message_use_case: Any,
-    task_repo: Any,
-) -> AsyncIterator[tuple[Any, Any]]:
-    """为一次 sub-agent 运行提供隔离的仓储会话。
-
-    多个 session_spawn 会并行执行；生产环境中的 SQLite/SQLAlchemy AsyncSession
-    不能跨并发任务共享。测试中的 mock repo 保持原路径，避免引入数据库依赖。
-    """
-    if not (_is_sqlite_task_repo(task_repo) and _can_build_isolated_use_case(send_message_use_case)):
-        yield send_message_use_case, task_repo
-        return
-
-    from src.application.use_cases.send_message import SendMessageUseCase
-    from src.application.services.agent_loop_runner import AgentLoopRunner
-    from src.application.services.session_title_generator import SessionTitleGenerator
-    from src.application.services.task_completion_service import TaskCompletionService
-    from src.infrastructure.database.session import AsyncSessionLocal
-    from src.infrastructure.repositories.sqlite_agent_repo import SQLiteAgentRepository
-    from src.infrastructure.repositories.sqlite_session_repo import SQLiteSessionRepository
-    from src.infrastructure.repositories.sqlite_session_message_repo import (
-        SQLiteSessionMessageRepository,
-    )
-    from src.infrastructure.repositories.sqlite_skill_repo import SQLiteSkillRepository
-    from src.infrastructure.repositories.sqlite_task_repo import SQLiteTaskRepository
-
-    async with AsyncSessionLocal() as db_session:
-        isolated_task_repo = SQLiteTaskRepository(db_session)
-        isolated_agent_repo = SQLiteAgentRepository(db_session)
-        isolated_session_repo = SQLiteSessionRepository(db_session)
-        isolated_message_repo = SQLiteSessionMessageRepository(db_session)
-        isolated_skill_repo = SQLiteSkillRepository(db_session)
-
-        # 共享资源从父 use_case 获取
-        shared_llm_provider = send_message_use_case.loop_runner.llm_provider
-        shared_event_emitter = send_message_use_case.event_emitter
-        shared_tool_registry = send_message_use_case.tool_registry
-        shared_running_tasks = send_message_use_case.running_tasks
-
-        # 构建应用服务（isolated repos + shared singletons）
-        title_generator = SessionTitleGenerator(
-            llm_provider=shared_llm_provider,
-            session_repo=isolated_session_repo,
-        )
-        completion_service = TaskCompletionService(
-            message_repo=isolated_message_repo,
-            task_repo=isolated_task_repo,
-            session_repo=isolated_session_repo,
-        )
-        loop_runner = AgentLoopRunner(
-            agent_repo=isolated_agent_repo,
-            llm_provider=shared_llm_provider,
-            prompt_context=None,
-            message_repo=isolated_message_repo,
-            skill_repo=isolated_skill_repo,
-            task_repo=isolated_task_repo,
-            session_repo=isolated_session_repo,
-            event_emitter=shared_event_emitter,
-            tool_registry=shared_tool_registry,
-            workflow_builder=None,
-            task_completion_service=completion_service,
-            default_model=send_message_use_case.default_model,
-        )
-
-        isolated_use_case = SendMessageUseCase(
-            session_repo=isolated_session_repo,
-            message_repo=isolated_message_repo,
-            task_repo=isolated_task_repo,
-            event_emitter=shared_event_emitter,
-            tool_registry=shared_tool_registry,
-            loop_runner=loop_runner,
-            title_generator=title_generator,
-            running_tasks=shared_running_tasks,
-        )
-        yield isolated_use_case, isolated_task_repo
 
 
 async def _emit_safely(event_emitter: Any, task_id: str, event_type: str, payload: dict[str, Any]) -> None:
@@ -214,13 +115,20 @@ async def session_spawn(
             error="missing_context",
         )
 
-    sub_agent_launcher: ISubAgentLauncher = context.extra.get(
-        "send_message_use_case")  # type: ignore[assignment]
-    if not sub_agent_launcher:
+    send_message_use_case = context.extra.get("send_message_use_case")
+    if not send_message_use_case:
         return ToolResult(
-            output="Error: sub_agent_launcher not available in context",
+            output="Error: send_message_use_case not available in context",
             success=False,
             error="missing_launcher",
+        )
+
+    sub_agent_runtime_scope = context.extra.get("sub_agent_runtime_scope")
+    if not sub_agent_runtime_scope:
+        return ToolResult(
+            output="Error: sub_agent_runtime_scope not available in context",
+            success=False,
+            error="missing_runtime_scope",
         )
 
     task_repo = context.extra.get("task_repo")
@@ -275,7 +183,7 @@ async def session_spawn(
         effective_model = parent_state.get(
             "model") or LLMSettings().default_model
 
-        async with _sub_agent_runtime_scope(sub_agent_launcher, task_repo) as (
+        async with sub_agent_runtime_scope(send_message_use_case, task_repo) as (
             runtime_use_case,
             runtime_task_repo,
         ):

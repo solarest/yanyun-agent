@@ -4,6 +4,7 @@
 """
 
 import logging
+from typing import Optional
 
 from src.domain.interfaces.llm_provider import ILLMProvider
 from src.domain.repositories.session_repository import ISessionRepository
@@ -46,13 +47,16 @@ class SessionTitleGenerator:
 
             # 构建提示词
             prompt = PromptTemplate.from_template(
-                "请根据用户的消息内容，生成一个简洁的会话标题（不超过15个中文字符或30个英文字符）。\n"
-                "要求：\n"
-                "1. 准确概括用户的核心需求或意图\n"
-                "2. 简洁明了，适合作为会话列表的显示标题\n"
-                "3. 只返回标题文本，不要添加任何解释或其他内容\n\n"
-                "用户消息：{message}\n\n"
-                "标题："
+                "Generate a concise session title based on the user's message "
+                "(max 15 Chinese characters or 30 English characters).\n"
+                "Rules:\n"
+                "1. Accurately summarize the user's core need or intent\n"
+                "2. Keep it concise, suitable as a session list display title\n"
+                "3. Follow the user's language: if the user writes in Chinese, "
+                "respond in Chinese; if in English, respond in English\n"
+                "4. Return only the title text, no explanations or extra content\n\n"
+                "User message: {message}\n\n"
+                "Title:"
             )
 
             # 调用 LLM

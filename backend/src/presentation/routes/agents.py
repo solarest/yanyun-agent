@@ -1,11 +1,15 @@
 """表现层 - Agent CRUD 路由"""
 
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
+from src.application.agent.management import (
+    AgentManagementUseCase,
+    AgentNotFoundError,
+    DuplicateAgentNameError,
+)
 from src.application.dtos.agent_dto import (
     AgentConfigResponseDTO,
     AgentListResponseDTO,
@@ -14,11 +18,13 @@ from src.application.dtos.agent_dto import (
     UpdateAgentConfigDTO,
     UpdateAgentDTO,
 )
-from src.domain.aggregates.agent.agent import Agent
+from src.domain.agent.entity import Agent
 from src.domain.entities.tool import ToolDef
-from src.domain.repositories.agent_repository import IAgentRepository
 from src.infrastructure.tools.registry import ToolRegistry
-from src.presentation.dependencies import get_agent_repository, create_tool_registry
+from src.presentation.dependencies import (
+    create_tool_registry,
+    get_agent_use_case,
+)
 
 router = APIRouter(prefix="/api/agents", tags=["agents"])
 
@@ -111,11 +117,23 @@ def _to_config_response(agent: Agent) -> AgentConfigResponseDTO:
 )
 async def create_agent(
     dto: CreateAgentDTO,
-    agent_repo: IAgentRepository = Depends(get_agent_repository),
+    agent_uc: AgentManagementUseCase = Depends(get_agent_use_case),
 ) -> AgentResponseDTO:
     """创建 Agent"""
-    existing = await agent_repo.get_by_name(dto.name)
-    if existing is not None:
+    try:
+        agent = await agent_uc.create(
+            name=dto.name,
+            description=dto.description,
+            vibes=dto.vibes,
+            identity_md=dto.identity_md or "",
+            soul_md=dto.soul_md or "",
+            agents_md=dto.agents_md or "",
+            bootstrap_md=dto.bootstrap_md or "",
+            memory_md=dto.memory_md or "",
+            tools_md=dto.tools_md or "",
+            user_md=dto.user_md or "",
+        )
+    except DuplicateAgentNameError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
@@ -125,22 +143,6 @@ async def create_agent(
                 }
             },
         )
-
-    agent = Agent(
-        name=dto.name,
-        description=dto.description,
-        identity_md=dto.identity_md or "",
-        soul_md=dto.soul_md or "",
-        agents_md=dto.agents_md or "",
-        bootstrap_md=dto.bootstrap_md or "",
-        memory_md=dto.memory_md or "",
-        tools_md=dto.tools_md or "",
-        user_md=dto.user_md or "",
-        created_at=datetime.now(),
-        updated_at=None,
-    )
-    agent.set_vibes(dto.vibes)
-    agent = await agent_repo.add(agent)
     return _to_response(agent)
 
 
@@ -153,11 +155,10 @@ async def create_agent(
 async def list_agents(
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
-    agent_repo: IAgentRepository = Depends(get_agent_repository),
+    agent_uc: AgentManagementUseCase = Depends(get_agent_use_case),
 ) -> AgentListResponseDTO:
     """获取 Agent 列表"""
-    offset = (page - 1) * page_size
-    agents = await agent_repo.list_all(limit=page_size, offset=offset)
+    agents = await agent_uc.list_all(page=page, page_size=page_size)
     return AgentListResponseDTO(
         data=[_to_response(a) for a in agents],
         total=len(agents),
@@ -190,10 +191,10 @@ async def list_tools(
 )
 async def get_agent(
     agent_id: str,
-    agent_repo: IAgentRepository = Depends(get_agent_repository),
+    agent_uc: AgentManagementUseCase = Depends(get_agent_use_case),
 ) -> AgentResponseDTO:
     """获取 Agent 详情"""
-    agent = await agent_repo.get_by_id(agent_id)
+    agent = await agent_uc.get_by_id(agent_id)
     if agent is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -219,41 +220,10 @@ async def get_agent(
 async def update_agent(
     agent_id: str,
     dto: UpdateAgentDTO,
-    agent_repo: IAgentRepository = Depends(get_agent_repository),
+    agent_uc: AgentManagementUseCase = Depends(get_agent_use_case),
 ) -> AgentResponseDTO:
     """更新 Agent（PATCH 语义，所有字段可选）"""
-    agent = await agent_repo.get_by_id(agent_id)
-    if agent is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "error": {
-                    "code": "AGENT_NOT_FOUND",
-                    "message": f"Agent '{agent_id}' 不存在",
-                }
-            },
-        )
-
-    if dto.name is not None and dto.name != agent.name:
-        existing = await agent_repo.get_by_name(dto.name)
-        if existing is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "error": {
-                        "code": "DUPLICATE_AGENT_NAME",
-                        "message": f"Agent 名称 '{dto.name}' 已存在",
-                    }
-                },
-            )
-        agent.name = dto.name
-
-    if dto.description is not None:
-        agent.description = dto.description
-    if dto.vibes is not None:
-        agent.set_vibes(dto.vibes)
-
-    # 更新配置文件
+    # 收集配置文件字段
     config_fields = {}
     for field_name in [
         "identity_md",
@@ -268,12 +238,34 @@ async def update_agent(
         if value is not None:
             config_fields[field_name] = value
 
-    if config_fields:
-        agent.update_config(**config_fields)
-    else:
-        agent.updated_at = datetime.now()
-
-    agent = await agent_repo.update(agent)
+    try:
+        agent = await agent_uc.update(
+            agent_id=agent_id,
+            name=dto.name,
+            description=dto.description,
+            vibes=dto.vibes,
+            **config_fields,
+        )
+    except AgentNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": {
+                    "code": "AGENT_NOT_FOUND",
+                    "message": f"Agent '{agent_id}' 不存在",
+                }
+            },
+        )
+    except DuplicateAgentNameError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": {
+                    "code": "DUPLICATE_AGENT_NAME",
+                    "message": f"Agent 名称 '{dto.name}' 已存在",
+                }
+            },
+        )
     return _to_response(agent)
 
 
@@ -285,11 +277,12 @@ async def update_agent(
 )
 async def delete_agent(
     agent_id: str,
-    agent_repo: IAgentRepository = Depends(get_agent_repository),
+    agent_uc: AgentManagementUseCase = Depends(get_agent_use_case),
 ) -> None:
     """删除 Agent"""
-    agent = await agent_repo.get_by_id(agent_id)
-    if agent is None:
+    try:
+        await agent_uc.delete(agent_id)
+    except AgentNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
@@ -299,7 +292,6 @@ async def delete_agent(
                 }
             },
         )
-    await agent_repo.remove(agent_id)
 
 
 @router.get(
@@ -310,10 +302,10 @@ async def delete_agent(
 )
 async def get_agent_config(
     agent_id: str,
-    agent_repo: IAgentRepository = Depends(get_agent_repository),
+    agent_uc: AgentManagementUseCase = Depends(get_agent_use_case),
 ) -> AgentConfigResponseDTO:
     """获取 Agent 的七个配置文件内容"""
-    agent = await agent_repo.get_by_id(agent_id)
+    agent = await agent_uc.get_by_id(agent_id)
     if agent is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -336,13 +328,14 @@ async def get_agent_config(
 async def update_agent_config(
     agent_id: str,
     dto: UpdateAgentConfigDTO,
-    agent_repo: IAgentRepository = Depends(get_agent_repository),
+    agent_uc: AgentManagementUseCase = Depends(get_agent_use_case),
 ) -> AgentConfigResponseDTO:
     """部分更新 Agent 配置文件，自动递增版本号"""
     config_fields = {k: v for k, v in dto.model_dump().items() if v is not None}
 
-    agent = await agent_repo.update_config(agent_id, config_fields)
-    if agent is None:
+    try:
+        agent = await agent_uc.update_config(agent_id, config_fields)
+    except AgentNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={

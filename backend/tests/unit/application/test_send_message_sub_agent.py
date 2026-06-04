@@ -5,7 +5,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from src.application.services.agent_loop_runner import AgentLoopRunner
 from src.application.services.task_completion_service import TaskCompletionService
-from src.application.use_cases.send_message import SendMessageUseCase
+from src.application.agent_loop.send_message import SendMessageUseCase
 from src.domain.aggregates.agent.agent import Agent
 from src.domain.aggregates.session.session_message import (
     MessageStatus,
