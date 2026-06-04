@@ -2,9 +2,12 @@ import asyncio
 
 import pytest
 
-from src.application.use_cases.send_message import SendMessageUseCase
+from src.application.services.agent_loop_runner import AgentLoopRunner
+from src.application.services.task_completion_service import TaskCompletionService
+from src.application.agent_loop.send_message import SendMessageUseCase
 from src.domain.aggregates.agent.agent import Agent
 from src.domain.aggregates.task.task import Task, TaskConfig, TaskStatus
+from src.domain.entities.event_types import AgentEventType
 
 
 class RecordingEmitter:
@@ -25,7 +28,7 @@ class RecordingEmitter:
     ) -> None:
         await self.emit(
             task_id,
-            "phase:changed",
+            AgentEventType.PHASE_CHANGED,
             {
                 "phase": new_phase,
                 "previousPhase": previous_phase,
@@ -36,14 +39,14 @@ class RecordingEmitter:
     async def emit_llm_chunk(self, task_id: str, turn: int, text: str) -> None:
         await self.emit(
             task_id,
-            "llm:chunk",
+            AgentEventType.LLM_CHUNK,
             {"turn": turn, "text": text, "delta": True},
         )
 
     async def emit_thinking_chunk(self, task_id: str, turn: int, text: str) -> None:
         await self.emit(
             task_id,
-            "thinking:chunk",
+            AgentEventType.THINKING_CHUNK,
             {"turn": turn, "text": text, "delta": True},
         )
 
@@ -117,25 +120,35 @@ class BlockingGraph:
         return {}
 
 
+class FakeLLMProvider:
+    def create_chat_model(self, model=None, temperature=0.7, provider=None):
+        return object()
+
+
 @pytest.mark.asyncio
 async def test_run_agent_loop_emits_cancelled_terminal_event(monkeypatch) -> None:
     emitter = RecordingEmitter()
     task_repo = FakeTaskRepository()
 
-    # 创建 FakeLLMProvider
-    class FakeLLMProvider:
-        def create_chat_model(self, model=None, temperature=0.7, provider=None):
-            return object()
-
-    use_case = SendMessageUseCase(
-        agent_repo=FakeAgentRepository(),
-        session_repo=FakeSessionRepository(),
+    completion_service = TaskCompletionService(
         message_repo=FakeMessageRepository(),
         task_repo=task_repo,
+        session_repo=FakeSessionRepository(),
+    )
+    loop_runner = AgentLoopRunner(
+        agent_repo=FakeAgentRepository(),
+        llm_provider=FakeLLMProvider(),
+        prompt_context=None,
+        message_repo=FakeMessageRepository(),
+        skill_repo=None,
+        task_repo=task_repo,
+        session_repo=FakeSessionRepository(),
         event_emitter=emitter,
         tool_registry=FakeToolRegistry(),
-        llm_provider=FakeLLMProvider(),
+        workflow_builder=None,
+        task_completion_service=completion_service,
     )
+
     task = Task(
         message="hello",
         workspace="/tmp",
@@ -152,7 +165,7 @@ async def test_run_agent_loop_emits_cancelled_terminal_event(monkeypatch) -> Non
     )
 
     runner = asyncio.create_task(
-        use_case._run_agent_loop(
+        loop_runner.run(
             agent_id="agent-1",
             session_id="session-1",
             task=task,
@@ -168,7 +181,7 @@ async def test_run_agent_loop_emits_cancelled_terminal_event(monkeypatch) -> Non
     await runner
 
     event_types = [event["event_type"] for event in emitter.events]
-    assert "task:cancelled" in event_types
-    assert "task:failed" not in event_types
+    assert AgentEventType.TASK_CANCELLED in event_types
+    assert AgentEventType.TASK_FAILED not in event_types
     assert task.status == TaskStatus.CANCELLED
     assert task_repo.updated is task

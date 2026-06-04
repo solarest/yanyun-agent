@@ -3,6 +3,7 @@
 from typing import Optional
 
 from langchain_openai import ChatOpenAI
+from langchain_deepseek import ChatDeepSeek
 from langchain_core.language_models import BaseChatModel
 
 from src.domain.value_objects.llm_config import LLMConfig, LLMProvider
@@ -57,6 +58,56 @@ class OpenAICompatibleProvider(ProviderAdapter):
         return provider in self.SUPPORTED_PROVIDERS
 
     def create_model(self, config: LLMConfig) -> BaseChatModel:
+        """创建 LLM 模型实例。
+
+        DeepSeek 使用 ChatDeepSeek（原生支持 reasoning_content 提取），
+        其他 Provider 使用 ChatOpenAI（OpenAI 兼容 API）。
+        """
+        # DeepSeek 使用原生 ChatDeepSeek，以正确提取 reasoning_content
+        if config.provider == LLMProvider.DEEPSEEK:
+            return self._create_deepseek_model(config)
+
+        return self._create_openai_compatible_model(config)
+
+    def _create_deepseek_model(self, config: LLMConfig) -> BaseChatModel:
+        """使用 ChatDeepSeek 创建 DeepSeek 模型。
+
+        ChatDeepSeek 原生支持 DeepSeek 的 reasoning_content 字段，
+        会在流式响应中正确提取并放入 additional_kwargs["reasoning_content"]。
+        """
+        api_key = config.api_key or self._get_api_key(config.provider)
+        api_base = config.api_base or self._get_base_url(config.provider)
+
+        kwargs: dict = {
+            "model": config.model,
+            "temperature": config.temperature,
+            "timeout": config.timeout,
+            "max_retries": config.max_retries,
+        }
+
+        if config.max_tokens:
+            kwargs["max_tokens"] = config.max_tokens
+
+        if api_base:
+            kwargs["api_base"] = api_base
+
+        if api_key:
+            kwargs["api_key"] = api_key
+
+        # DeepSeek V4 深度思考模式 — 必须通过 extra_body 传递
+        # (model_kwargs 会作为顶层 API 参数被 OpenAI SDK 拒绝)
+        if config.enable_thinking:
+            extra_body = kwargs.get("extra_body", {})
+            extra_body["thinking"] = {"type": "enabled"}
+            kwargs["extra_body"] = extra_body
+
+        # 合并 extra 参数
+        kwargs.update(config.extra)
+
+        return ChatDeepSeek(**kwargs)
+
+    def _create_openai_compatible_model(self, config: LLMConfig) -> BaseChatModel:
+        """使用 ChatOpenAI 创建 OpenAI 兼容模型。"""
         base_url = config.api_base or self._get_base_url(config.provider)
         api_key = config.api_key or self._get_api_key(config.provider)
 
@@ -76,17 +127,13 @@ class OpenAICompatibleProvider(ProviderAdapter):
         if api_key:
             kwargs["api_key"] = api_key
 
-        # 深度思考模式参数
+        # 深度思考模式参数（非 DeepSeek Provider）
         if config.enable_thinking:
             extra_body = kwargs.get("extra_body", {})
-            if config.provider == LLMProvider.DEEPSEEK:
-                # DeepSeek V4 使用 thinking 对象格式
-                extra_body["thinking"] = {"type": "enabled"}
-            else:
-                # 其他提供商使用 enable_thinking 布尔参数
-                extra_body["enable_thinking"] = True
-                if config.thinking_budget:
-                    extra_body["thinking_budget"] = config.thinking_budget
+            # 非 DeepSeek 提供商使用 enable_thinking 布尔参数
+            extra_body["enable_thinking"] = True
+            if config.thinking_budget:
+                extra_body["thinking_budget"] = config.thinking_budget
             kwargs["extra_body"] = extra_body
 
         # 合并 extra 参数

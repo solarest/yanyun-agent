@@ -14,7 +14,12 @@ logger = logging.getLogger(__name__)
 
 @tool(
     name="task_create",
-    description="Create a multi-step task list to track execution progress of complex tasks. Create tasks before starting multi-step workflows.",
+    description=(
+        "Create a task list to track progress of a multi-step workflow. "
+        "Call this BEFORE starting the workflow. "
+        "After creation, update each task's status via task_update "
+        "(in_progress when started, completed or failed when finished)."
+    ),
     category="task",
     returns="Created task list",
     timeout_ms=5000,
@@ -28,8 +33,8 @@ async def task_create(
 
     Args:
         goal: 任务目标描述
-        tasks: 任务列表，每个任务包含 id, description, depends_on 字段
-               示例: [{"id": 1, "description": "分析需求", "depends_on": []}]
+        tasks: 任务列表，每个任务包含 description (必填)、id (可选，自动分配)、depends_on (可选，依赖其他任务ID列表)
+               示例: [{"description": "分析需求", "depends_on": []}, {"description": "设计方案", "depends_on": [1]}]
     """
     if not goal.strip():
         return ToolResult(

@@ -7,7 +7,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { sessionApi } from '@infrastructure/api/sessionApi';
 import { taskApi } from '@infrastructure/api/taskApi';
 import { AgentEventStream } from '@infrastructure/api/eventStream';
-import type { SessionMessage, SendMessageRequest } from '@domain/entities/session';
+import type { SessionMessage, SendMessageRequest, MessageSegment } from '@domain/entities/session';
 import type { AgentPhase } from '@domain/entities/task';
 
 export type TaskStepStatus = 'pending' | 'running' | 'completed' | 'failed';
@@ -278,6 +278,29 @@ export const useChat = ({
     disconnectSubStreams();
   }, [disconnectStream, disconnectSubStreams]);
 
+  /**
+   * 向消息的 segments 追加内容，同类型连续追加（不创建新片段）
+   * 返回更新后的 segments 和是否创建了新片段
+   */
+  const appendSegmentContent = useCallback((
+    msg: SessionMessage,
+    type: MessageSegment['type'],
+    content: string,
+  ): { segments: MessageSegment[]; created: boolean } => {
+    const segments = [...(msg.segments || [])];
+    const lastSeg = segments[segments.length - 1];
+
+    if (lastSeg && lastSeg.type === type) {
+      segments[segments.length - 1] = {
+        ...lastSeg,
+        content: (lastSeg.content || '') + content,
+      };
+      return { segments, created: false };
+    }
+    segments.push({ type, content });
+    return { segments, created: true };
+  }, []);
+
   const bindMessageStream = useCallback((
     stream: AgentEventStream,
     messageId: string,
@@ -288,11 +311,15 @@ export const useChat = ({
       const chunk = data.text || '';
       if (!chunk) return;
       const targetMessageId = data.sub_task_id || messageId;
-      updateMessage(targetMessageId, (msg) => ({
-        ...msg,
-        thinking_content: (msg.thinking_content || '') + chunk,
-        has_thinking: true,
-      }));
+      updateMessage(targetMessageId, (msg) => {
+        const { segments } = appendSegmentContent(msg, 'thinking', chunk);
+        return {
+          ...msg,
+          thinking_content: (msg.thinking_content || '') + chunk,
+          has_thinking: true,
+          segments,
+        };
+      });
     });
 
     stream.on('llm:chunk', (data) => {
@@ -302,41 +329,68 @@ export const useChat = ({
       if (!data.sub_task_id) {
         onChunk?.(chunk);
       }
-      updateMessage(targetMessageId, (msg) => ({
-        ...msg,
-        content: msg.content + chunk,
-      }));
+      updateMessage(targetMessageId, (msg) => {
+        const { segments } = appendSegmentContent(msg, 'text', chunk);
+        return { ...msg, content: msg.content + chunk, segments };
+      });
     });
 
     stream.on('tool:call', (data) => {
       const targetMessageId = data.sub_task_id || messageId;
-      updateMessage(targetMessageId, (msg) => ({
-        ...msg,
-        tool_calls: [
-          ...msg.tool_calls,
-          {
-            name: data.toolName || '',
-            id: data.toolCallId || '',
-            input: data.input || {},
-          },
-        ],
-      }));
+      updateMessage(targetMessageId, (msg) => {
+        const segments = [...(msg.segments || [])];
+        segments.push({
+          type: 'tool',
+          content: data.toolName || '',
+          toolInput: data.input || {},
+          toolCallId: data.toolCallId || '',
+          toolStatus: 'running',
+        });
+        return {
+          ...msg,
+          segments,
+          tool_calls: [
+            ...msg.tool_calls,
+            { name: data.toolName || '', id: data.toolCallId || '', input: data.input || {} },
+          ],
+        };
+      });
     });
 
     stream.on('tool:result', (data) => {
       const targetMessageId = data.sub_task_id || messageId;
-      updateMessage(targetMessageId, (msg) => ({
-        ...msg,
-        tool_results: [
-          ...msg.tool_results,
-          {
-            tool_name: data.toolName || '',
-            id: data.toolCallId || '',
-            status: data.status || 'success',
-            result: data.output ?? data.error ?? '',
-          },
-        ],
-      }));
+      updateMessage(targetMessageId, (msg) => {
+        const segments = [...(msg.segments || [])];
+        // 反向查找最后一个匹配的 tool 片段并更新其结果
+        for (let i = segments.length - 1; i >= 0; i--) {
+          const seg = segments[i];
+          if (
+            seg.type === 'tool' &&
+            seg.toolStatus === 'running' &&
+            (!data.toolCallId || seg.toolCallId === data.toolCallId)
+          ) {
+            segments[i] = {
+              ...seg,
+              toolResult: (data.output ?? data.error ?? '') as string,
+              toolStatus: data.status || 'success',
+            };
+            break;
+          }
+        }
+        return {
+          ...msg,
+          segments,
+          tool_results: [
+            ...msg.tool_results,
+            {
+              tool_name: data.toolName || '',
+              id: data.toolCallId || '',
+              status: data.status || 'success',
+              result: data.output ?? data.error ?? '',
+            },
+          ],
+        };
+      });
     });
 
     // 处理 LLM 完成事件，保存完整思考内容
@@ -348,7 +402,7 @@ export const useChat = ({
         has_thinking: data.hasThinking || !!data.thinkingText,
       }));
     });
-  }, [updateMessage]);
+  }, [updateMessage, appendSegmentContent]);
 
   const connectSubAgentStream = useCallback((
     subTaskId: string,
@@ -662,6 +716,7 @@ export const useChat = ({
           ...savedMsg,
           thinking_content: prevMsg.thinking_content || savedMsg.thinking_content || '',
           has_thinking: prevMsg.has_thinking || savedMsg.has_thinking || false,
+          segments: prevMsg.segments || savedMsg.segments,  // 保留流式构建的 segments
         }));
         mainMessageIdRef.current = savedMsg.id;
       }
@@ -1014,7 +1069,10 @@ export const useChat = ({
           const savedMsg = data.message;
           if (savedMsg) {
             onMessageSaved?.(savedMsg);
-            updateMessage(mainMessageIdRef.current, () => savedMsg);
+            updateMessage(mainMessageIdRef.current, (prevMsg) => ({
+              ...savedMsg,
+              segments: prevMsg.segments || savedMsg.segments,  // 保留流式构建的 segments
+            }));
             mainMessageIdRef.current = savedMsg.id;
           }
         });

@@ -3,7 +3,7 @@
 当需要并行处理相互独立的信息获取任务时，可以使用 sub-agent 来处理。
 
 典型使用场景：
-- 需要同时执行多个互不依赖的信息查询、资料阅读、文件分析
+- 需要同时执行多个互不依赖的信息查询、资料阅读、文章分析
 - 需要把一个可拆分目标拆成多个原子子任务，并发交给多个 sub-agent
 - 某个原子子任务需要独立的上下文和工具集
 - 任务执行时间较长，需要独立的流式输出
@@ -11,7 +11,7 @@
 
 重要约束：
 - 一次 session_spawn 只代表一个原子子任务，不要把多个查询目标合并进同一个 sub-agent。
-- 如果用户要求“近 10 天天气”“读取 5 个文件”“调研 3 个方案”等可拆分任务，主 agent 应在同一轮中并行调用多个 session_spawn，每个 sub-agent 只负责一天、一个文件、一个方案等。
+- 如果用户要求”近 10 天天气””总结多篇文章””调研 3 个方案”等可拆分任务，主 agent 应在同一轮中并行调用多个 session_spawn，每个 sub-agent 只负责一天、一篇文章、一个方案等。
 - 主 agent 负责拆分任务、并行发起多个 sub-agent、汇总所有返回结果并给出最终答案。
 
 同步阻塞模式：每个工具调用会等待对应 sub-agent 执行完成并返回结果；多个 session_spawn 工具调用会由工具执行节点并行执行。
@@ -20,76 +20,22 @@
 import logging
 import asyncio
 import uuid
-from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Any, AsyncIterator, Optional
+from typing import Any, Optional
 
 from src.domain.aggregates.task.task import Task, TaskConfig, TaskStatus
+from src.domain.entities.event_types import AgentEventType
 from src.domain.entities.tool import ToolContext, ToolResult
-from src.subagent.sub_agent_launcher import ISubAgentLauncher
 from src.infrastructure.tools.decorator import tool
 
 logger = logging.getLogger(__name__)
 
+# Sub-agent 并发控制：防止 SQLite 连接池耗尽（默认 pool_size=10）
+# 每个 sub-agent 占用一个独立 DB session，同时过多会导致 QueuePool overflow。
+# Semaphore(5) 确保最多 5 个 sub-agent 同时执行。
+_SUB_AGENT_MAX_CONCURRENT = 5
+_SUB_AGENT_SEMAPHORE = asyncio.Semaphore(_SUB_AGENT_MAX_CONCURRENT)
 
-def _is_sqlite_task_repo(task_repo: Any) -> bool:
-    return task_repo.__class__.__name__ == "SQLiteTaskRepository"
-
-
-def _can_build_isolated_use_case(send_message_use_case: Any) -> bool:
-    required_attrs = (
-        "agent_repo",
-        "session_repo",
-        "message_repo",
-        "task_repo",
-        "event_emitter",
-        "tool_registry",
-        "skill_repo",
-        "llm_provider",
-        "running_tasks",
-    )
-    return all(hasattr(send_message_use_case, attr) for attr in required_attrs)
-
-
-@asynccontextmanager
-async def _sub_agent_runtime_scope(
-    send_message_use_case: Any,
-    task_repo: Any,
-) -> AsyncIterator[tuple[Any, Any]]:
-    """为一次 sub-agent 运行提供隔离的仓储会话。
-
-    多个 session_spawn 会并行执行；生产环境中的 SQLite/SQLAlchemy AsyncSession
-    不能跨并发任务共享。测试中的 mock repo 保持原路径，避免引入数据库依赖。
-    """
-    if not (_is_sqlite_task_repo(task_repo) and _can_build_isolated_use_case(send_message_use_case)):
-        yield send_message_use_case, task_repo
-        return
-
-    from src.application.use_cases.send_message import SendMessageUseCase
-    from src.infrastructure.database.session import AsyncSessionLocal
-    from src.infrastructure.repositories.sqlite_agent_repo import SQLiteAgentRepository
-    from src.infrastructure.repositories.sqlite_session_repo import SQLiteSessionRepository
-    from src.infrastructure.repositories.sqlite_session_message_repo import (
-        SQLiteSessionMessageRepository,
-    )
-    from src.infrastructure.repositories.sqlite_skill_repo import SQLiteSkillRepository
-    from src.infrastructure.repositories.sqlite_task_repo import SQLiteTaskRepository
-
-    async with AsyncSessionLocal() as db_session:
-        isolated_task_repo = SQLiteTaskRepository(db_session)
-        isolated_use_case = SendMessageUseCase(
-            agent_repo=SQLiteAgentRepository(db_session),
-            session_repo=SQLiteSessionRepository(db_session),
-            message_repo=SQLiteSessionMessageRepository(db_session),
-            task_repo=isolated_task_repo,
-            event_emitter=send_message_use_case.event_emitter,
-            tool_registry=send_message_use_case.tool_registry,
-            skill_repo=SQLiteSkillRepository(db_session),
-            llm_provider=send_message_use_case.llm_provider,
-            default_model=send_message_use_case.default_model,
-            running_tasks=send_message_use_case.running_tasks,
-        )
-        yield isolated_use_case, isolated_task_repo
 
 
 async def _emit_safely(event_emitter: Any, task_id: str, event_type: str, payload: dict[str, Any]) -> None:
@@ -107,7 +53,7 @@ async def _emit_safely(event_emitter: Any, task_id: str, event_type: str, payloa
     name="session_spawn",
     description=(
         "Spawn a sub-agent to execute an atomic, independent, parallelizable information-gathering subtask. "
-        "Important: One session_spawn handles exactly one subtask; do not combine multiple dates, files, topics, or queries into a single sub-agent. "
+        "Important: One session_spawn handles exactly one subtask; do not combine multiple dates, articles, topics, or queries into a single sub-agent. "
         "When a task is divisible, the main agent should invoke multiple session_spawn calls in parallel within the same turn. "
         "For example, for 10 days of weather, create 10 sub-agents, each handling 1 day, then the main agent aggregates the results. "
         "Synchronous blocking mode: a single call waits for its sub-agent to complete; multiple calls execute in parallel."
@@ -137,7 +83,7 @@ async def session_spawn(
 
     典型场景：
     - 查询近 10 天某地天气：发起 10 个 session_spawn，每个查询 1 天
-    - 读取多个文件：发起多个 session_spawn，每个读取/总结 1 个文件
+    - 总结多篇文章：发起多个 session_spawn，每个读取/总结 1 篇文章
     - 调研多个方案或来源：发起多个 session_spawn，每个负责 1 个方案或来源
     - 需要隔离的任务，避免影响主 agent 状态
 
@@ -169,12 +115,20 @@ async def session_spawn(
             error="missing_context",
         )
 
-    sub_agent_launcher: ISubAgentLauncher = context.extra.get("send_message_use_case")  # type: ignore[assignment]
-    if not sub_agent_launcher:
+    send_message_use_case = context.extra.get("send_message_use_case")
+    if not send_message_use_case:
         return ToolResult(
-            output="Error: sub_agent_launcher not available in context",
+            output="Error: send_message_use_case not available in context",
             success=False,
             error="missing_launcher",
+        )
+
+    sub_agent_runtime_scope = context.extra.get("sub_agent_runtime_scope")
+    if not sub_agent_runtime_scope:
+        return ToolResult(
+            output="Error: sub_agent_runtime_scope not available in context",
+            success=False,
+            error="missing_runtime_scope",
         )
 
     task_repo = context.extra.get("task_repo")
@@ -208,12 +162,28 @@ async def session_spawn(
 
     sub_task_id = f"sub-{uuid.uuid4().hex[:12]}"
 
+    # 并发控制：Semaphore 限制同时执行的 sub-agent 数量
+    # 防止 SQLite 连接池耗尽（QueuePool overflow）
+    semaphore_wait_start = datetime.now()
+    await _SUB_AGENT_SEMAPHORE.acquire()
+    try:
+        semaphore_wait_ms = (datetime.now() -
+                             semaphore_wait_start).total_seconds() * 1000
+        if semaphore_wait_ms > 100:
+            logger.info(
+                "session_spawn semaphore: waited %.0fms for slot (sub_task=%s)",
+                semaphore_wait_ms, sub_task_id,
+            )
+    except Exception:
+        pass
+
     try:
         from src.infrastructure.llm.config import LLMSettings
 
-        effective_model = parent_state.get("model") or LLMSettings().default_model
+        effective_model = parent_state.get(
+            "model") or LLMSettings().default_model
 
-        async with _sub_agent_runtime_scope(sub_agent_launcher, task_repo) as (
+        async with sub_agent_runtime_scope(send_message_use_case, task_repo) as (
             runtime_use_case,
             runtime_task_repo,
         ):
@@ -236,7 +206,7 @@ async def session_spawn(
             await _emit_safely(
                 event_emitter,
                 parent_task_id,
-                "sub_agent:started",
+                AgentEventType.SUB_AGENT_STARTED,
                 {
                     "sub_task_id": sub_task_id,
                     "description": description,
@@ -287,7 +257,7 @@ async def session_spawn(
                 await _emit_safely(
                     event_emitter,
                     parent_task_id,
-                    "sub_agent:failed",
+                    AgentEventType.SUB_AGENT_FAILED,
                     {
                         "sub_task_id": sub_task_id,
                         "error": completed_task.error or "Unknown error",
@@ -312,7 +282,7 @@ async def session_spawn(
             await _emit_safely(
                 event_emitter,
                 parent_task_id,
-                "sub_agent:completed",
+                AgentEventType.SUB_AGENT_COMPLETED,
                 {
                     "sub_task_id": sub_task_id,
                     "result": completed_task.result or "No result",
@@ -341,7 +311,7 @@ async def session_spawn(
         await _emit_safely(
             event_emitter,
             parent_task_id,
-            "sub_agent:failed",
+            AgentEventType.SUB_AGENT_FAILED,
             {
                 "sub_task_id": sub_task_id,
                 "error": str(e),
@@ -354,3 +324,5 @@ async def session_spawn(
             success=False,
             error=str(e),
         )
+    finally:
+        _SUB_AGENT_SEMAPHORE.release()

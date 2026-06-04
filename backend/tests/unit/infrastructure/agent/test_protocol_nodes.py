@@ -1,13 +1,20 @@
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessage, AIMessageChunk, RemoveMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    HumanMessage,
+    RemoveMessage,
+    SystemMessage,
+    ToolMessage,
+)
 
 from src.infrastructure.agent.nodes.context_compact_node import context_compact_node
 from src.infrastructure.agent.nodes.llm_call_node import llm_call_node
 from src.infrastructure.agent.nodes.loop_detect_node import loop_detect_node
-from src.infrastructure.agent.nodes.stuck_detect_node import stuck_detect_node
 from src.infrastructure.agent.nodes.tool_execute_node import tool_execute_node
+from src.domain.entities.event_types import AgentEventType
 
 
 class RecordingEmitter:
@@ -28,7 +35,7 @@ class RecordingEmitter:
     ) -> None:
         await self.emit(
             task_id,
-            "phase:changed",
+            AgentEventType.PHASE_CHANGED,
             {
                 "phase": new_phase,
                 "previousPhase": previous_phase,
@@ -39,14 +46,14 @@ class RecordingEmitter:
     async def emit_llm_chunk(self, task_id: str, turn: int, text: str) -> None:
         await self.emit(
             task_id,
-            "llm:chunk",
+            AgentEventType.LLM_CHUNK,
             {"turn": turn, "text": text, "delta": True},
         )
 
     async def emit_thinking_chunk(self, task_id: str, turn: int, text: str) -> None:
         await self.emit(
             task_id,
-            "thinking:chunk",
+            AgentEventType.THINKING_CHUNK,
             {"turn": turn, "text": text, "delta": True},
         )
 
@@ -70,36 +77,6 @@ class FakeLLM:
         self.messages = messages
         yield AIMessageChunk(content="Hello")
         yield AIMessageChunk(content=" world")
-
-
-class FakeClassificationLLM:
-    """Mock LLM 分类器"""
-
-    async def ainvoke(self, prompt, **kwargs):
-        # 提取输入文本
-        import re
-        match = re.search(r'输入文本: (.+)$', prompt, re.DOTALL)
-        input_text = match.group(1).strip() if match else ''
-
-        # 根据输入文本内容返回不同的分类结果
-        if not input_text:
-            # 空响应
-            return AIMessage(content='{"category": "empty", "confidence": 1.0}')
-        elif '任务完成' in input_text and ('文件' in input_text or '创建' in input_text or '实现' in input_text):
-            # 完成声明(有实质内容)
-            return AIMessage(content='{"category": "complete", "confidence": 0.95, "reasoning": "明确声明完成,且包含具体的工作成果"}')
-        elif '任务完成' in input_text or 'task complete' in input_text.lower():
-            # 完成声明(缺少实质内容)
-            return AIMessage(content='{"category": "incomplete", "confidence": 0.9, "reasoning": "声称完成但无任何具体成果描述"}')
-        elif input_text.rstrip().endswith(('?', '？')) or '请问' in input_text or '是否' in input_text:
-            # 用户提问
-            return AIMessage(content='{"category": "user_question", "confidence": 0.95}')
-        elif '我将要' in input_text or '步骤如下' in input_text or '计划' in input_text:
-            # 纯规划
-            return AIMessage(content='{"category": "planning_only", "confidence": 0.9, "reasoning": "描述了计划但未执行"}')
-        else:
-            # 实质性文本
-            return AIMessage(content='{"category": "substantive_text", "confidence": 0.95}')
 
 
 def make_state(**overrides):
@@ -128,6 +105,15 @@ def make_state(**overrides):
         "system_prompt": "",
         "final_result": None,
         "error": None,
+        "compression_strategy": None,
+        # === 上下文管理 ===
+        "max_context_tokens": 128_000,
+        "context_token_estimate": 0,
+        "context_token_baseline": None,
+        "context_token_baseline_message_count": 0,
+        "context_compaction_attempts": 0,
+        "emergency_compact_requested": False,
+        "last_context_strategy": None,
     }
     state.update(overrides)
     return state
@@ -144,10 +130,10 @@ async def test_llm_call_node_emits_phase_chunks_and_completion() -> None:
     )
 
     assert [event["event_type"] for event in emitter.events] == [
-        "phase:changed",
-        "llm:chunk",
-        "llm:chunk",
-        "llm:complete",
+        AgentEventType.PHASE_CHANGED,
+        AgentEventType.LLM_CHUNK,
+        AgentEventType.LLM_CHUNK,
+        AgentEventType.LLM_COMPLETE,
     ]
     assert isinstance(llm.messages[0], SystemMessage)
     assert result["messages"][0].content == "Hello world"
@@ -186,9 +172,9 @@ async def test_tool_execute_node_emits_phase_call_and_result() -> None:
     )
 
     assert [event["event_type"] for event in emitter.events] == [
-        "phase:changed",
-        "tool:call",
-        "tool:result",
+        AgentEventType.PHASE_CHANGED,
+        AgentEventType.TOOL_CALL,
+        AgentEventType.TOOL_RESULT,
     ]
     assert result["phase"] == "tool_executing"
     assert result["tool_results"] == {
@@ -219,7 +205,8 @@ async def test_tool_execute_node_preserves_large_tool_output_for_llm_context() -
     result = await tool_execute_node(
         make_state(
             pending_tool_calls=[
-                {"id": "call-large", "name": "file_read", "input": {"path": "logs/tool-call.log"}},
+                {"id": "call-large", "name": "file_read",
+                    "input": {"path": "logs/tool-call.log"}},
             ],
         ),
         {"configurable": {"tool_registry": FakeToolRegistry(), "event_emitter": emitter}},
@@ -368,8 +355,8 @@ async def test_loop_detect_node_emits_loop_detected_and_phase_change() -> None:
     )
 
     assert [event["event_type"] for event in emitter.events] == [
-        "loop:detected",
-        "phase:changed",
+        AgentEventType.LOOP_DETECTED,
+        AgentEventType.PHASE_CHANGED,
     ]
     assert result["loop_detected"] is True
     assert result["loop_type"] == "exact_tool_repeat"
@@ -448,89 +435,136 @@ async def test_loop_detect_node_ignores_tool_history_before_current_task() -> No
 
 
 @pytest.mark.asyncio
-async def test_stuck_detect_node_emits_stuck_detected_and_phase_change() -> None:
+async def test_context_compact_node_skip_when_below_watermark() -> None:
+    """Token 低于 40% 水线时，只发 skip 事件，不改消息"""
     emitter = RecordingEmitter()
-    classification_llm = FakeClassificationLLM()
-
-    # 注入到缓存
-    import src.infrastructure.agent.nodes.stuck_detect_node as stuck_module
-    original_cache = stuck_module._classification_llm_cache
-    stuck_module._classification_llm_cache = classification_llm
-
-    try:
-        result = await stuck_detect_node(
-            make_state(
-                phase="thinking",
-                current_turn=2,
-                messages=[
-                    {"role": "assistant", "content": "thinking 1", "tool_calls": []},
-                    {"role": "assistant", "content": "thinking 2", "tool_calls": []},
-                    {"role": "assistant", "content": "thinking 3", "tool_calls": []},
-                ],
-            ),
-            {"configurable": {"event_emitter": emitter}},
-        )
-
-        assert [event["event_type"] for event in emitter.events] == [
-            "stuck:detected",
-            "phase:changed",
-        ]
-        assert result["stuck_detected"] is True
-        assert result["phase"] == "stuck_recovering"
-    finally:
-        stuck_module._classification_llm_cache = original_cache
-
-
-@pytest.mark.asyncio
-async def test_stuck_detect_node_ignores_text_history_before_current_task() -> None:
-    emitter = RecordingEmitter()
-    classification_llm = FakeClassificationLLM()
-
-    # 注入到缓存
-    import src.infrastructure.agent.nodes.stuck_detect_node as stuck_module
-    original_cache = stuck_module._classification_llm_cache
-    stuck_module._classification_llm_cache = classification_llm
-
-    try:
-        result = await stuck_detect_node(
-            make_state(
-                task_start_message_count=3,
-                messages=[
-                    {"role": "assistant", "content": "old 1", "tool_calls": []},
-                    {"role": "assistant", "content": "old 2", "tool_calls": []},
-                    {"role": "assistant", "content": "old 3", "tool_calls": []},
-                    {"role": "assistant", "content": "new answer", "tool_calls": []},
-                ],
-            ),
-            {"configurable": {"event_emitter": emitter}},
-        )
-
-        # 只有1条新的 assistant消息,不应检测到 stuck
-        assert result.get("stuck_detected") is None or result.get(
-            "stuck_detected") is False
-        assert emitter.events == []
-    finally:
-        stuck_module._classification_llm_cache = original_cache
-
-
-@pytest.mark.asyncio
-async def test_context_compact_node_emits_phase_and_compaction_event() -> None:
-    emitter = RecordingEmitter()
-    # 使用真实 LangChain 消息对象（带 id）以测试 RemoveMessage 逻辑
     messages = [
-        AIMessage(content=f"msg-{i}", id=f"msg-id-{i}") for i in range(12)]
+        AIMessage(content=f"msg-{i}", id=f"msg-id-{i}") for i in range(12)
+    ]
 
     result = await context_compact_node(
-        make_state(messages=messages, phase="thinking", current_turn=4),
+        make_state(
+            messages=messages, phase="thinking", current_turn=4,
+            max_context_tokens=128_000,
+        ),
         {"configurable": {"event_emitter": emitter}},
     )
 
     assert [event["event_type"] for event in emitter.events] == [
-        "phase:changed",
-        "context:compacting",
+        AgentEventType.PHASE_CHANGED,
+        AgentEventType.CONTEXT_COMPACTING,
     ]
     assert result["phase"] == "context_compacting"
-    # 应该删除 messages[1:-10]（即 msg-1），保留第 1 条和最近 10 条
-    assert all(isinstance(m, RemoveMessage) for m in result["messages"])
-    # 12 - 1(first) - 10(recent) = 1 to remove
-    assert len(result["messages"]) == 1
+    assert result["last_context_strategy"] == "skip"
+    # skip 策略不改消息，result 中不应有 messages key
+    assert "messages" not in result
+
+    payload = emitter.events[1]["payload"]
+    assert payload["strategy"] == "skip"
+    assert payload["reason"] == "below_watermark"
+
+
+@pytest.mark.asyncio
+async def test_context_compact_node_soft_prune() -> None:
+    """Token 超过 40% 但有超长 ToolMessage 时，触发 soft-prune"""
+    emitter = RecordingEmitter()
+    # 创建超长 tool result（~5500 tokens 估算），max=10000 即 40%=4000, 60%=6000
+    # 控制 content 长度使其落在 40%-60% 区间
+    large_content = "x" * 22000
+    messages = [
+        HumanMessage(content="hello", id="msg-0"),
+        AIMessage(content="ok", id="msg-1"),
+        ToolMessage(
+            content=large_content,
+            tool_call_id="call-1",
+            name="file_read",
+            id="msg-2",
+        ),
+    ]
+
+    result = await context_compact_node(
+        make_state(
+            messages=messages, phase="thinking", current_turn=4,
+            max_context_tokens=10_000,
+        ),
+        {"configurable": {"event_emitter": emitter}},
+    )
+
+    assert result["phase"] == "context_compacting"
+    assert result["last_context_strategy"] == "soft_prune"
+
+    payload = emitter.events[1]["payload"]
+    assert payload["strategy"] == "soft_prune"
+    assert payload["prunedToolResults"] >= 1
+
+    # tool 结果被裁剪
+    pruned_msgs = result["messages"]
+    tool_msg = pruned_msgs[2]
+    content = tool_msg.content if hasattr(tool_msg, "content") else tool_msg.get("content", "")
+    assert "soft-pruned" in content
+    assert len(content) < len(large_content)
+    # tool_call_id 保留
+    assert getattr(tool_msg, "tool_call_id", "") == "call-1"
+
+
+@pytest.mark.asyncio
+async def test_context_compact_node_micro_compact() -> None:
+    """Token 超过 60% 水线时，触发 micro-compact（摘要 + RemoveMessage）"""
+    emitter = RecordingEmitter()
+    # 创建足够多的消息让 token 超过 60%: max=20_000, 60%=12_000
+    # 每个消息 ~250 tokens 估算, 100条 ≈ 25000 tokens > 12000
+    messages = [SystemMessage(content="system", id="msg-sys")]
+    for i in range(100):
+        messages.append(
+            AIMessage(
+                content=f"message number {i} " + "x" * 1000,
+                id=f"msg-{i}",
+            )
+        )
+
+    result = await context_compact_node(
+        make_state(
+            messages=messages, phase="thinking", current_turn=4,
+            max_context_tokens=20_000,
+        ),
+        {"configurable": {"event_emitter": emitter}},
+    )
+
+    assert result["phase"] == "context_compacting"
+    assert result["last_context_strategy"] == "micro_compact"
+
+    payload = emitter.events[1]["payload"]
+    assert payload["strategy"] == "micro_compact"
+    assert payload["reason"] == "watermark_60"
+    # baseline 在 compact 后失效
+    assert result["context_token_baseline"] is None
+
+
+@pytest.mark.asyncio
+async def test_context_compact_node_emergency_compact() -> None:
+    """emergency_compact_requested=True 时，保留最近 3 条消息"""
+    emitter = RecordingEmitter()
+    messages = [SystemMessage(content="system", id="msg-sys")]
+    for i in range(20):
+        messages.append(
+            AIMessage(content=f"msg-{i}", id=f"msg-id-{i}")
+        )
+
+    result = await context_compact_node(
+        make_state(
+            messages=messages, phase="thinking", current_turn=5,
+            max_context_tokens=128_000,
+            emergency_compact_requested=True,
+        ),
+        {"configurable": {"event_emitter": emitter}},
+    )
+
+    assert result["phase"] == "context_compacting"
+    assert result["last_context_strategy"] == "emergency_compact"
+    assert result["emergency_compact_requested"] is False
+    assert result["context_compaction_attempts"] == 1
+    assert result["compression_strategy"] is None
+
+    payload = emitter.events[1]["payload"]
+    assert payload["strategy"] == "emergency_compact"
+    assert payload["reason"] == "context_overflow"

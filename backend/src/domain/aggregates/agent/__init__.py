@@ -1,6 +1,6 @@
-"""Agent 聚合 — 以 Agent 为聚合根，管理 Agent 配置和运行状态。"""
+"""Shim: re-exports from src.domain.agent for backward compatibility."""
 
-from src.domain.aggregates.agent.agent import Agent, CONFIG_FILES, MAX_CONFIG_LENGTH, MAX_VIBES_COUNT
-from src.domain.aggregates.agent.agent_state import AgentState
+from src.domain.agent.entity import Agent, CONFIG_FILES, MAX_CONFIG_LENGTH, MAX_VIBES_COUNT  # noqa: F401
+from src.domain.aggregates.agent.agent_state import AgentState  # noqa: F401
 
 __all__ = ["Agent", "AgentState", "CONFIG_FILES", "MAX_CONFIG_LENGTH", "MAX_VIBES_COUNT"]

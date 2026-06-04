@@ -1,6 +1,3 @@
-"""领域层 - Event 工具函数"""
+"""Shim: re-exports from src.domain.agent_loop for backward compatibility."""
 
-
-def normalize_event_type(event_type: str) -> str:
-    """规范化事件类型为内部冒号风格。"""
-    return event_type.replace("-", ":")
+from src.domain.agent_loop.event_utils import normalize_event_type  # noqa: F401

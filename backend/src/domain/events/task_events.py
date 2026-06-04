@@ -17,13 +17,6 @@ class TaskCreated(DomainEvent):
 
 
 @dataclass(frozen=True)
-class TaskStarted(DomainEvent):
-    """任务已开始执行"""
-
-    task_id: str = ""
-
-
-@dataclass(frozen=True)
 class TaskCompleted(DomainEvent):
     """任务已成功完成"""
 
@@ -39,10 +32,3 @@ class TaskFailed(DomainEvent):
     task_id: str = ""
     error: str = ""
     failed_at: datetime | None = None
-
-
-@dataclass(frozen=True)
-class TaskCancelled(DomainEvent):
-    """任务已取消"""
-
-    task_id: str = ""

@@ -1,6 +1,5 @@
-"""Task 聚合 — 以 Task 为聚合根，管理任务执行和成本追踪。"""
+"""Shim: re-exports from src.domain.task for backward compatibility."""
 
-from src.domain.aggregates.task.task import Task, TaskConfig, TaskStatus
-from src.domain.aggregates.task.cost_tracker import CostTracker
+from src.domain.task.entity import Task, TaskConfig, TaskStatus, CostTracker  # noqa: F401
 
 __all__ = ["Task", "TaskConfig", "TaskStatus", "CostTracker"]

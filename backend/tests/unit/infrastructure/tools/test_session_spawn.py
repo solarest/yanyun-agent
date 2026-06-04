@@ -73,7 +73,19 @@ def mock_event_emitter():
 
 
 @pytest.fixture
-def valid_context(mock_use_case, mock_task_repo, mock_event_emitter):
+def mock_sub_agent_runtime_scope():
+    """创建模拟的 sub_agent_runtime_scope context manager"""
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _scope(send_message_use_case, task_repo):
+        yield (send_message_use_case, task_repo)
+
+    return _scope
+
+
+@pytest.fixture
+def valid_context(mock_use_case, mock_task_repo, mock_event_emitter, mock_sub_agent_runtime_scope):
     """创建有效的 context"""
     return ToolContext(
         task_id="task-123",
@@ -84,6 +96,7 @@ def valid_context(mock_use_case, mock_task_repo, mock_event_emitter):
             "send_message_use_case": mock_use_case,
             "task_repo": mock_task_repo,
             "event_emitter": mock_event_emitter,
+            "sub_agent_runtime_scope": mock_sub_agent_runtime_scope,
             "parent_state": {"system_prompt": "Test prompt", "model": "gpt-4"},
             "parent_agent_id": "agent-1",
             "parent_session_id": "session-1",
@@ -119,13 +132,9 @@ class TestSessionSpawn:
         from src.infrastructure.tools.builtin import session_spawn as session_spawn_module
 
         rt = session_spawn_module.session_spawn._registered_tool
-        assert "一个原子" in rt.description
-        assert "不要把多个日期、多个文件、多个主题或多个查询合并" in rt.description
-        assert "近 10 天天气应创建 10 个 sub-agent" in rt.description
-
-        description_param = next(p for p in rt.parameters if p.name == "description")
-        assert "单个原子子任务" in description_param.description
-        assert "不要写成" in description_param.description
+        assert "atomic" in rt.description.lower()
+        assert "do not combine" in rt.description.lower()
+        assert "10 sub-agents" in rt.description
 
     @pytest.mark.asyncio
     async def test_sync_mode_success(self, valid_context, mock_use_case, mock_event_emitter):
@@ -182,7 +191,7 @@ class TestSessionSpawn:
         assert "context is required" in result.output
 
     @pytest.mark.asyncio
-    async def test_missing_use_case_fails(self, mock_task_repo, mock_event_emitter):
+    async def test_missing_use_case_fails(self, mock_task_repo, mock_event_emitter, mock_sub_agent_runtime_scope):
         """测试缺少 use_case 失败"""
         from src.infrastructure.tools.builtin import session_spawn as session_spawn_module
         original_func = session_spawn_module.session_spawn._registered_tool.func
@@ -193,6 +202,7 @@ class TestSessionSpawn:
             extra={
                 "task_repo": mock_task_repo,
                 "event_emitter": mock_event_emitter,
+                "sub_agent_runtime_scope": mock_sub_agent_runtime_scope,
                 "parent_state": {},
                 "parent_agent_id": "agent-1",
                 "parent_session_id": "session-1",
@@ -202,10 +212,10 @@ class TestSessionSpawn:
         result = await original_func({"description": "Test"}, context)
 
         assert result.success is False
-        assert "sub_agent_launcher not available" in result.output
+        assert "send_message_use_case not available" in result.output
 
     @pytest.mark.asyncio
-    async def test_missing_task_repo_fails(self, mock_use_case, mock_event_emitter):
+    async def test_missing_task_repo_fails(self, mock_use_case, mock_event_emitter, mock_sub_agent_runtime_scope):
         """测试缺少 task_repo 失败"""
         from src.infrastructure.tools.builtin import session_spawn as session_spawn_module
         original_func = session_spawn_module.session_spawn._registered_tool.func
@@ -216,6 +226,7 @@ class TestSessionSpawn:
             extra={
                 "send_message_use_case": mock_use_case,
                 "event_emitter": mock_event_emitter,
+                "sub_agent_runtime_scope": mock_sub_agent_runtime_scope,
                 "parent_state": {},
                 "parent_agent_id": "agent-1",
                 "parent_session_id": "session-1",

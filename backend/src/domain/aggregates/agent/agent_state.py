@@ -3,7 +3,49 @@
 from typing import Annotated, Any, Dict, List, Optional
 
 from typing_extensions import TypedDict
-from langgraph.graph.message import add_messages
+
+
+def add_messages(left: list, right: list) -> list:
+    """Merge two message lists for state graph updates.
+
+    Messages in `right` with the same ID as messages in `left` replace them.
+    Messages with new IDs are appended.
+
+    This serves as a reducer for LangGraph's StateGraph when used as
+    ``Annotated[list, add_messages]``.
+    """
+    if not left:
+        return list(right) if right else []
+    if not right:
+        return list(left)
+
+    left = list(left)
+    right = list(right)
+
+    # Build ID index for right-side messages
+    right_by_id: dict = {}
+    for i, m in enumerate(right):
+        msg_id = getattr(m, "id", None)
+        if msg_id:
+            right_by_id[msg_id] = i
+
+    # Replace or keep left-side messages
+    used_right_indices: set = set()
+    merged: list = []
+    for m in left:
+        msg_id = getattr(m, "id", None)
+        if msg_id and msg_id in right_by_id:
+            merged.append(right[right_by_id[msg_id]])
+            used_right_indices.add(right_by_id[msg_id])
+        else:
+            merged.append(m)
+
+    # Append new right-side messages
+    for i, m in enumerate(right):
+        if i not in used_right_indices:
+            merged.append(m)
+
+    return merged
 
 
 class AgentState(TypedDict):
@@ -45,12 +87,10 @@ class AgentState(TypedDict):
     # === Stuck 检测器状态 ===
     stuck_detection_count: int
     stuck_detected: bool
-    stuck_type: Optional[str]
 
     # === 流式输出 ===
     current_llm_text: str
     empty_retry_count: int
-    planning_retry_count: int
 
     # === 系统提示词 ===
     system_prompt: str
@@ -63,25 +103,25 @@ class AgentState(TypedDict):
     final_result: Optional[str]
     error: Optional[str]
 
-    # === Observation 状态(loop_detect / stuck_detect 节点写入)===
-    observation_summary: Optional[str]
-    """本轮观察文本总结(供调试/前端展示)"""
-
-    observation_quality: Optional[str]
-    """本轮观察总体质量:good / empty / partial / failed / mixed"""
-
-    observation_items: List[Dict[str, Any]]
-    """每个 tool_call 的观察详情"""
-
-    consecutive_empty_observations: int
-    """连续空观察计数(触发语义循环检测)"""
-
-    last_error_category: Optional[str]
-    """最近一次错误分类"""
-
     # === 压缩策略 ===
     compression_strategy: Optional[str]
     """context_compact 使用的压缩策略：trim / summarize"""
+
+    # === 上下文管理 ===
+    max_context_tokens: int
+    """当前模型上下文窗口 Token 数上限"""
+    context_token_estimate: int
+    """当前 messages 的 Token 估算值"""
+    context_token_baseline: Optional[int]
+    """最近一次成功 LLM 调用返回的 prompt_tokens"""
+    context_token_baseline_message_count: int
+    """baseline 对应的消息数量，用于增量估算"""
+    context_compaction_attempts: int
+    """连续紧急压缩次数"""
+    emergency_compact_requested: bool
+    """LLM 调用发生上下文超限后置为 True"""
+    last_context_strategy: Optional[str]
+    """最近一次实际执行的压缩策略"""
 
     # === Sub-Agent 状态 ===
     is_sub_agent: bool

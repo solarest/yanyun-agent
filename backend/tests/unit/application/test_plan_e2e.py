@@ -46,6 +46,14 @@ def make_state(**overrides) -> AgentState:
         "system_prompt": "",
         "final_result": None,
         "error": None,
+        "compression_strategy": None,
+        "max_context_tokens": 128_000,
+        "context_token_estimate": 0,
+        "context_token_baseline": None,
+        "context_token_baseline_message_count": 0,
+        "context_compaction_attempts": 0,
+        "emergency_compact_requested": False,
+        "last_context_strategy": None,
         "is_sub_agent": False,
         "parent_task_id": None,
     }
@@ -97,7 +105,7 @@ class TestPlanWorkflowIntegration:
             },
         )
 
-        assert route_after_tool_execute(state) == "llm_call"
+        assert route_after_tool_execute(state) == "context_compact"
 
     def test_route_after_llm_with_regular_tool_calls(self):
         """普通工具调用仍路由到 loop_detect"""

@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from starlette.requests import Request
 
 from src.application.dtos.event_dto import SSEEventDTO
+from src.domain.entities.event_types import AgentEventType
 from src.presentation.routes import sse_stream
 
 
@@ -63,14 +64,16 @@ def make_request(app: FastAPI, headers: dict[str, str] | None = None) -> Request
 
 @pytest.mark.asyncio
 async def test_stream_route_replays_then_yields_live_events() -> None:
-    replay_event = SSEEventDTO.create("task-1", 2, "task:started", {}).model_dump_json()
+    replay_event = SSEEventDTO.create(
+        "task-1", 2, AgentEventType.TASK_STARTED, {}).model_dump_json()
     live_event = SSEEventDTO.create(
         "task-1",
         3,
-        "task:completed",
+        AgentEventType.TASK_COMPLETED,
         {"result": "done"},
     ).model_dump_json()
-    event_service = FakeEventService(replay_events=[replay_event], live_events=[live_event])
+    event_service = FakeEventService(
+        replay_events=[replay_event], live_events=[live_event])
     app = FastAPI()
     app.state.event_service = event_service
 

@@ -4,7 +4,7 @@
 import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { SessionMessage } from '@domain/entities/session';
+import type { SessionMessage, MessageSegment } from '@domain/entities/session';
 import { ClarifyCard } from './ClarifyCard';
 import { MultiClarifyCard, parseAllClarifyPrompts } from './MultiClarifyCard';
 import { ToolCallGroup } from './ToolCallGroup';
@@ -172,18 +172,90 @@ const EmbeddedSubAgentList: React.FC<EmbeddedSubAgentListProps> = ({ messages })
   );
 };
 
-/** 时间线圆点组件 */
-const TimelineDot: React.FC<{ variant: 'user' | 'assistant' | 'error' | 'thinking' }> = ({ variant }) => {
-  const colorMap = {
-    user: 'bg-primary ring-primary/20',
-    assistant: 'bg-muted-foreground/30 ring-muted-foreground/10',
-    error: 'bg-destructive ring-destructive/20',
-    thinking: 'bg-purple-400 ring-purple-200',
-  };
+// ── 时间线片段工具函数 ──────────────────────────────────────
 
+/** 将 segments 转换为可渲染的时间线项，连续 tool 片段自动合并为 ToolCallGroup */
+interface TimelineRenderItem {
+  type: 'thinking' | 'text' | 'tool_group';
+  /** thinking/text: 文本内容 */
+  content?: string;
+  /** tool_group: 工具列表 */
+  tools?: ToolTimelineItem[];
+}
+
+function buildTimelineFromSegments(
+  segments: MessageSegment[],
+): TimelineRenderItem[] {
+  const items: TimelineRenderItem[] = [];
+
+  for (const seg of segments) {
+    if (seg.type === 'tool') {
+      const lastItem = items[items.length - 1];
+      if (lastItem && lastItem.type === 'tool_group') {
+        // 追加到上一个工具组
+        lastItem.tools!.push({
+          key: seg.toolCallId || seg.content || '',
+          name: seg.content || '',
+          status: seg.toolStatus || 'running',
+          result: seg.toolResult,
+          input: seg.toolInput,
+        });
+      } else {
+        // 新建工具组
+        items.push({
+          type: 'tool_group',
+          tools: [{
+            key: seg.toolCallId || seg.content || '',
+            name: seg.content || '',
+            status: seg.toolStatus || 'running',
+            result: seg.toolResult,
+            input: seg.toolInput,
+          }],
+        });
+      }
+    } else if (seg.type === 'thinking') {
+      const lastItem = items[items.length - 1];
+      if (lastItem?.type === 'thinking') {
+        // 合并连续 thinking 片段
+        lastItem.content = (lastItem.content || '') + (seg.content || '');
+      } else {
+        items.push({ type: 'thinking', content: seg.content || '' });
+      }
+    } else {
+      // text segment
+      const lastItem = items[items.length - 1];
+      if (lastItem?.type === 'text') {
+        // 合并连续 text 片段
+        lastItem.content = (lastItem.content || '') + (seg.content || '');
+      } else {
+        items.push({ type: 'text', content: seg.content || '' });
+      }
+    }
+  }
+
+  return items;
+}
+
+/** 头像组件 — 替代时间线圆点 */
+const Avatar: React.FC<{ variant: 'user' | 'assistant' | 'error' }> = ({ variant }) => {
+  if (variant === 'user') {
+    return (
+      <div className="flex-shrink-0 w-7 h-7 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center">
+        <svg className="w-3.5 h-3.5 text-primary/70" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
+        </svg>
+      </div>
+    );
+  }
   return (
-    <div className="flex flex-col items-center w-6 shrink-0 pt-[6px]">
-      <div className={`relative z-10 w-2.5 h-2.5 rounded-full ring-4 ring-background ${colorMap[variant]}`} />
+    <div className={`flex-shrink-0 w-7 h-7 rounded-full border flex items-center justify-center ${
+      variant === 'error'
+        ? 'bg-destructive/10 border-destructive/20'
+        : 'bg-muted border-border'
+    }`}>
+      <svg className={`w-3.5 h-3.5 ${variant === 'error' ? 'text-destructive/70' : 'text-muted-foreground'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456z" />
+      </svg>
     </div>
   );
 };
@@ -243,7 +315,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   if (!isUser && hasMultipleClarify && !content.trim() && !hasVisibleTools && !clarifySubmitted) {
     return (
       <div className="relative flex gap-3 pb-5">
-        <TimelineDot variant="assistant" />
+        <Avatar variant="assistant" />
         <div className="flex-1 min-w-0 pt-0">
           <MultiClarifyCard
             content={message.content}
@@ -264,7 +336,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   if (!isUser && clarifyPrompt && !content.trim() && !hasVisibleTools && !clarifySubmitted) {
     return (
       <div className="relative flex gap-3 pb-5">
-        <TimelineDot variant="assistant" />
+        <Avatar variant="assistant" />
         <div className="flex-1 min-w-0 pt-0">
           <ClarifyCard
             prompt={clarifyPrompt}
@@ -283,7 +355,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
 
   return (
     <div className="relative flex gap-3 pb-5 group">
-      <TimelineDot variant={dotVariant} />
+      <Avatar variant={dotVariant} />
 
       <div className="flex-1 min-w-0 pt-0">
         <div className={`rounded-2xl border px-4 py-3 ${cardBorder}`}>
@@ -314,57 +386,152 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
             </button>
           )}
 
-          {/* 工具调用摘要 */}
-          {!isUser && showSubAgentBody && hasVisibleTools && (
-            <div className="mb-2">
-              <ToolCallGroup
-                items={toolTimeline}
-                isStreaming={isStreaming}
-              />
-            </div>
-          )}
-
           {!isUser && !isSubAgent && embeddedSubAgents.length > 0 && (
             <EmbeddedSubAgentList messages={embeddedSubAgents} />
           )}
 
-          {/* 深度思考内容 */}
-          {!isUser && showSubAgentBody && hasThinking && (
-            <ThinkingBlock
-              content={message.thinking_content || ''}
-              isStreaming={Boolean(isThinking)}
-            />
-          )}
+          {/* ── 时间线渲染：segments 可用时按实际事件顺序渲染，否则回退为旧布局 ── */}
+          {!isUser && showSubAgentBody && (() => {
+            const segments = message.segments;
+            const hasSegments = segments && segments.length > 0;
 
-          {!isUser && showSubAgentBody && clarifyPrompt && !clarifySubmitted && (
-            <div className={hasVisibleTools ? 'mt-2' : ''}>
-              <ClarifyCard
-                prompt={clarifyPrompt}
-                disabled={clarifyDisabled || !onClarifyAnswer}
-                timestamp={message.created_at}
-                onAnswer={(answer: string) => {
-                  setClarifySubmitted(true);
-                  onClarifyAnswer?.(answer);
-                }}
-              />
-            </div>
-          )}
+            // 有 segments 时：按时间线顺序渲染
+            if (hasSegments) {
+              const timeline = buildTimelineFromSegments(segments!);
+              return (
+                <div className="space-y-1.5">
+                  {timeline.map((item, idx) => {
+                    if (item.type === 'thinking') {
+                      return (
+                        <ThinkingBlock
+                          key={`thinking-${idx}`}
+                          content={item.content || ''}
+                          isStreaming={Boolean(isThinking)}
+                        />
+                      );
+                    }
+                    if (item.type === 'tool_group') {
+                      return (
+                        <ToolCallGroup
+                          key={`tools-${idx}`}
+                          items={item.tools!}
+                          isStreaming={isStreaming}
+                        />
+                      );
+                    }
+                    if (item.type === 'text') {
+                      const textContent = item.content || '';
+                      // 检查是否仅为 clarify 提示（无其他内容）
+                      const allClarify = parseAllClarifyPrompts(textContent);
+                      if (allClarify.length > 0) {
+                        // 构建问题文本用于判断是否 content 只包含 clarify
+                        const questionsOnly = allClarify.map(c => c.question).join('\n');
+                        const contentWithoutQuestions = textContent.replace(questionsOnly, '').trim();
+                        const isOnlyClarify = contentWithoutQuestions.length === 0 || contentWithoutQuestions === allClarify.map(c => c.options?.join('\n') || '').join('\n');
+                        if (isOnlyClarify && allClarify.length === 1) {
+                          return (
+                            <ClarifyCard
+                              key={`text-${idx}`}
+                              prompt={allClarify[0]}
+                              disabled={clarifyDisabled || !onClarifyAnswer}
+                              submitted={clarifySubmitted}
+                              timestamp={message.created_at}
+                              onAnswer={(answer: string) => {
+                                setClarifySubmitted(true);
+                                onClarifyAnswer?.(answer);
+                              }}
+                            />
+                          );
+                        }
+                        if (isOnlyClarify && allClarify.length > 1) {
+                          return (
+                            <MultiClarifyCard
+                              key={`text-${idx}`}
+                              content={textContent}
+                              disabled={clarifyDisabled || !onClarifyAnswer}
+                              submitted={clarifySubmitted}
+                              timestamp={message.created_at}
+                              onAnswer={(answers: string[]) => {
+                                setClarifySubmitted(true);
+                                onClarifyAnswer?.(answers.join('\n'));
+                              }}
+                            />
+                          );
+                        }
+                      }
+                      return (
+                        <div key={`text-${idx}`} className="markdown-content text-sm leading-relaxed">
+                          {textContent ? (
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                              {textContent}
+                            </ReactMarkdown>
+                          ) : (
+                            isStreaming && <span className="inline-block h-4 w-1 animate-pulse bg-current" />
+                          )}
+                        </div>
+                      );
+                    }
+                    return null;
+                  })}
+                </div>
+              );
+            }
 
-          {/* 消息内容 */}
-          {showSubAgentBody && (displayContent.trim() || isStreaming || !clarifyPrompt) && (
-            <div className="markdown-content text-sm leading-relaxed">
-              {displayContent ? (
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                  {displayContent}
-                </ReactMarkdown>
-              ) : (
-                <>
-                  {isStreaming ? '' : '...'}
-                  {isStreaming && !displayContent && (
-                    <span className="inline-block h-4 w-1 animate-pulse bg-current" />
-                  )}
-                </>
-              )}
+            // 旧布局回退：固定分区渲染
+            return (
+              <>
+                {hasVisibleTools && (
+                  <div className="mb-2">
+                    <ToolCallGroup
+                      items={toolTimeline}
+                      isStreaming={isStreaming}
+                    />
+                  </div>
+                )}
+                {hasThinking && (
+                  <ThinkingBlock
+                    content={message.thinking_content || ''}
+                    isStreaming={Boolean(isThinking)}
+                  />
+                )}
+                {clarifyPrompt && (
+                  <div className={hasVisibleTools ? 'mt-2' : ''}>
+                    <ClarifyCard
+                      prompt={clarifyPrompt}
+                      disabled={clarifyDisabled || !onClarifyAnswer}
+                      submitted={clarifySubmitted}
+                      timestamp={message.created_at}
+                      onAnswer={(answer: string) => {
+                        setClarifySubmitted(true);
+                        onClarifyAnswer?.(answer);
+                      }}
+                    />
+                  </div>
+                )}
+                {(displayContent.trim() || isStreaming || !clarifyPrompt) && (
+                  <div className="markdown-content text-sm leading-relaxed">
+                    {displayContent ? (
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {displayContent}
+                      </ReactMarkdown>
+                    ) : (
+                      <>
+                        {isStreaming ? '' : '...'}
+                        {isStreaming && !displayContent && (
+                          <span className="inline-block h-4 w-1 animate-pulse bg-current" />
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+              </>
+            );
+          })()}
+
+          {/* 用户消息内容 */}
+          {isUser && (
+            <div className="text-sm leading-relaxed whitespace-pre-wrap">
+              {message.content}
             </div>
           )}
 

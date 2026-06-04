@@ -11,13 +11,3 @@ class SessionStarted(DomainEvent):
 
     session_id: str = ""
     agent_id: str = ""
-
-
-@dataclass(frozen=True)
-class MessageSent(DomainEvent):
-    """消息已发送"""
-
-    message_id: str = ""
-    session_id: str = ""
-    task_id: str = ""
-    role: str = ""

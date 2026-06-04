@@ -1,6 +1,6 @@
-"""Session 聚合 — 以 Session 为聚合根，管理会话和消息。"""
+"""Shim: re-exports from src.domain.session for backward compatibility."""
 
-from src.domain.aggregates.session.session import Session, SessionStatus
-from src.domain.aggregates.session.session_message import SessionMessage, SessionMessageRole, MessageStatus
+from src.domain.session.entity import Session, SessionStatus  # noqa: F401
+from src.domain.session.message import SessionMessage, SessionMessageRole, MessageStatus  # noqa: F401
 
 __all__ = ["Session", "SessionStatus", "SessionMessage", "SessionMessageRole", "MessageStatus"]

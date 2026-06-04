@@ -14,7 +14,11 @@ logger = logging.getLogger(__name__)
 
 @tool(
     name="task_update",
-    description="Update task completion status. Call this tool to record results after a subtask finishes.",
+    description=(
+        "Update a task's status created by task_create. "
+        "Use in_progress to mark a task as started (set result to a brief progress note). "
+        "Use completed or failed when the task finishes (set result to the final outcome or error reason)."
+    ),
     category="task",
     returns="Update confirmation",
     timeout_ms=3000,
@@ -28,13 +32,14 @@ async def task_update(
     """更新任务状态
 
     Args:
-        task_id: 任务ID
-        status: 完成状态 (completed | failed)
-        result: 执行结果摘要
+        task_id: 任务ID（由 task_create 返回的 ID）
+        status: 任务状态 — "in_progress" (开始执行), "completed" (已完成), "failed" (执行失败)
+        result: in_progress 时为进展简述，completed 时为最终结果，failed 时为失败原因
     """
-    if status not in ("completed", "failed"):
+    VALID_STATUSES = ("in_progress", "completed", "failed")
+    if status not in VALID_STATUSES:
         return ToolResult(
-            output="Error: status must be 'completed' or 'failed'",
+            output=f"Error: status must be one of: {', '.join(VALID_STATUSES)}",
             success=False,
             error="invalid_input",
         )

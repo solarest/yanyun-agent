@@ -7,11 +7,12 @@ from src.application.dtos.skill_dto import (
     SkillResponseDTO,
     SkillStepDTO,
 )
-from src.application.use_cases.skill_upload import SkillUploadError, SkillUploadService
-from src.skills.skill_def import SkillDef
-from src.skills.skill_repository import ISkillRepository
+from src.application.skills.management import SkillManagementUseCase, SkillNotFoundError
+from src.application.skills.upload import SkillUploadError, SkillUploadService
+from src.domain.skills import SkillDef, ISkillRepository
 from src.presentation.dependencies import (
     get_skill_repository,
+    get_skill_management_use_case,
     get_skill_upload_service,
 )
 
@@ -116,13 +117,12 @@ async def list_skills(
     page_size: int = Query(20, ge=1, le=100),
     category: str = Query(None, description="按分类筛选"),
     enabled: bool = Query(None, description="按启用状态筛选"),
-    skill_repo: ISkillRepository = Depends(get_skill_repository),
+    skill_uc: SkillManagementUseCase = Depends(get_skill_management_use_case),
 ) -> SkillListResponseDTO:
     """获取 Skill 列表（分页 + 筛选）"""
-    offset = (page - 1) * page_size
-    skills, total = await skill_repo.list_all(
-        limit=page_size,
-        offset=offset,
+    skills, total = await skill_uc.list_all(
+        page=page,
+        page_size=page_size,
         category=category,
         enabled=enabled,
     )
@@ -138,10 +138,10 @@ async def list_skills(
     summary="获取所有启用的 Skills",
 )
 async def list_enabled_skills(
-    skill_repo: ISkillRepository = Depends(get_skill_repository),
+    skill_uc: SkillManagementUseCase = Depends(get_skill_management_use_case),
 ) -> SkillListResponseDTO:
     """获取所有启用的 Skills（对话选择用）"""
-    skills = await skill_repo.get_enabled()
+    skills = await skill_uc.list_enabled()
     return SkillListResponseDTO(
         data=[_to_response(s) for s in skills],
         total=len(skills),
@@ -155,10 +155,10 @@ async def list_enabled_skills(
 )
 async def get_skill(
     skill_id: str,
-    skill_repo: ISkillRepository = Depends(get_skill_repository),
+    skill_uc: SkillManagementUseCase = Depends(get_skill_management_use_case),
 ) -> SkillResponseDTO:
     """获取 Skill 详情"""
-    skill = await skill_repo.get_by_id(skill_id)
+    skill = await skill_uc.get_by_id(skill_id)
     if skill is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -194,17 +194,15 @@ async def delete_skill(
 )
 async def toggle_skill(
     skill_id: str,
-    skill_repo: ISkillRepository = Depends(get_skill_repository),
+    skill_uc: SkillManagementUseCase = Depends(get_skill_management_use_case),
 ) -> SkillResponseDTO:
     """切换 Skill 启用/禁用状态"""
-    skill = await skill_repo.get_by_id(skill_id)
-    if skill is None:
+    try:
+        skill = await skill_uc.toggle_enabled(skill_id)
+    except SkillNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"error": {"code": "SKILL_NOT_FOUND",
                               "message": f"Skill '{skill_id}' 不存在"}},
         )
-
-    skill.toggle_enabled()
-    skill = await skill_repo.update(skill)
     return _to_response(skill)

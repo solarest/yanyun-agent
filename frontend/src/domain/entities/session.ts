@@ -8,6 +8,24 @@ export type SessionMessageRole = 'user' | 'assistant' | 'system' | 'tool_summary
 
 export type MessageStatus = 'completed' | 'streaming' | 'error';
 
+/** 消息时间线片段类型 — 按事件实际发生顺序记录 */
+export type SegmentType = 'thinking' | 'text' | 'tool';
+
+/** 消息时间线片段 — 渲染时按 segments 数组顺序展示，保持工作流时间线 */
+export interface MessageSegment {
+  type: SegmentType;
+  /** thinking/text: 内容文本；tool: 工具名称 */
+  content?: string;
+  /** 仅 tool 类型：工具参数 */
+  toolInput?: Record<string, unknown>;
+  /** 仅 tool 类型：工具结果 */
+  toolResult?: string;
+  /** 仅 tool 类型：工具执行状态 */
+  toolStatus?: string;
+  /** 仅 tool 类型：工具调用 ID */
+  toolCallId?: string;
+}
+
 export interface Session {
   id: string;
   agent_id: string;
@@ -29,6 +47,8 @@ export interface SessionMessage {
   has_thinking?: boolean;     // 是否有思考内容
   tool_calls: ToolCallInfo[];
   tool_results: ToolResultInfo[];
+  /** 时间线片段 — 按实际事件发生顺序排列，用于时间线渲染 */
+  segments?: MessageSegment[];
   status: MessageStatus;
   error: string | null;
   cost: Record<string, unknown>;
