@@ -20,23 +20,33 @@ class TeamOrchestrator:
         team: Team,
         members: list[TeamMember],
         agent_names: dict[str, str] | None = None,
+        agent_descriptions: dict[str, str] | None = None,
     ) -> str:
         """构建 Leader 的系统提示词注入内容
 
         Args:
             team: 团队实体
             members: 团队成员列表
-            agent_names: agent_id → agent_name 映射（可选，用于展示友好名称）
+            agent_names: agent_id → agent_name 映射（可选）
+            agent_descriptions: agent_id → description 映射（可选）
 
         Returns:
             Leader 角色的 team mode 说明文本
         """
         agent_names = agent_names or {}
+        agent_descriptions = agent_descriptions or {}
         member_lines: list[str] = []
         for m in members:
             if m.role == TeamRole.MEMBER:
                 display_name = agent_names.get(m.agent_id, m.agent_id)
-                member_lines.append(f"- **{display_name}** (ID: `{m.agent_id}`)")
+                desc = agent_descriptions.get(m.agent_id, "")
+                if desc:
+                    member_lines.append(
+                        f"- **{display_name}** (ID: `{m.agent_id}`)\n"
+                        f"  职责/能力: {desc}"
+                    )
+                else:
+                    member_lines.append(f"- **{display_name}** (ID: `{m.agent_id}`)")
 
         member_list = "\n".join(member_lines) if member_lines else (
             "No members assigned yet.")

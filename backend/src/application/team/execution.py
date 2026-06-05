@@ -105,12 +105,14 @@ class TeamExecutionUseCase:
         if not regular_members:
             raise ValueError(f"Team {team_id} has no regular members")
 
-        # 2. 加载 agent 名称映射
+        # 2. 加载 agent 名称与描述映射
         agent_names: dict[str, str] = {}
+        agent_descriptions: dict[str, str] = {}
         for m in members:
             agent = await self._agent_repo.get_by_id(m.agent_id)
             if agent:
                 agent_names[m.agent_id] = agent.name
+                agent_descriptions[m.agent_id] = agent.description or ""
 
         # 3. 更新团队状态
         team.goal = goal
@@ -126,7 +128,7 @@ class TeamExecutionUseCase:
         # 5. 构建 prompt 注入
         orchestrator = TeamOrchestrator()
         leader_context = orchestrator.build_leader_prompt_additions(
-            team, members, agent_names,
+            team, members, agent_names, agent_descriptions,
         )
 
         # 6. 创建 leader task（使用预生成的 execution_id）
