@@ -70,5 +70,6 @@ class ExecuteTeamResponseDTO(BaseModel):
     """执行 Team 响应"""
     team_id: str
     execution_id: str
+    workspace: str = "/tmp/team-workspace"
     status: str = "started"
     message: str = "Team execution started"

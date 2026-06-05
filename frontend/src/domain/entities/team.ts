@@ -59,6 +59,7 @@ export interface ExecuteTeamRequest {
 export interface ExecuteTeamResponse {
   team_id: string;
   execution_id: string;
+  workspace: string;
   status: string;
   message: string;
 }

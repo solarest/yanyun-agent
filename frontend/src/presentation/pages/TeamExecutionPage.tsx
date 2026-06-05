@@ -120,7 +120,23 @@ const SystemEntry: React.FC<{ content: string }> = ({ content }) => (
   </div>
 );
 
-/** 时间线气泡 — 渲染 buildTimeline 的结果 */
+/** 将 items 按 system 分割为卡片组，与 chat 的 message → segments 结构一致 */
+function partitionItems(items: TimelineRenderItem[]): Array<{ type: 'system'; content: string } | { type: 'card'; children: TimelineRenderItem[] }> {
+  const result: Array<{ type: 'system'; content: string } | { type: 'card'; children: TimelineRenderItem[] }> = [];
+  let buf: TimelineRenderItem[] = [];
+  for (const item of items) {
+    if (item.type === 'system') {
+      if (buf.length > 0) { result.push({ type: 'card', children: buf }); buf = []; }
+      result.push({ type: 'system', content: item.content! });
+    } else {
+      buf.push(item);
+    }
+  }
+  if (buf.length > 0) result.push({ type: 'card', children: buf });
+  return result;
+}
+
+/** 时间线 — 以 system 消息为界分组，每组非 system 段共享一个 card（与 chat 一致） */
 const TimelineBubble: React.FC<{ items: TimelineRenderItem[]; isStreaming: boolean }> = ({ items, isStreaming }) => {
   if (items.length === 0) {
     return isStreaming ? (
@@ -130,32 +146,40 @@ const TimelineBubble: React.FC<{ items: TimelineRenderItem[]; isStreaming: boole
     ) : null;
   }
 
+  const parts = partitionItems(items);
   return (
-    <div className="rounded-2xl border border-border/50 bg-card px-4 py-3">
-      {items.map((item, idx) => {
-        if (item.type === 'system') {
-          return <SystemEntry key={`s-${idx}`} content={item.content!} />;
+    <>
+      {parts.map((part, pi) => {
+        if (part.type === 'system') {
+          return <SystemEntry key={`s-${pi}`} content={part.content} />;
         }
-        if (item.type === 'thinking') {
-          return <ThinkingBlock key={`t-${idx}`} content={item.content!} isStreaming={isStreaming} />;
-        }
-        if (item.type === 'tool_group') {
-          return <ToolCallGroup key={`g-${idx}`} items={item.tools!} isStreaming={isStreaming} />;
-        }
-        if (item.type === 'text') {
-          return (
-            <div key={`x-${idx}`} className="markdown-content text-sm leading-relaxed">
-              {item.content ? (
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.content}</ReactMarkdown>
-              ) : (
-                isStreaming && <span className="inline-block h-4 w-1 animate-pulse bg-current" />
-              )}
-            </div>
-          );
-        }
-        return null;
+        // card: 连续的非 system 段共享一个气泡，与 chat MessageBubble 的 segment 渲染完全一致
+        return (
+          <div key={`c-${pi}`} className="rounded-2xl border border-border/50 bg-card px-4 py-3">
+            {part.children.map((item, idx) => {
+              if (item.type === 'thinking') {
+                return <ThinkingBlock key={`t-${idx}`} content={item.content!} isStreaming={isStreaming} />;
+              }
+              if (item.type === 'tool_group') {
+                return <ToolCallGroup key={`g-${idx}`} items={item.tools!} isStreaming={isStreaming} />;
+              }
+              if (item.type === 'text') {
+                return (
+                  <div key={`x-${idx}`} className="markdown-content text-sm leading-relaxed">
+                    {item.content ? (
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.content}</ReactMarkdown>
+                    ) : (
+                      isStreaming && <span className="inline-block h-4 w-1 animate-pulse bg-current" />
+                    )}
+                  </div>
+                );
+              }
+              return null;
+            })}
+          </div>
+        );
       })}
-    </div>
+    </>
   );
 };
 
@@ -180,6 +204,7 @@ export const TeamExecutionPage: React.FC = () => {
   const [goal, setGoal] = useState('');
   const [runState, setRunState] = useState<RunState>('idle');
   const [executionId, setExecutionId] = useState<string | null>(null);
+  const [workspace, setWorkspace] = useState('/tmp/team-workspace');
   const [activeTab, setActiveTab] = useState<string>('leader');
   const [leaderSegments, setLeaderSegments] = useState<TimelineSegment[]>([]);
   const [memberStates, setMemberStates] = useState<Map<string, MemberRunState>>(new Map());
@@ -187,8 +212,8 @@ export const TeamExecutionPage: React.FC = () => {
   const [finalResultExpanded, setFinalResultExpanded] = useState(false);
   const [goalInputFocused, setGoalInputFocused] = useState(false);
   const [isStreamingLeader, setIsStreamingLeader] = useState(false);
-  const [sidebarResults, setSidebarResults] = useState<Array<{ goal: string; result: string; id: string }>>([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [workspaceFiles, setWorkspaceFiles] = useState<Array<{ name: string; path: string; is_dir: boolean; size: number; modified_at: number }>>([]);
   const [followUpInput, setFollowUpInput] = useState('');
   const [isFollowUpRunning, setIsFollowUpRunning] = useState(false);
 
@@ -203,6 +228,24 @@ export const TeamExecutionPage: React.FC = () => {
     return () => { streamRef.current?.disconnect(); memberStreamsRef.current.forEach((s) => s.disconnect()); };
   }, []);
   useEffect(() => { logsEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [leaderSegments]);
+
+  // ── Workspace file polling ──
+  const fetchWorkspaceFiles = useCallback(async () => {
+    if (!id) return;
+    try {
+      const res = await fetch(`/api/teams/${id}/workspace-files?path=${encodeURIComponent(workspace)}`);
+      const data = await res.json();
+      setWorkspaceFiles(data.files || []);
+    } catch { /* ignore */ }
+  }, [id, workspace]);
+
+  useEffect(() => {
+    if (runState !== 'idle' && sidebarOpen) {
+      fetchWorkspaceFiles();
+      const interval = setInterval(fetchWorkspaceFiles, 3000);
+      return () => clearInterval(interval);
+    }
+  }, [runState, sidebarOpen, fetchWorkspaceFiles]);
 
   const members: TeamMember[] = currentTeam?.members ?? [];
   const leader = members.find((m) => m.role === 'leader');
@@ -365,6 +408,7 @@ export const TeamExecutionPage: React.FC = () => {
 
     const execId = result.execution_id;
     setExecutionId(execId);
+    if (result.workspace) setWorkspace(result.workspace);
     addLeaderSystem(`执行 ID: ${execId}`);
 
     streamRef.current?.disconnect();
@@ -409,7 +453,6 @@ export const TeamExecutionPage: React.FC = () => {
       setIsStreamingLeader(false); setIsFollowUpRunning(false);
       addLeaderSystem('🎉 团队执行完成!');
       setFinalResult(p.result || ''); setFinalResultExpanded(true); setRunState('completed');
-      setSidebarResults((prev) => [...prev, { goal: goal.trim(), result: p.result || '', id: execId }]);
       setSidebarOpen(true);
     });
     ls.on('team:execution:failed', (p: any) => {
@@ -430,7 +473,7 @@ export const TeamExecutionPage: React.FC = () => {
     const result = await executeTeam(id, q);
     if (!result) { runningRef.current = false; setIsFollowUpRunning(false); setRunState('failed'); addLeaderSystem('❌ 追问执行失败'); return; }
 
-    const execId = result.execution_id; setExecutionId(execId);
+    const execId = result.execution_id; setExecutionId(execId); if (result.workspace) setWorkspace(result.workspace);
     streamRef.current?.disconnect();
     const ls = new AgentEventStream('', execId);
     streamRef.current = ls;
@@ -515,12 +558,11 @@ export const TeamExecutionPage: React.FC = () => {
               const dotColor = tab.role === 'leader' ? (runState === 'completed' ? 'bg-emerald-400' : runState === 'running' ? 'bg-primary animate-pulse' : 'bg-muted-foreground/30') : memberState?.status === 'done' ? 'bg-emerald-400' : memberState?.status === 'busy' ? 'bg-primary animate-pulse' : 'bg-muted-foreground/30';
               return <button key={tab.key} type="button" className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm transition-colors ${isActive ? 'border-primary text-primary font-medium' : 'border-transparent text-muted-foreground hover:text-foreground'}`} onClick={() => setActiveTab(tab.key)}><span className={`inline-block w-2 h-2 rounded-full shrink-0 ${dotColor}`} />{tab.label}</button>;
             })}
-            {sidebarResults.length > 0 && (
-              <button type="button" onClick={() => setSidebarOpen((v) => !v)} className="ml-auto flex items-center gap-1.5 border-b-2 border-transparent px-4 py-2.5 text-sm text-muted-foreground hover:text-foreground transition-colors">
-                <span className="text-xs">结果</span><span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">{sidebarResults.length}</span>
-                <svg className={`h-3.5 w-3.5 transition-transform duration-200 ${sidebarOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
-              </button>
-            )}
+            <button type="button" onClick={() => setSidebarOpen((v) => !v)} className="ml-auto flex items-center gap-1.5 border-b-2 border-transparent px-4 py-2.5 text-sm text-muted-foreground hover:text-foreground transition-colors">
+              <span className="text-xs">文件</span>
+              {workspaceFiles.length > 0 && <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">{workspaceFiles.length}</span>}
+              <svg className={`h-3.5 w-3.5 transition-transform duration-200 ${sidebarOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+            </button>
           </div>
 
           <div className="flex flex-1 overflow-hidden">
@@ -544,17 +586,27 @@ export const TeamExecutionPage: React.FC = () => {
                 </div>
               )}
             </div>
-            {sidebarOpen && sidebarResults.length > 0 && (
-              <div className="w-80 flex-shrink-0 border-l bg-card/30 overflow-y-auto">
-                <div className="p-3 border-b bg-card/50"><h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">执行结果</h3></div>
-                <div className="divide-y divide-border/30">
-                  {sidebarResults.map((item) => (
-                    <div key={item.id} className="p-3">
-                      <p className="text-[11px] font-medium text-muted-foreground/60 mb-1">{item.goal}</p>
-                      <div className="text-xs leading-relaxed markdown-content max-h-60 overflow-y-auto"><ReactMarkdown remarkPlugins={[remarkGfm]}>{item.result.length > 3000 ? item.result.slice(0, 3000) + '...' : item.result}</ReactMarkdown></div>
-                    </div>
-                  ))}
+            {sidebarOpen && (
+              <div className="w-64 flex-shrink-0 border-l bg-card/30 overflow-y-auto">
+                <div className="p-3 border-b bg-card/50 flex items-center justify-between">
+                  <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">工作空间</h3>
+                  <button type="button" onClick={fetchWorkspaceFiles} className="text-xs text-muted-foreground/50 hover:text-muted-foreground transition-colors">刷新</button>
                 </div>
+                {workspaceFiles.length === 0 ? (
+                  <div className="p-4 text-center text-xs text-muted-foreground/50">暂无文件</div>
+                ) : (
+                  <div className="divide-y divide-border/20">
+                    {workspaceFiles.map((f) => (
+                      <div key={f.path} className="px-3 py-2 flex items-center gap-2 text-xs">
+                        <span className="shrink-0">{f.is_dir ? '📁' : '📄'}</span>
+                        <span className="flex-1 truncate text-muted-foreground">{f.name}</span>
+                        <span className="shrink-0 text-muted-foreground/40 text-[10px]">
+                          {f.is_dir ? '' : f.size > 1024 ? `${(f.size / 1024).toFixed(1)}KB` : `${f.size}B`}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>

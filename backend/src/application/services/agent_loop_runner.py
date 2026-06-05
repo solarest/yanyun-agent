@@ -415,21 +415,23 @@ class AgentLoopRunner:
             # Team mode: 根据角色过滤工具
             registry = ToolRegistry()
             if team_role == "leader":
-                # Leader: ONLY 2 coordination tools
+                # Leader: coordination + file ops (read/search) + clarify
                 LEADER_ALLOWED_TOOLS = frozenset({
                     "update_team_tasks",
                     "assign_team_task",
+                    "file_read",
+                    "file_search",
+                    "file_grep",
+                    "clarify",
                 })
                 for tool in self.tool_registry.list_tools():
                     if tool.name in LEADER_ALLOWED_TOOLS:
                         registry.register(tool)
             elif team_role == "member":
-                # Member: 排除 update_team_tasks, assign_team_task, check_team_reports,
-                # session_spawn, task_create, task_update
+                # Member: 排除 leader 专属工具
                 for tool in self.tool_registry.list_tools():
                     if tool.name in ("update_team_tasks", "assign_team_task",
-                                     "check_team_reports", "session_spawn",
-                                     "task_create", "task_update"):
+                                     "check_team_reports"):
                         continue
                     registry.register(tool)
             else:

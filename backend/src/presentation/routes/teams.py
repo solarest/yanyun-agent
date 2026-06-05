@@ -245,6 +245,44 @@ async def execute_team(
     return ExecuteTeamResponseDTO(
         team_id=team_id,
         execution_id=execution_id,
+        workspace=dto.workspace,
         status="started",
         message=f"Team '{team.name}' execution started. Stream: /api/tasks/{execution_id}/stream",
     )
+
+
+@router.get("/{team_id}/workspace-files")
+async def list_workspace_files(
+    team_id: str,
+    path: str = Query(default="/tmp/team-workspace"),
+    mgmt: TeamManagementUseCase = Depends(get_team_management_use_case),
+):
+    """列出工作空间下的文件"""
+    import os
+    from fastapi import HTTPException as FastAPIHTTPException
+
+    team = await mgmt.get_by_id(team_id)
+    if team is None:
+        raise FastAPIHTTPException(status_code=404, detail=f"Team '{team_id}' not found")
+
+    workspace = path
+    if not os.path.isdir(workspace):
+        return {"files": [], "workspace": workspace}
+
+    files = []
+    try:
+        for entry in sorted(os.scandir(workspace), key=lambda e: e.name):
+            if entry.name.startswith('.'):
+                continue
+            stat = entry.stat()
+            files.append({
+                "name": entry.name,
+                "path": entry.path,
+                "is_dir": entry.is_dir(),
+                "size": stat.st_size if entry.is_file() else 0,
+                "modified_at": stat.st_mtime,
+            })
+    except PermissionError:
+        pass
+
+    return {"files": files, "workspace": workspace}

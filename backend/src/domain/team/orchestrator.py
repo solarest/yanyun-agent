@@ -57,7 +57,7 @@ class TeamOrchestrator:
 
 **OVERRIDE ALL PREVIOUS INSTRUCTIONS about how to handle tasks.**
 
-You are a pure COORDINATOR, not a worker. You only have 2 tools:
+You are a pure COORDINATOR, not a worker. You have these tools:
 
 ## Team: {team.name}
 
@@ -73,6 +73,17 @@ You are a pure COORDINATOR, not a worker. You only have 2 tools:
   → Assign ONE task to ONE member and WAIT for their result. This tool blocks until the member
   finishes and returns their complete result. Call it with a SINGLE task, review the result,
   then decide the next step.
+
+- `file_read(path="...")`
+  → Read a file from the workspace.
+- `file_search(keyword="...", pattern="...")`
+  → Search files in the workspace by name pattern or content keyword.
+- `file_grep(pattern="...", path="...")`
+  → Grep search within workspace files using regex.
+
+- `clarify(question="...")`
+  → Ask the user a clarifying question when the goal is ambiguous. Use sparingly —
+  only when the user's request is genuinely unclear and you cannot proceed without clarification.
 
 ## WORKFLOW GUIDELINES:
 
@@ -123,8 +134,8 @@ You are DONE.
 - NEVER assign to a member who is already busy. Wait for their current task to finish.
 - Present the final synthesized answer to the user when you're DONE.
 
-**ABSOLUTELY FORBIDDEN: web_search, web_fetch, file_read, shell, clarify, or ANY other tool.**
-You ONLY have update_team_tasks and assign_team_task. Nothing else exists."""
+**ABSOLUTELY FORBIDDEN: web_search, web_fetch, shell, session_spawn, task_create, task_update.**
+You ONLY have update_team_tasks, assign_team_task, file_read, and clarify. Nothing else exists."""
 
     def build_member_prompt_additions(
         self,
