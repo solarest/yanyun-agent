@@ -5,7 +5,7 @@
  * - Segment 按时间顺序追加（thinking → tool_call → tool_result → text → ...）
  * - buildTimeline 将连续同类型 segment 合并渲染
  */
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -472,7 +472,7 @@ export const TeamExecutionPage: React.FC = () => {
   }, [id, leader, executeTeam, pushLeaderSegment, appendLeaderThinking, appendLeaderText, addLeaderSystem, regularMembers, bindMemberStream]);
 
   // ── Render ──
-  const timelineItems = buildTimeline(currentSegments);
+  const timelineItems = useMemo(() => buildTimeline(currentSegments), [currentSegments]);
   const showStreaming = activeTab === 'leader' ? isStreamingLeader : false;
 
   return (
@@ -525,7 +525,7 @@ export const TeamExecutionPage: React.FC = () => {
 
           <div className="flex flex-1 overflow-hidden">
             <div className="flex flex-1 flex-col overflow-hidden">
-              <div className="flex-1 overflow-y-auto px-4 py-6">
+              <div className="flex-1 overflow-y-scroll px-4 py-6">
                 <div className="mx-auto max-w-3xl">
                   {timelineItems.length === 0 && !showStreaming && (
                     <div className="py-20 text-center text-muted-foreground/50"><p className="text-sm">等待执行开始...</p></div>
