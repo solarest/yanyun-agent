@@ -177,12 +177,10 @@ class ToolExecuteNode(BaseNode):
         session_id = config["configurable"].get("session_id", "")
 
         # 构建工具 context
-        # 如果存在 sub-agent 相关依赖，注入到 extra 中
-        tool_context = ToolContext(
-            task_id=context.task_id,
-            workspace=state.get("workspace", ""),
-            agent_id=context.agent_id,
-            extra={
+        # 注入 sub-agent 和 team 相关依赖到 extra 中
+        extra = {}
+        if send_message_use_case:
+            extra.update({
                 "send_message_use_case": send_message_use_case,
                 "sub_agent_runtime_scope": sub_agent_runtime_scope,
                 "task_repo": task_repo,
@@ -191,7 +189,25 @@ class ToolExecuteNode(BaseNode):
                 "parent_agent_id": context.agent_id,
                 "parent_session_id": session_id,
                 "parent_task_id": state.get("parent_task_id") or context.task_id,
-            } if send_message_use_case else {},
+            })
+
+        # 注入 team mode 相关依赖
+        team_mode = config["configurable"].get("team_mode", False)
+        if team_mode:
+            extra.update({
+                "team_mode": team_mode,
+                "team_id": config["configurable"].get("team_id", ""),
+                "team_role": config["configurable"].get("team_role", ""),
+                "team_message_bus": config["configurable"].get("team_message_bus"),
+                "leader_agent_id": config["configurable"].get("leader_agent_id", ""),
+                "agent_id": context.agent_id,
+            })
+
+        tool_context = ToolContext(
+            task_id=context.task_id,
+            workspace=state.get("workspace", ""),
+            agent_id=context.agent_id,
+            extra=extra,
         )
 
         pending_tools = state.get("pending_tool_calls", [])

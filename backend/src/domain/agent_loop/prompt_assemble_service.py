@@ -31,6 +31,7 @@ class PromptAssembleService:
         memory_enabled: bool = False,
         workspace: str = "",
         environment: Optional[dict] = None,
+        team_context: Optional[str] = None,
     ) -> PromptAssemblyResult:
         """组装 system_message（11 层结构）
 
@@ -46,6 +47,7 @@ class PromptAssembleService:
             memory_enabled: 是否启用记忆系统（控制 Layer 7 注入）
             workspace: 工作目录路径（Layer 6）
             environment: 环境上下文，如 {"platform": "...", "date": "...", "timezone": "..."}（Layer 9）
+            team_context: Team mode 指令（可选，注入在 Environment 层之后、静态后缀之前）
 
         Returns:
             PromptAssemblyResult，包含 system_message 和元信息
@@ -118,6 +120,11 @@ class PromptAssembleService:
             if env_parts:
                 parts.append("# Environment\n\n" + "\n".join(env_parts))
                 layer_info["environment"] = True
+
+        # Team Mode Instructions（注入在 Environment 与 Static Suffix 之间）
+        if team_context:
+            parts.append(team_context)
+            layer_info["team_context"] = True
 
         # ==================== STATIC SUFFIX ====================
         parts.append("── STATIC SUFFIX ──────────────────────────────────────")

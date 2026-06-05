@@ -180,6 +180,71 @@ export interface SessionMessageSavedPayload extends BaseEventPayload {
   message: SessionMessage;
 }
 
+// ── Team Events ──
+
+/** team-execution-started 事件 */
+export interface TeamExecutionStartedPayload extends BaseEventPayload {
+  team_id: string;
+  team_name: string;
+  goal: string;
+  leader_agent_id: string;
+  member_count: number;
+  member_agent_ids: string[];
+}
+
+/** team-task-assigned 事件 */
+export interface TeamTaskAssignedPayload extends BaseEventPayload {
+  team_id: string;
+  agent_id: string;
+  task_id: string;
+  request_id: string | null;
+  description: string;
+}
+
+/** team-task-reported 事件 */
+export interface TeamTaskReportedPayload extends BaseEventPayload {
+  team_id: string;
+  agent_id: string;
+  task_id: string;
+  request_id: string | null;
+  status: 'completed' | 'failed';
+  result?: string;
+  error?: string;
+}
+
+/** team-task-updated 事件 */
+export interface TeamTaskUpdatedPayload extends BaseEventPayload {
+  team_id: string;
+  tasks: Array<{
+    id: string | number;
+    description: string;
+    assigned_to: string | null;
+    status: string;
+  }>;
+  task_count: number;
+}
+
+/** team-member-status 事件 */
+export interface TeamMemberStatusPayload extends BaseEventPayload {
+  team_id: string;
+  agent_id: string;
+  status: 'idle' | 'busy' | 'done';
+}
+
+/** team-execution-completed 事件 */
+export interface TeamExecutionCompletedPayload extends BaseEventPayload {
+  team_id: string;
+  team_name: string;
+  status: string;
+  result: string;
+}
+
+/** team-execution-failed 事件 */
+export interface TeamExecutionFailedPayload extends BaseEventPayload {
+  team_id: string;
+  error: string;
+}
+
 /**
  * 内部事件名（冒号分隔）到 payload 类型的映射。
  * 供 AgentEventStream 的强类型监听使用。
@@ -210,6 +275,14 @@ export interface AgentEventMap {
   'sub_agent:completed': SubAgentPayload;
   'sub_agent:failed': SubAgentPayload;
   'session:message:saved': SessionMessageSavedPayload;
+  // Team events
+  'team:execution:started': TeamExecutionStartedPayload;
+  'team:task:assigned': TeamTaskAssignedPayload;
+  'team:task:reported': TeamTaskReportedPayload;
+  'team:task:updated': TeamTaskUpdatedPayload;
+  'team:member:status': TeamMemberStatusPayload;
+  'team:execution:completed': TeamExecutionCompletedPayload;
+  'team:execution:failed': TeamExecutionFailedPayload;
 }
 
 /** 所有合法的事件名 */
@@ -237,8 +310,8 @@ export const SSE_EVENT_TYPES: readonly string[] = [
   'loop-detected',
   'stuck-detected',
   'step-created',
-  'step-step_started',
-  'step-step_completed',
+  'step-started',
+  'step-completed',
   'step-parallel_group_started',
   'step-parallel_group_completed',
   'step-all_completed',
@@ -246,4 +319,12 @@ export const SSE_EVENT_TYPES: readonly string[] = [
   'sub_agent-completed',
   'sub_agent-failed',
   'session-message-saved',
+  // Team events
+  'team-execution-started',
+  'team-task-assigned',
+  'team-task-reported',
+  'team-task-updated',
+  'team-member-status',
+  'team-execution-completed',
+  'team-execution-failed',
 ] as const;

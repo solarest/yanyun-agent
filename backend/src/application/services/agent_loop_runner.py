@@ -109,6 +109,13 @@ class AgentLoopRunner:
         persist_session_messages: bool = True,
         # 通过 graph config 注入供工具使用的 send_message_use_case 引用
         send_message_use_case: Any = None,
+        # Team mode 参数
+        team_mode: bool = False,
+        team_id: Optional[str] = None,
+        team_role: Optional[str] = None,  # "leader" | "member"
+        team_message_bus: Any = None,
+        team_context: Optional[str] = None,
+        leader_agent_id: Optional[str] = None,
     ) -> None:
         """执行 Agent Loop。
 
@@ -128,6 +135,12 @@ class AgentLoopRunner:
             allowed_tools: 允许的工具列表（sub-agent 模式）
             persist_session_messages: 是否持久化会话消息
             send_message_use_case: SendMessageUseCase 引用，通过 graph config 注入给工具
+            team_mode: 是否为 team mode
+            team_id: 团队 ID（team mode）
+            team_role: 团队角色 — "leader" 或 "member"（team mode）
+            team_message_bus: 团队消息总线（team mode）
+            team_context: team mode 的 prompt 注入内容（team mode）
+            leader_agent_id: Leader 的 Agent ID（team mode，供 member 上报使用）
         """
         effective_event_emitter = self._build_event_emitter(
             is_sub_agent=is_sub_agent,
@@ -168,6 +181,7 @@ class AgentLoopRunner:
                     "timezone": "Asia/Shanghai",
                 },
                 memory_enabled=bool(template.memory_md),
+                team_context=team_context,
             )
             agent_system_prompt = assembly_result.system_message
 
@@ -177,6 +191,7 @@ class AgentLoopRunner:
                 parent_system_prompt=parent_system_prompt,
                 sub_agent_description=sub_agent_description,
                 agent_system_prompt=agent_system_prompt,
+                team_mode=team_mode,
             )
 
             logger.info(
@@ -189,9 +204,30 @@ class AgentLoopRunner:
 
             # 步骤 B: 加载会话历史 → 通过 PromptContextInterface 构建 messages
             if is_sub_agent:
-                # Sub-agent 是主 agent 的工具调用执行单元，只接收本次原子任务，
-                # 不继承父 session 的 user/assistant/tool 历史。
+                # Sub-agent 只接收本次原子任务，不继承父 session 历史
                 messages = [HumanMessage(content=content)]
+            elif team_mode:
+                # Team mode (leader + member): 从自有 session 加载历史 + 追加本次任务
+                if self.prompt_context:
+                    history_messages = await self.message_repo.list_by_session(
+                        session_id, limit=100
+                    )
+                    conversation_history = ConversationAssemblyService.assemble(
+                        history_messages
+                    )
+                    max_context_tokens = resolve_max_context_tokens(model or self.default_model)
+                    initial_history_budget = int(max_context_tokens * 0.25)
+                    api_messages = await self.prompt_context.build_messages(
+                        system_message=system_prompt,
+                        history=conversation_history,
+                        max_tokens=initial_history_budget,
+                    )
+                    messages = LangChainAdapter.dict_messages_to_langchain(api_messages)
+                    # 追加本次任务/用户消息
+                    messages.append(HumanMessage(content=content))
+                else:
+                    messages = await self._load_history_fallback(session_id)
+                    messages.append(HumanMessage(content=content))
             elif self.prompt_context:
                 # 使用 PromptContextInterface 进行 Token 预算管理 + 裁剪
                 history_messages = await self.message_repo.list_by_session(
@@ -216,6 +252,8 @@ class AgentLoopRunner:
             effective_tool_registry = self._build_tool_registry(
                 is_sub_agent=is_sub_agent,
                 allowed_tools=allowed_tools,
+                team_mode=team_mode,
+                team_role=team_role,
             )
             llm = self._build_llm(model, effective_tool_registry, agent_id)
 
@@ -263,6 +301,12 @@ class AgentLoopRunner:
                     "parent_agent_id": agent_id,
                     "parent_session_id": session_id,
                     "parent_task_id": parent_task_id or task.id,
+                    # Team mode 信息（供 team tools 使用）
+                    "team_mode": team_mode,
+                    "team_id": team_id,
+                    "team_role": team_role,
+                    "team_message_bus": team_message_bus,
+                    "leader_agent_id": leader_agent_id or "",
                 }
             }
 
@@ -340,8 +384,13 @@ class AgentLoopRunner:
         parent_system_prompt: Optional[str],
         sub_agent_description: Optional[str],
         agent_system_prompt: str,
+        team_mode: bool = False,
     ) -> str:
         """根据模式构建 system prompt。"""
+        # Team mode: team_context 已通过 assemble() 注入，直接使用
+        if team_mode:
+            return agent_system_prompt
+
         if not is_sub_agent:
             return agent_system_prompt
 
@@ -356,13 +405,43 @@ class AgentLoopRunner:
         self,
         is_sub_agent: bool,
         allowed_tools: Optional[list[str]] = None,
+        team_mode: bool = False,
+        team_role: Optional[str] = None,
     ) -> Optional[IToolRegistry]:
         """根据模式构建工具注册表。"""
+        from src.infrastructure.tools.registry import ToolRegistry
+
+        if team_mode:
+            # Team mode: 根据角色过滤工具
+            registry = ToolRegistry()
+            if team_role == "leader":
+                # Leader: ONLY 2 coordination tools
+                LEADER_ALLOWED_TOOLS = frozenset({
+                    "update_team_tasks",
+                    "assign_team_task",
+                })
+                for tool in self.tool_registry.list_tools():
+                    if tool.name in LEADER_ALLOWED_TOOLS:
+                        registry.register(tool)
+            elif team_role == "member":
+                # Member: 排除 update_team_tasks, assign_team_task, check_team_reports,
+                # session_spawn, task_create, task_update
+                for tool in self.tool_registry.list_tools():
+                    if tool.name in ("update_team_tasks", "assign_team_task",
+                                     "check_team_reports", "session_spawn",
+                                     "task_create", "task_update"):
+                        continue
+                    registry.register(tool)
+            else:
+                # Fallback: all tools
+                for tool in self.tool_registry.list_tools():
+                    registry.register(tool)
+            return registry
+
         if not is_sub_agent:
             return self.tool_registry
 
         from src.domain.services.sub_agent_orchestrator import SubAgentOrchestrator
-        from src.infrastructure.tools.registry import ToolRegistry
         orchestrator = SubAgentOrchestrator()
         return orchestrator.create_sub_agent_tool_registry(
             self.tool_registry,

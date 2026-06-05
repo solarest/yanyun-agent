@@ -8,6 +8,10 @@ import { AgentEditPage } from './pages/AgentEditPage';
 import { AgentPage } from './pages/AgentPage';
 import { AgentSessionPage } from './pages/AgentSessionPage';
 import { SkillManagementPage } from './pages/SkillManagementPage';
+import { TeamManagementPage } from './pages/TeamManagementPage';
+import { TeamCreatePage } from './pages/TeamCreatePage';
+import { TeamDetailPage } from './pages/TeamDetailPage';
+import { TeamExecutionPage } from './pages/TeamExecutionPage';
 import { AppSidebar } from './components/AppSidebar';
 
 /** 带条件导航栏的布局：对话页面（全屏）不显示侧边栏 */
@@ -40,6 +44,11 @@ export const App: React.FC = () => {
           <Route path="/agents/:id/chat" element={<AgentSessionPage />} />
           <Route path="/agent" element={<AgentPage />} />
           <Route path="/skills" element={<SkillManagementPage />} />
+          {/* Team 路由 */}
+          <Route path="/teams" element={<TeamManagementPage />} />
+          <Route path="/teams/new" element={<TeamCreatePage />} />
+          <Route path="/teams/:id" element={<TeamDetailPage />} />
+          <Route path="/teams/:id/execute" element={<TeamExecutionPage />} />
         </Routes>
       </AppLayout>
     </BrowserRouter>

@@ -55,3 +55,12 @@ class AgentEventType(str, Enum):
 
     # ── 会话 ──
     SESSION_MESSAGE_SAVED = "session:message:saved"
+
+    # ── Team ──
+    TEAM_EXECUTION_STARTED = "team:execution:started"
+    TEAM_TASK_ASSIGNED = "team:task:assigned"
+    TEAM_TASK_REPORTED = "team:task:reported"
+    TEAM_TASK_UPDATED = "team:task:updated"
+    TEAM_MEMBER_STATUS = "team:member:status"
+    TEAM_EXECUTION_COMPLETED = "team:execution:completed"
+    TEAM_EXECUTION_FAILED = "team:execution:failed"

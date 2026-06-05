@@ -172,6 +172,7 @@ def create_tool_registry() -> IToolRegistry:
     import src.infrastructure.tools.builtin.task_update  # noqa: F401
     import src.infrastructure.tools.builtin.shell  # noqa: F401
     import src.infrastructure.tools.builtin.session_spawn  # noqa: F401
+    import src.infrastructure.tools.builtin.team_tools  # noqa: F401
 
     # 构建中间件管道
     pipeline = ExecutionPipeline()
@@ -324,3 +325,71 @@ def get_skill_management_use_case(
     from src.application.skills.management import SkillManagementUseCase
 
     return SkillManagementUseCase(skill_repo=SQLiteSkillRepository(db))
+
+
+# === Team 依赖注入 ===
+
+
+def get_team_repository(
+    db: AsyncSession = Depends(get_async_db),
+):
+    """获取 Team 仓储实例"""
+    from src.infrastructure.repositories.sqlite_team_repo import SQLiteTeamRepository
+    return SQLiteTeamRepository(db)
+
+
+def get_team_management_use_case(
+    db: AsyncSession = Depends(get_async_db),
+):
+    """获取 Team 管理用例实例"""
+    from src.application.team.management import TeamManagementUseCase
+    from src.infrastructure.repositories.sqlite_team_repo import SQLiteTeamRepository
+    from src.infrastructure.repositories.sqlite_agent_repo import SQLiteAgentRepository
+
+    return TeamManagementUseCase(
+        team_repo=SQLiteTeamRepository(db),
+        agent_repo=SQLiteAgentRepository(db),
+    )
+
+
+def get_team_execution_use_case(request: Request):
+    """构建 TeamExecutionUseCase — 每次调用创建独立的依赖图。
+
+    与 get_send_message_use_case 类似，使用独立 DB session 与完整依赖图。
+    """
+    from sqlalchemy.ext.asyncio import AsyncSession as SAAsyncSession
+
+    from src.application.team.execution import TeamExecutionUseCase
+    from src.infrastructure.database.session import async_engine
+    from src.infrastructure.repositories.sqlite_team_repo import SQLiteTeamRepository
+    from src.infrastructure.repositories.sqlite_agent_repo import SQLiteAgentRepository
+    from src.infrastructure.repositories.sqlite_task_repo import SQLiteTaskRepository
+    from src.infrastructure.repositories.sqlite_session_repo import SQLiteSessionRepository
+    from src.infrastructure.repositories.sqlite_session_message_repo import (
+        SQLiteSessionMessageRepository,
+    )
+
+    bg_db = SAAsyncSession(async_engine)
+    bg_team_repo = SQLiteTeamRepository(bg_db)
+    bg_agent_repo = SQLiteAgentRepository(bg_db)
+    bg_task_repo = SQLiteTaskRepository(bg_db)
+    bg_session_repo = SQLiteSessionRepository(bg_db)
+    bg_message_repo = SQLiteSessionMessageRepository(bg_db)
+
+    bg_event_emitter = request.app.state.event_service
+    bg_tool_registry = create_tool_registry()
+    bg_llm_provider = get_llm_provider()
+    bg_llm_settings = get_llm_settings()
+
+    return TeamExecutionUseCase(
+        team_repo=bg_team_repo,
+        agent_repo=bg_agent_repo,
+        task_repo=bg_task_repo,
+        session_repo=bg_session_repo,
+        message_repo=bg_message_repo,
+        tool_registry=bg_tool_registry,
+        llm_provider=bg_llm_provider,
+        event_emitter=bg_event_emitter,
+        loop_runner_factory=None,  # 使用内部 fallback 创建
+        default_model=bg_llm_settings.default_model,
+    )

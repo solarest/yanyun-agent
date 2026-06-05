@@ -82,6 +82,12 @@ class SendMessageUseCase:
         parent_system_prompt: Optional[str] = None,
         sub_task: Optional[Task] = None,
         allowed_tools: Optional[list[str]] = None,
+        # Team mode 参数
+        team_mode: bool = False,
+        team_id: Optional[str] = None,
+        team_role: Optional[str] = None,
+        team_message_bus: Any = None,
+        leader_agent_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """执行发送消息流程
 
@@ -185,6 +191,11 @@ class SendMessageUseCase:
                     allowed_tools=allowed_tools,
                     persist_session_messages=persist_session_messages,
                     send_message_use_case=self,
+                    team_mode=team_mode,
+                    team_id=team_id,
+                    team_role=team_role,
+                    team_message_bus=team_message_bus,
+                    leader_agent_id=leader_agent_id,
                 )
             )
             self.running_tasks[task.id] = asyncio_task

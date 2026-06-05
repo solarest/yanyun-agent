@@ -115,6 +115,11 @@ def init_db():
         SkillModel,
         MemoryModel,
     )
+    from src.infrastructure.database.models.team_model import (  # noqa: F401
+        TeamModel,
+        TeamMemberModel,
+        TeamMessageModel,
+    )
 
     # 启用 WAL 模式（必须在任何写入之前执行）
     _init_wal()
