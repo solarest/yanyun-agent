@@ -13,8 +13,6 @@ import uuid
 from datetime import datetime
 from typing import Any, Optional
 
-from src.domain.team.entity import Team
-from src.domain.team.member import TeamMember
 from src.domain.team.repository import ITeamRepository
 from src.domain.team.values import TeamRole, TeamStatus
 from src.domain.team.orchestrator import TeamOrchestrator
@@ -261,11 +259,9 @@ class TeamExecutionUseCase:
         if self._loop_runner_factory:
             return self._loop_runner_factory()
         # Fallback: create from dependencies
-        from sqlalchemy.ext.asyncio import AsyncSession as SAAsyncSession
         from src.application.services.agent_loop_runner import AgentLoopRunner
         from src.application.services.task_completion_service import TaskCompletionService
         from src.infrastructure.agent.prompt_context_impl import PromptContextImpl
-        from src.infrastructure.database.session import async_engine
         from src.infrastructure.repositories.sqlite_task_repo import SQLiteTaskRepository
         from src.infrastructure.repositories.sqlite_session_repo import SQLiteSessionRepository
         from src.infrastructure.repositories.sqlite_session_message_repo import (

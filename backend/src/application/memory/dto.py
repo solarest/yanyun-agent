@@ -1,6 +1,5 @@
 """应用层 - Memory DTO"""
 
-from datetime import datetime
 from typing import Optional
 
 from pydantic import BaseModel, Field

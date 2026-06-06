@@ -184,7 +184,6 @@ async def assign_team_task(
     )
 
     # ── 同步启动 member agent loop ──
-    import asyncio as aio
     from datetime import datetime as dt
     from src.domain.aggregates.task.task import Task, TaskConfig, TaskStatus
     from src.application.services.agent_loop_runner import AgentLoopRunner

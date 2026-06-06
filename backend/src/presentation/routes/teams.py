@@ -1,10 +1,8 @@
 """表现层 - Team CRUD 与执行路由"""
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from src.domain.team.entity import Team
-from src.domain.team.member import TeamMember
 from src.application.team.dto import (
     CreateTeamDTO,
     UpdateTeamDTO,
@@ -22,11 +20,7 @@ from src.application.team.management import (
     AgentNotFoundError,
 )
 from src.presentation.dependencies import (
-    get_async_db,
-    get_agent_repository,
-    get_team_repository,
     get_team_management_use_case,
-    get_team_execution_use_case,
 )
 
 router = APIRouter(prefix="/api/teams", tags=["teams"])

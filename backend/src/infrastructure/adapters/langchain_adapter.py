@@ -6,7 +6,6 @@ LangChain 属于外部框架，其类型只应在基础设施层出现。
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from src.domain.interfaces.llm_provider import ILLMProvider
 from src.domain.repositories.tool_registry import IToolRegistry
 
 

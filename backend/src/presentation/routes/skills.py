@@ -9,9 +9,8 @@ from src.application.dtos.skill_dto import (
 )
 from src.application.skills.management import SkillManagementUseCase, SkillNotFoundError
 from src.application.skills.upload import SkillUploadError, SkillUploadService
-from src.domain.skills import SkillDef, ISkillRepository
+from src.domain.skills import SkillDef
 from src.presentation.dependencies import (
-    get_skill_repository,
     get_skill_management_use_case,
     get_skill_upload_service,
 )

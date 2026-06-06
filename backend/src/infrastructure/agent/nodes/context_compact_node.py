@@ -19,7 +19,6 @@ import logging
 from typing import Any
 
 from langchain_core.messages import (
-    AIMessage,
     HumanMessage,
     RemoveMessage,
     SystemMessage,
@@ -30,7 +29,6 @@ from langgraph.types import RunnableConfig
 from src.domain.aggregates.agent.agent_state import AgentState
 from src.domain.entities.event_types import AgentEventType
 from src.domain.services.token_utils import (
-    count_tokens,
     estimate_context_tokens,
     render_message,
 )

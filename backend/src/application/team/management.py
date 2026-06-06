@@ -159,7 +159,6 @@ class TeamManagementUseCase:
                 await self._team_repo.add_member(member)
 
             # 移除旧成员（保留 leader）
-            leader_member = await self._team_repo.get_member(team_id, team.leader_id)
             for agent_id in current_agent_ids - new_agent_ids:
                 if agent_id != team.leader_id:
                     await self._team_repo.remove_member(team_id, agent_id)
@@ -186,6 +185,7 @@ class TeamManagementUseCase:
 
 class TeamNotFoundError(Exception):
     """Team 不存在"""
+
     def __init__(self, team_id: str) -> None:
         self.team_id = team_id
         super().__init__(f"Team '{team_id}' not found")
@@ -193,6 +193,7 @@ class TeamNotFoundError(Exception):
 
 class DuplicateTeamNameError(Exception):
     """Team 名称重复"""
+
     def __init__(self, name: str) -> None:
         self.name = name
         super().__init__(f"Team name '{name}' already exists")
@@ -200,6 +201,7 @@ class DuplicateTeamNameError(Exception):
 
 class AgentNotFoundError(Exception):
     """Agent 不存在"""
+
     def __init__(self, agent_id: str) -> None:
         self.agent_id = agent_id
         super().__init__(f"Agent '{agent_id}' not found")

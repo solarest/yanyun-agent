@@ -1,6 +1,6 @@
 """CostTracker 值对象 — 追踪 LLM 调用的 token 消耗和成本。"""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict
 
 
