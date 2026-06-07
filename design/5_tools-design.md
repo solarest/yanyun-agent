@@ -1,5 +1,7 @@
 # 1.4 Tools 模块技术方案
 
+> **一句话总结**: Tools 模块提供声明式工具定义（@tool 装饰器）、统一注册发现（ToolRegistry）和管道式执行（Security→RateLimit→Timeout→Sandbox→Invoke），支撑 Agent 的工具调用全生命周期。
+
 ## 1. 范围
 
 本模块负责 Agent 工具系统的完整框架设计与实现，提供统一的工具定义、注册、发现和执行机制：
@@ -7,7 +9,7 @@
 - **工具定义框架**：基于装饰器的工具声明式定义（参数 Schema、功能描述）
 - **工具注册中心**：统一的工具注册表，支持动态注册和发现
 - **工具执行管道**：安全检查 → 限流 → 超时控制 → 沙箱隔离 → 执行 → 结果返回
-- **内置工具实现**：web_search、file（读写搜索）、clarify（澄清提问）、plan（任务规划）
+- **内置工具实现**：web_search、file（读写搜索grep）、shell、clarify、web_fetch、session_spawn、task_create/task_update、team_tools
 - **扩展机制**：MCP 集成、Skills 系统、Sub-Agent 委派的工具化封装
 
 **不包含**：
@@ -396,7 +398,7 @@ class RegisteredTool:
         """转换为 ToolDef 实体（供 Prompt Builder 使用）
         
         Returns:
-            与 1.2_prompt-builder.md 定义的 ToolDef 结构对齐
+            与 2_prompt-builder.md 定义的 ToolDef 结构对齐
         """
         return ToolDef(
             name=self.name,

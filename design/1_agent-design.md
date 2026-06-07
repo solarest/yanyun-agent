@@ -1,5 +1,7 @@
 # 1.1 Agent 定义模块技术方案
 
+> **一句话总结**: 基于 DDD 分层架构和 OpenClaw 七文件模式，实现 Agent 定义的 CRUD 管理，包括基本信息、性格标签（vibes）和七个 Markdown 配置文件的存储、版本控制与提示词组装。
+
 ## 1. 范围
 
 本模块负责 Agent 定义文件的管理，聚焦于 Agent 的定义域（静态配置），不涉及运行域（动态执行）内容。
@@ -31,14 +33,62 @@
 ### 2.1 主流程
 
 ```
-用户操作 → 前端界面 → API 调用 → 后端路由 → DTO 验证 → Repository → 数据库
-                                                    ↓
-                                                领域实体处理
-                                                    ↓
-                                                返回响应 → 前端展示
+用户操作 → 前端界面 → API 调用 → 后端路由 → DTO 验证 → UseCase 编排 → Repository → 数据库
+                                                         ↓
+                                                     领域实体处理
+                                                         ↓
+                                                     返回响应 → 前端展示
 ```
 
-### 2.2 模块设计
+### 2.2 整体架构
+
+```mermaid
+flowchart TB
+    subgraph Presentation["表现层 Presentation"]
+        FE["React 前端页面<br/>AgentManagementPage / AgentEditPage"]
+        API["FastAPI 路由<br/>routes/agents.py"]
+    end
+
+    subgraph Application["应用层 Application"]
+        UC["AgentManagementUseCase<br/>编排 CRUD + 业务校验"]
+        DTO["DTO 定义<br/>agent_dto.py"]
+    end
+
+    subgraph Domain["领域层 Domain"]
+        Entity["Agent 实体<br/>domain/agent/entity.py"]
+        RepoIF["IAgentRepository 接口<br/>domain/agent/repository.py"]
+        Base["Entity 基类<br/>domain/entities/base.py"]
+    end
+
+    subgraph Infrastructure["基础设施层 Infrastructure"]
+        Model["AgentModel<br/>SQLAlchemy 模型"]
+        RepoImpl["SQLiteAgentRepository<br/>仓储实现"]
+        DB[("SQLite 数据库<br/>agents 表")]
+    end
+
+    subgraph ConfigFiles["OpenClaw 七文件配置"]
+        ID["IDENTITY.md"]
+        SO["SOUL.md"]
+        AG["AGENTS.md"]
+        BO["BOOTSTRAP.md"]
+        ME["MEMORY.md"]
+        TO["TOOLS.md"]
+        US["USER.md"]
+    end
+
+    FE -->|HTTP| API
+    API -->|依赖注入| UC
+    UC -->|使用| RepoIF
+    UC -->|操作| Entity
+    Entity -->|继承| Base
+    RepoIF -->|实现| RepoImpl
+    RepoImpl -->|ORM| Model
+    Model -->|映射| DB
+    Entity -->|包含| ConfigFiles
+    DTO -->|验证输入| API
+```
+
+### 2.3 模块设计
 
 按照 DDD 分层架构设计：
 
@@ -48,12 +98,15 @@
 └── 前端：React 页面 (presentation/pages/, presentation/components/)
 
 应用层 (Application)
-└── DTO 定义 (application/dtos/agent_dto.py)
+├── Agent 管理用例 (application/agent/management.py — AgentManagementUseCase)
+├── DTO 定义 (application/dtos/agent_dto.py)
+└── 业务异常 (AgentNotFoundError, DuplicateAgentNameError)
 
 领域层 (Domain)
-├── Agent 实体 (domain/entities/agent.py)
-├── Repository 接口 (domain/repositories/agent_repository.py)
-└── 配置服务 (domain/services/agent_config_service.py)
+├── Entity 基类 (domain/entities/base.py — Entity)
+├── Agent 实体 (domain/agent/entity.py — Agent)
+├── Repository 接口 (domain/agent/repository.py — IAgentRepository)
+└── 兼容 shim (domain/aggregates/agent/agent.py, domain/repositories/agent_repository.py)
 
 基础设施层 (Infrastructure)
 ├── SQLAlchemy 模型 (infrastructure/database/models/agent_model.py)
@@ -75,7 +128,7 @@
 
 #### 2.3.1 Agent 信息管理模块
 
-**职责**：管理 Agent 的基本信息（名称、描述、头像、vibe）
+**职责**：管理 Agent 的基本信息（名称、描述、vibe 标签）
 
 **功能**：
 - Agent 创建、更新、删除、查询

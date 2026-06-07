@@ -1,14 +1,20 @@
 # 7. LLM 适配器设计
 
-> 最后更新: 2026-05-31 (对照实际代码更新)
+> **一句话总结**: LLM 适配层通过 Provider 接口 + 工厂模式 + 注册表单例，统一封装 8 种大模型提供商（OpenAI、Anthropic、DeepSeek、Qwen、智谱、Groq、Ollama、Azure）的调用差异，并以 LangChain 回调管道实现 Token 计数、成本追踪和完整调用日志。
+
+> 最后更新: 2026-06-07 (对照实际代码更新)
 >
 > 对应 `0_outline.md` 第 2 章
 >
 > 实际代码路径:
-> - `backend/src/domain/value_objects/llm_config.py` -- LLMConfig, LLMProvider 枚举
-> - `backend/src/domain/interfaces/llm_provider.py` -- ILLMProvider 接口
-> - `backend/src/domain/interfaces/llm_error_handler.py` -- ILLMErrorHandler, LLMErrorHandlerRegistry
-> - `backend/src/infrastructure/llm/model_factory.py` -- create_chat_model(), _infer_provider()
+> - `backend/src/domain/agent_loop/llm_config.py` -- LLMConfig, LLMProvider 枚举, LLM_PROVIDER_MODELS (真实定义)
+> - `backend/src/domain/agent_loop/llm_provider.py` -- ILLMProvider 接口 (真实定义)
+> - `backend/src/domain/agent_loop/llm_error_handler.py` -- ILLMErrorHandler, LLMErrorHandlerRegistry (真实定义)
+> - `backend/src/domain/value_objects/llm_config.py` -- shim re-export (from domain.agent_loop)
+> - `backend/src/domain/interfaces/llm_provider.py` -- shim re-export (from domain.agent_loop)
+> - `backend/src/domain/interfaces/llm_error_handler.py` -- shim re-export (from domain.agent_loop)
+> - `backend/src/domain/exceptions.py` -- LLMError, LLMTimeoutError, LLMRateLimitError, LLMProviderNotSupportedError
+> - `backend/src/infrastructure/llm/model_factory.py` -- create_chat_model(), _infer_provider(), _build_model_with_middleware()
 > - `backend/src/infrastructure/llm/providers/registry.py` -- ProviderRegistry (单例)
 > - `backend/src/infrastructure/llm/providers/base.py` -- ProviderAdapter 协议
 > - `backend/src/infrastructure/llm/providers/openai_provider.py` -- OpenAICompatibleProvider
@@ -22,6 +28,110 @@
 ## 架构概述
 
 统一的 LLM 调用接口，封装不同大模型厂商的 API。
+
+### 整体架构图
+
+```mermaid
+flowchart TB
+    subgraph 应用层
+        A[Agent Loop / 应用服务]
+    end
+
+    subgraph 领域层
+        B[ILLMProvider 接口]
+        C[LLMConfig 值对象]
+        D[LLMProvider 枚举]
+        E[ILLMErrorHandler 接口]
+        F[LLMErrorHandlerRegistry 职责链]
+    end
+
+    subgraph 基础设施层 - LLM 适配
+        G[LLMProviderImpl]
+        H["create_chat_model() 工厂"]
+        I["_infer_provider() 推断"]
+        J[ProviderRegistry 单例]
+        K[OpenAICompatibleProvider]
+        L[AnthropicProvider]
+    end
+
+    subgraph 基础设施层 - 回调管道
+        M[LLMUsageCallbackHandler]
+        N[LLMCallLogger]
+        O["calculate_cost() 成本计算"]
+    end
+
+    subgraph 基础设施层 - 错误处理
+        P[ContextLimitErrorHandler]
+        Q[TimeoutErrorHandler]
+        R[DefaultErrorHandler]
+    end
+
+    subgraph 外部 SDK
+        S[ChatOpenAI / ChatDeepSeek]
+        T[ChatAnthropic]
+    end
+
+    A --> B
+    B --> G
+    G --> H
+    H --> I
+    H --> J
+    J --> K
+    J --> L
+    H --> M
+    H --> N
+    M --> O
+    K --> S
+    L --> T
+    C --> H
+    D --> C
+
+    A --> F
+    F --> P
+    F --> Q
+    F --> R
+```
+
+### LLM 调用时序图
+
+```mermaid
+sequenceDiagram
+    participant App as 应用层
+    participant Impl as LLMProviderImpl
+    participant Factory as create_chat_model
+    participant Infer as _infer_provider
+    participant Registry as ProviderRegistry
+    participant Adapter as ProviderAdapter
+    participant SDK as LangChain SDK
+    participant CB1 as LLMUsageCallbackHandler
+    participant CB2 as LLMCallLogger
+
+    App->>Impl: create_chat_model(model, temp, provider)
+    Impl->>Factory: 委托调用
+    Factory->>Factory: 加载 LLMSettings 默认值
+    alt provider 未指定
+        Factory->>Infer: _infer_provider(model)
+        Infer-->>Factory: 返回提供商名称
+    end
+    Factory->>Factory: 构建 LLMConfig
+    Factory->>Registry: get_instance().get_adapter(config)
+    Registry-->>Factory: 返回匹配的 Adapter
+    Factory->>Adapter: create_model(config)
+    Adapter-->>Factory: 返回 BaseChatModel
+    Factory->>CB1: 创建 LLMUsageCallbackHandler
+    Factory->>CB2: 创建 LLMCallLogger
+    Factory->>Factory: model.callbacks = [CB1, CB2]
+    Factory-->>Impl: 返回带回调的 ChatModel
+    Impl-->>App: 返回 ChatModel
+
+    App->>SDK: model.ainvoke(messages, config)
+    SDK->>CB2: on_chat_model_start (记录请求)
+    SDK->>SDK: 发起 HTTP API 调用
+    SDK->>CB1: on_llm_end (提取 token_usage)
+    CB1->>CB1: calculate_cost() 累计成本
+    SDK->>CB2: on_llm_end (记录响应)
+    SDK-->>App: 返回 AIMessage
+```
 
 ## 目录结构
 

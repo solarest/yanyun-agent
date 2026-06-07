@@ -1,6 +1,8 @@
 # 1.3 Agent-Loop 详细设计
 
-> 最后更新: 2026-05-31 (上下文管理重构完成)
+> **一句话总结**: 基于 LangGraph 的 4 节点 ReAct 执行引擎，以 context_compact 为入口守门，通过 loop_detect 前置拦截和 4 级 token 水位压缩实现可靠的自主推理循环。
+
+> 最后更新: 2026-06-07 (文档校审与代码同步)
 
 ## 1. 概述
 
@@ -39,7 +41,7 @@
 
 **当前已实现**：
 - ✅ 4 个 LangGraph 核心节点（context_compact、llm_call、loop_detect、tool_execute），入口为 context_compact
-- ✅ 完整 AgentState TypedDict（~40 个字段，含上下文管理、Sub-Agent 支持等）
+- ✅ 完整 AgentState TypedDict（~40 个字段，含上下文管理、Sub-Agent 支持等，纯领域层无框架依赖）
 - ✅ 精简路由逻辑（3 个路由函数，纯判定不修改 state）
 - ✅ SSE 事件发射框架（IEventEmitter 抽象）
 - ✅ 结构化日志（Node 级/LLM 调用/工具调用三级日志）
@@ -1137,7 +1139,11 @@ current_tokens > int(max_context_tokens * 0.4)
 ```python
 head = content[:4000]
 tail = content[-4000:]
-pruned_content = f”{head}\n\n[... tool result soft-pruned; middle omitted ...]\n\n{tail}”
+pruned_content = f”{head}
+
+[... tool result soft-pruned; middle omitted ...]
+
+{tail}”
 # 使用相同 msg_id 构造 ToolMessage，LangGraph add_messages reducer 自动替换
 ```
 
@@ -1548,12 +1554,21 @@ Be concise but preserve critical context. Output only the summary.
 ```
 backend/src/
 ├── domain/
-│   ├── aggregates/agent/agent_state.py          # AgentState TypedDict
-│   ├── services/
+│   ├── agent_loop/                              # Agent Loop 领域核心模块（真实定义位置）
+│   │   ├── state.py                             # AgentState TypedDict（纯领域，无框架依赖）
+│   │   ├── agent_routing.py                     # 路由函数（route_after_llm / loop_detect / tool_execute）
 │   │   ├── token_utils.py                       # Token 估算、模型窗口解析、超限识别
-│   │   └── agent_routing.py                     # 路由函数（route_after_llm / loop_detect / tool_execute）
+│   │   ├── llm_error_handler.py                 # LLM 错误处理器接口（ILLMErrorHandler + Registry）
+│   │   ├── event_emitter.py                     # 事件发射器实现
+│   │   ├── prompt_assemble_service.py           # Prompt 组装服务
+│   │   └── sub_agent_orchestrator.py            # Sub-Agent 编排器
+│   ├── aggregates/agent/
+│   │   └── agent_state.py                       # AgentState re-export（向后兼容）
+│   ├── services/
+│   │   ├── token_utils.py                       # Shim: re-export from agent_loop
+│   │   └── agent_routing.py                     # Shim: re-export from agent_loop
 │   └── interfaces/
-│       └── llm_error_handler.py                 # LLM 错误处理器接口（ILLMErrorHandler + Registry）
+│       └── llm_error_handler.py                 # Shim: re-export from agent_loop
 ├── infrastructure/agent/
 │   ├── nodes/
 │   │   ├── llm_call_node.py                     # LLM 调用节点（含 baseline 校准 + 错误委托）
@@ -1574,7 +1589,7 @@ backend/src/
 
 | Prompt 名称 | 使用节点 | 模板位置 |
 |------------|---------|---------|
-| LLM 主调用 Prompt | llm_call_node | PromptBuilder (1.2_prompt-builder.md) |
+| LLM 主调用 Prompt | llm_call_node | PromptBuilder (2_prompt-builder.md) |
 | Loop 纠正 Prompt (模式循环) | loop_detect_node | 6 节 |
 | Loop 纠正 Prompt (无效工具调用) | loop_detect_node | 6 节 |
 | 上下文压缩 Prompt | context_compact_node | 6.3 节 |

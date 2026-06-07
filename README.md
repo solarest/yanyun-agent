@@ -54,10 +54,10 @@ graph TB
 
 ### 1. Agent 核心
 
-- **Agent 定义**（OpenClaw 七文件）：`IDENTITY / SOUL / AGENTS / BOOTSTRAP / MEMORY / TOOLS / USER`，将身份、人格、SOP、工具授权、用户画像等显式配置化 — 详见 [1.1_agent-design.md](design/1.1_agent-design.md)
-- **Prompt Builder**：分层构建、Schema 约束、动态组装、Prompt 缓存边界 — 详见 [1.2_prompt-builder.md](design/1.2_prompt-builder.md)
-- **Agent Loop**：基于 LangGraph 的 ReAct 循环，包含上下文管理（4 级 Token 水位压缩）、Checkpoint/Resume、Cancel 处理、LLM 错误处理工厂、Harness 兜底 — 详见 [1.3_agent-loop-design.md](design/1.3_agent-loop-design.md) 和 [1.3.1_context-management.md](design/1.3.1_context-management.md)
-- **Tools**：工具注册与发现、Web Search / Web Fetch / File / Clarify / Plan、MCP 集成、Skills 系统、Sub-Agent，附带超时、沙箱、限流 — 详见 [1.4_tools-design.md](design/1.4_tools-design.md) 和 [skills-module-design.md](design/skills-module-design.md)
+- **Agent 定义**（OpenClaw 七文件）：`IDENTITY / SOUL / AGENTS / BOOTSTRAP / MEMORY / TOOLS / USER`，将身份、人格、SOP、工具授权、用户画像等显式配置化 — 详见 [1_agent-design.md](design/1_agent-design.md)
+- **Prompt Builder**：分层构建、Schema 约束、动态组装、Prompt 缓存边界 — 详见 [2_prompt-builder.md](design/2_prompt-builder.md)
+- **Agent Loop**：基于 LangGraph 的 ReAct 循环，包含上下文管理（4 级 Token 水位压缩）、Checkpoint/Resume、Cancel 处理、LLM 错误处理工厂、Harness 兜底 — 详见 [3_agent-loop-design.md](design/3_agent-loop-design.md) 和 [4_context-management.md](design/4_context-management.md)
+- **Tools**：工具注册与发现、Web Search / Web Fetch / File / Clarify / Plan、MCP 集成、Skills 系统、Sub-Agent，附带超时、沙箱、限流 — 详见 [5_tools-design.md](design/5_tools-design.md) 和 [6_skills-design.md](design/6_skills-design.md)
 - **Memory**：本地记忆系统、Daily / Dream Memory、重要性评分、情景/语义记忆
 - **Multi-Agent**：Supervisor 模式、Agent 注册发现、编排协作
 
@@ -138,14 +138,14 @@ npm run build
 | 文档 | 说明 |
 |------|------|
 | [design/0_outline.md](design/0_outline.md) | 系统架构总览与模块划分 |
-| [design/1.1_agent-design.md](design/1.1_agent-design.md) | Agent 定义设计 |
-| [design/1.2_prompt-builder.md](design/1.2_prompt-builder.md) | Prompt 组装架构 |
-| [design/1.3_agent-loop-design.md](design/1.3_agent-loop-design.md) | Agent Loop 工作流设计 |
-| [design/1.3.1_context-management.md](design/1.3.1_context-management.md) | 上下文管理（4 级 Token 水位压缩） |
-| [design/1.4_tools-design.md](design/1.4_tools-design.md) | 工具系统设计 |
+| [design/1_agent-design.md](design/1_agent-design.md) | Agent 定义设计 |
+| [design/2_prompt-builder.md](design/2_prompt-builder.md) | Prompt 组装架构 |
+| [design/3_agent-loop-design.md](design/3_agent-loop-design.md) | Agent Loop 工作流设计 |
+| [design/4_context-management.md](design/4_context-management.md) | 上下文管理（4 级 Token 水位压缩） |
+| [design/5_tools-design.md](design/5_tools-design.md) | 工具系统设计 |
 | [design/7_llm-adaptor.md](design/7_llm-adaptor.md) | LLM 适配层设计 |
 | [design/8_communication-protocol.md](design/8_communication-protocol.md) | SSE 通信协议设计 |
-| [design/skills-module-design.md](design/skills-module-design.md) | Skills 系统设计 |
+| [design/6_skills-design.md](design/6_skills-design.md) | Skills 系统设计 |
 | [docs/langgraph-workflow.md](docs/langgraph-workflow.md) | LangGraph 工作流实现说明 |
 
 ## 🤝 贡献

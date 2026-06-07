@@ -1,8 +1,10 @@
 # wordlight-agent 项目大纲
 
+> **一句话总结**: WordLight Agent 是一个基于 LangGraph + DDD 架构的智能代理平台，支持多 Agent 协作、工具编排、记忆系统和 SSE 流式通信，提供完整的 Agent 生命周期管理能力。
+
 > **实现状态图例**: ✅ 已实现 | 🚧 部分实现 | ❌ 未实现
 >
-> 最后更新: 2026-05-31
+> 最后更新: 2026-06-07
 
 ## 系统架构总览
 
@@ -106,11 +108,13 @@ graph LR
 
 ---
 
-## 1. agent 🚧 部分实现
+## 1. Agent 核心模块 🚧 部分实现
 
-### 1.1 agent 定义 🚧
+> 本模块是系统的核心，包含 Agent 定义、Prompt 构建、Agent Loop、工具系统和记忆系统等子模块。采用 DDD 架构，领域层定义核心实体和接口，基础设施层提供具体实现。
 
-> 详细技术方案：[1.1-agent-design.md](./1.1-agent-design.md)
+### 1.1 agent 定义 🚧 部分实现
+
+> 详细技术方案：[1_agent-design.md](./1_agent-design.md)
 
 采用 OpenClaw 模式，Agent 定义由七个配置文件组成：
 
@@ -163,11 +167,16 @@ graph LR
 
 ### 1.3 agent-loop ✅
 
+> 详细设计文档：[3_agent-loop-design.md](./3_agent-loop-design.md)
+
 - **核心循环** — Agent 思考-行动-观察的主循环 ✅
   - 说明：基于 LangGraph 实现状态机驱动的执行循环
   - 注意：状态管理清晰；支持中断与恢复；错误处理完善
 
 #### 1.3.1 context 管理 ✅ (2026-05-31 完成 4 级 Token 水位压缩)
+
+> 详细设计文档：[4_context-management.md](./4_context-management.md)
+
 - **裁剪策略** — 控制上下文长度
   - 说明：根据 Token 限制裁剪过长的对话历史
   - 注意：保留关键信息；优先保留最近对话；避免截断中间关键内容
@@ -206,6 +215,8 @@ graph LR
 
 ### 1.4 tools ✅ (核心工具全部实现)
 
+> 详细设计文档：[5_tools-design.md](./5_tools-design.md)
+
 - **工具注册与发现** — 工具的统一管理机制 ✅ (`ToolRegistry`)
   - 说明：工具注册表、能力描述、参数 Schema
   - 注意：遵循 DDD 架构，工具接口定义在领域层，实现在基础设施层
@@ -217,38 +228,46 @@ graph LR
 - **sub-agent** ✅ (`SubAgentOrchestrator`, `session_spawn` 工具)
 - **工具执行超时** ✅ (`ToolPolicy.timeout_ms`) | **沙箱执行** ✅ (`SandboxMiddleware`) | **调用限流** ✅ (`RateLimitMiddleware`)
 
-### 1.5 memory 系统 🚧 (仅 prompt injection 占位; 向量数据库/记忆评分未实现)
+### 1.5 memory 系统 🚧 (领域实体/服务/SQLite 存储已实现; 向量数据库/记忆整合未实现)
 
-- **本地记忆系统（存储+召回）** — Agent 的持久化记忆
-  - 说明：基于向量数据库的记忆存储和语义召回
+> 本模块提供 Agent 的持久化记忆能力，支持跨会话的上下文存储和检索。目前已实现基于 SQLite 的文本匹配搜索和重要性评分机制。
+
+- **本地记忆系统（存储+召回）** — Agent 的持久化记忆 ✅ (`SQLiteMemoryRepository`, `MemoryService`)
+  - 说明：基于 SQLite 的记忆存储和文本匹配搜索
   - 注意：存储格式统一；召回相关性排序；定期清理过期记忆
 
-- **daily memory** — 每日记忆汇总
+- **daily memory** — 每日记忆汇总 ❌
   - 说明：每天结束时自动汇总当天重要交互和决策
   - 注意：汇总质量评估；避免信息冗余；支持按需查询
 
-- **dream memory** — 深度记忆整合
+- **dream memory** — 深度记忆整合 ❌
   - 说明：定期对记忆进行深度整理和关联建立
   - 注意：整理频率合理设置；避免过度整理丢失细节；保留原始记忆
 
-- **记忆重要性评分** — 记忆优先级机制
-  - 说明：根据交互频率、交互深度、用户显式标记等维度评分
+- **记忆重要性评分** — 记忆优先级机制 ✅ (`MemoryEntry.compute_importance()`)
+  - 说明：根据访问频率、访问深度等维度评分
   - 注意：评分算法透明可调；高优先级记忆不被裁剪；衰减曲线可配置
 
-- **情景记忆与语义记忆** — 记忆类型区分
+- **情景记忆与语义记忆** — 记忆类型区分 ❌
   - 说明：区分"什么时间发生了什么"（情景）和"通用知识"（语义）
   - 注意：两种记忆分别存储和召回；语义记忆支持知识图谱关联
 
-- **记忆整合触发** — 整合时机与调度
+- **记忆整合触发** — 整合时机与调度 ❌
   - 说明：定义 dream memory 和 daily memory 的触发条件
   - 注意：避免高峰时段整合；支持手动触发；整合进度可观测
 
-### 1.6 multi-agent 系统 🚧 (sub-agent 委派已实现; Supervisor/注册发现未实现)
+### 1.6 multi-agent 系统 🚧 (sub-agent 委派已实现; Team 编排已实现; Supervisor/注册发现未实现)
 
-- **多 Agent 协作** 🚧 — sub-agent 委派 ✅ (`SubAgentOrchestrator`, `session_spawn`); 多 Agent 通信 ❌
-- **Supervisor 模式** ❌ | **Agent 注册与发现** ❌
+> 本模块提供多 Agent 协作能力，包括 Sub-Agent 委派和 Team 模式。Team 模式支持 Leader-Member 架构，通过消息总线协调多个 Agent 完成复杂任务。
 
-## 2. llm adaptor 🚧 (适配器/计费 ✅; 路由/降级/缓存 ❌)
+- **多 Agent 协作** 🚧 — sub-agent 委派 ✅ (`SubAgentOrchestrator`, `session_spawn`); Team 编排 ✅ (`TeamExecutionUseCase`, `TeamOrchestrator`); 多 Agent 通信 ✅ (`InProcessTeamMessageBus`)
+- **Supervisor 模式** 🚧 (Team Leader 模式已实现，通用 Supervisor 未实现) | **Agent 注册与发现** ❌
+
+## 2. LLM 适配层 🚧 (适配器/计费 ✅; 路由/降级/缓存 ❌)
+
+> 本模块负责与大模型的对接，提供统一的 LLM 调用接口、成本追踪和流式输出支持。目前已实现 OpenAI-compatible 和 Anthropic 两个 Provider。
+
+> 详细设计文档：[7_llm-adaptor.md](./7_llm-adaptor.md)
 
 - **大模型对接适配** ✅ — `LLMProvider` 接口, OpenAI-compatible + Anthropic providers
 - **计费与监控** ✅ — `CostTracker`, `LLMUsageCallbackHandler`, `calculate_cost()`
@@ -258,37 +277,55 @@ graph LR
 
 ## 3. 通信协议 🚧 (SSE/事件/Schema/重连 ✅; 背压 ❌)
 
+> 本模块负责前后端之间的实时通信，采用 SSE 协议实现流式事件推送。支持 31 种事件类型和断线重连机制。
+
+> 详细设计文档：[8_communication-protocol.md](./8_communication-protocol.md)
+
 - **SSE 实现** ✅ | **Schema/事件定义** ✅ (20+ event types) | **重连状态恢复** ✅ (`last-event-id`)
 - **流式背压** ❌ (无推送速率控制)
 
 ## 4. 配置管理 🚧 (环境变量/Pydantic ✅; 热更新/功能开关 ❌)
 
+> 本模块负责系统的配置管理，目前基于 Pydantic Settings 实现环境变量配置。
+
 - **环境变量** ✅ (`LLMSettings(BaseSettings)`) | **热更新** ❌ | **功能开关** ❌
 
 ## 5. 数据持久化 🚧 (RDB ✅; 向量数据库 ❌)
 
+> 本模块负责系统的数据持久化，目前使用 SQLAlchemy + SQLite 实现关系型存储。
+
 - **关系型数据库** ✅ (SQLAlchemy + SQLite) | **向量数据库** ❌
 
 ## 6. 错误处理 ✅ (基础异常层次/重试 ✅)
+
+> 本模块负责系统的异常处理和恢复机制，包括异常层次定义、统一错误响应和重试策略。
 
 - **异常层次** ✅ (`domain/exceptions.py`) | **错误响应** ✅ (统一 JSON 格式)
 - **重试策略** ✅ (`tenacity` 依赖)
 
 ## 7. 监控与日志 🚧 (结构化日志 ✅; 指标/追踪/仪表盘 ❌)
 
+> 本模块负责系统的可观测性，包括日志、指标和链路追踪三个维度。目前实现了分级结构化日志。
+
 - **结构化日志** ✅ (logger 分级) | **指标监控** ❌ (无 Prometheus)
 - **链路追踪** ❌ | **LangGraph 追踪** ❌ (无 LangSmith) | **成本仪表盘** ❌
 
 ## 8. 会话管理 ✅
+
+> 本模块负责会话的完整生命周期管理，包括创建、持久化、多轮对话上下文维护等。
 
 - **会话生命周期** ✅ | **会话持久化** ✅ | **多轮对话上下文** ✅
 - **会话事件溯源** 🚧 (事件通过 SSE 推送, 非持久化存储)
 
 ## 9. 安全防护 🚧 (工具级安全 ✅; 注入防护/内容过滤 ❌)
 
+> 本模块负责系统的安全防护，包括工具访问控制、Prompt 注入防护和内容安全过滤等。
+
 - **工具访问控制** ✅ (`SecurityMiddleware`: path validation, whitelist)
 - **Prompt 注入防护** ❌ | **内容安全过滤** ❌ | **API 安全** 🚧 (CORS ✅; JWT ❌)
 
 ## 10. 人机协作 (HITL) 🚧 (clarify ✅; 审批/干预/反馈 ❌)
+
+> 本模块负责人机协作交互，包括澄清中断、审批流程、手动干预和反馈闭环等能力。
 
 - **澄清中断** ✅ (`clarify` tool) | **审批流程** ❌ | **手动干预** ❌ (cancel ✅; pause/resume ❌) | **反馈闭环** ❌

@@ -1,6 +1,8 @@
 # Agent Loop 上下文管理设计
 
-> 最后更新: 2026-05-31
+> **一句话总结**: 上下文管理是 Agent Loop 的前置守门机制，通过 Baseline 感知的 Token 估算系统驱动 4 级渐进式压缩策略（skip → soft_prune → micro_compact → emergency_compact），确保每轮 LLM 调用前消息历史始终控制在模型上下文窗口安全水位内。
+
+> 最后更新: 2026-06-07
 
 ## 1. 概述
 
@@ -19,7 +21,7 @@
 
 上下文管理与 Agent Loop 主文档的关系：
 
-- [1.3_agent-loop-design.md](./1.3_agent-loop-design.md) 定义了完整的 Agent 执行循环（节点、路由、状态、可观测性），上下文管理是其 4 个核心节点之一。
+- [3_agent-loop-design.md](./3_agent-loop-design.md) 定义了完整的 Agent 执行循环（节点、路由、状态、可观测性），上下文管理是其 4 个核心节点之一。
 - 本文档聚焦于上下文管理的内部设计：Token 估算系统、4 级压缩策略、错误处理集成、路由配合。
 
 ### 1.3 核心设计原则
@@ -109,7 +111,7 @@ workflow.add_conditional_edges("tool_execute", route_after_tool_execute, {
 
 ## 3. Token 估算系统
 
-Token 估算系统位于 `domain/services/token_utils.py`，提供纯函数用于 Token 计数、消息渲染、上下文窗口解析和超限识别。
+Token 估算系统位于 `domain/agent_loop/token_utils.py`（通过 `domain/services/token_utils.py` shim re-export），提供纯函数用于 Token 计数、消息渲染、上下文窗口解析和超限识别。
 
 ### 3.1 `count_tokens()` -- 字符级 Token 估算
 

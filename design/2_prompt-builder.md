@@ -1,16 +1,20 @@
 # 1.2 Prompt Builder 技术方案
 
-> 最后更新: 2026-05-31 (对照实际代码更新)
+> **一句话总结**: Prompt Builder 是纯领域层模块，负责将 Agent 7 文件静态内容与运行时动态上下文按 11 层 Schema 组装为 LLM system_message，通过条件注入机制按需装配 8 大行为准则、工具清单、技能指令等，并提供 PromptContextInterface SPI 接口管理对话历史裁剪与消息数组构建。
+
+> 最后更新: 2026-06-07 (对照实际代码更新)
 >
 > 实际代码路径:
+> - `backend/src/domain/agent_loop/prompt_assemble_service.py` -- PromptAssembleService (组装逻辑真实位置)
+> - `backend/src/domain/services/prompt_assemble_service.py` -- Shim re-export (from agent_loop)
 > - `backend/src/domain/value_objects/prompt_template.py` -- PromptTemplate (frozen dataclass)
 > - `backend/src/domain/value_objects/prompt_assembly_result.py` -- PromptAssemblyResult (frozen dataclass)
-> - `backend/src/domain/services/prompt_assemble_service.py` -- PromptAssembleService (组装逻辑在此)
-> - `backend/src/domain/entities/tool/definition.py` -- ToolDef
-> - `backend/src/skills/skill_def.py` -- SkillDef
+> - `backend/src/domain/entities/tool/definition.py` -- ToolDef (shim re-export from domain/tools)
+> - `backend/src/domain/tools/entity.py` -- ToolDef (真实定义)
+> - `backend/src/domain/skills/entity.py` -- SkillDef (真实定义)
 > - `backend/src/domain/entities/conversation.py` -- ConversationMessage, MessageGroup, ToolCall
 > - `backend/src/domain/interfaces/prompt_context_interface.py` -- PromptContextInterface (SPI)
-> - `backend/src/domain/services/token_utils.py` -- count_tokens()
+> - `backend/src/domain/agent_loop/token_utils.py` -- count_tokens() (真实定义)
 
 ## 1. 范围
 
@@ -107,7 +111,7 @@ Prompt Builder 是一个**纯领域模块**，负责定义 Prompt 的完整结�
 #### 3.1.1 PromptTemplate（Prompt 模板）
 
 > **与 Agent 定义的关系**：PromptTemplate 的字段直接对应 Agent 实体的 OpenClaw 7 文件结构
-> （参见 [1.1-agent-design.md](./1.1-agent-design.md) 中的 Agent 领域实体定义）。
+> （参见 [1_agent-design.md](./1_agent-design.md) 中的 Agent 领域实体定义）。
 > 通过 `from_agent()` 工厂方法从 Agent 实体构造。
 >
 > **实现注记**: 实际代码中 PromptTemplate 是 `@dataclass(frozen=True)` 的**值对象**（非实体），

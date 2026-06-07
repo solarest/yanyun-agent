@@ -1,5 +1,7 @@
 # Skills 模块技术方案
 
+> **一句话总结**: Skills 模块采用 DDD 有界上下文设计，通过 ZIP 上传创建技能，自动解析 SKILL.md 提取元数据，并在对话时通过 Prompt Layer 8 `<active_skills>` 标签将选中的技能指令注入 LLM 系统提示词。
+
 ## 1. 范围
 
 本模块负责 **Skills（技能）的上传、维护和对话注入**，聚焦于以下领域：
@@ -31,60 +33,89 @@
 graph TB
     subgraph Presentation["表现层 (Presentation)"]
         API["API 路由<br/>routes/skills.py"]
-        FE["前端组件<br/>SkillManagementPage<br/>SkillEditPage"]
+        FE["前端组件<br/>SkillManagementPage"]
     end
-    
+
     subgraph Application["应用层 (Application)"]
-        DTO["DTO 定义<br/>dtos/skill_dto.py"]
-        UseCase["应用服务<br/>use_cases/send_message.py<br/>(skills 注入)"]
+        UploadSvc["上传服务<br/>skills/upload.py<br/>SkillUploadService"]
+        MgmtSvc["管理服务<br/>skills/management.py<br/>SkillManagementUseCase"]
+        StorageSvc["存储服务<br/>skills/storage.py<br/>SkillStorageService"]
+        DTO["DTO 定义<br/>skills/dto.py"]
+        LoopRunner["Agent Loop 运行器<br/>services/agent_loop_runner.py<br/>(skills 注入)"]
     end
-    
-    subgraph Domain["领域层 (Domain)"]
-        Entity["领域实体<br/>entities/skill_def.py<br/>(已存在，需扩展)"]
-        RepoIF["Repository 接口<br/>repositories/skill_repository.py"]
+
+    subgraph Domain["领域层 (Domain - Skills 有界上下文)"]
+        Entity["领域实体<br/>skills/entity.py<br/>SkillDef + SkillStep"]
+        RepoIF["仓储接口<br/>skills/repository.py<br/>ISkillRepository"]
+        Parser["解析器<br/>skills/parser.py<br/>parse_skill_md()"]
+        PromptSvc["Prompt 组装服务<br/>agent_loop/prompt_assemble_service.py<br/>Layer 8 注入"]
     end
-    
+
     subgraph Infrastructure["基础设施层 (Infrastructure)"]
-        Model["数据库模型<br/>models/agent_model.py<br/>(新增 SkillModel)"]
-        RepoImpl["Repository 实现<br/>repos/sqlite_skill_repo.py"]
-        DB[(SQLite<br/>skills 表)]
+        Model["数据库模型<br/>models/agent_model.py<br/>SkillModel"]
+        RepoImpl["仓储实现<br/>skills/repository.py<br/>SQLiteSkillRepository"]
+        DB[("SQLite<br/>skills 表")]
+        Disk[("磁盘存储<br/>storage/skills/")]
     end
-    
+
     FE --> API
-    API --> DTO
-    DTO --> UseCase
-    UseCase --> Entity
-    UseCase --> RepoIF
+    API --> UploadSvc
+    API --> MgmtSvc
+    UploadSvc --> StorageSvc
+    UploadSvc --> Parser
+    UploadSvc --> RepoIF
+    MgmtSvc --> RepoIF
+    LoopRunner --> RepoIF
+    LoopRunner --> PromptSvc
     RepoIF -.实现.-> RepoImpl
     RepoImpl --> Model
     Model --> DB
+    StorageSvc --> Disk
 ```
 
-#### 2.1.2 Skills 上传主流程
+#### 2.1.2 Skills ZIP 上传主流程
 
 ```mermaid
 sequenceDiagram
     actor User as 用户
     participant FE as 前端
     participant API as API 路由
-    participant DTO as DTO 验证
-    participant Repo as SkillRepository
+    participant Upload as SkillUploadService
+    participant Storage as SkillStorageService
+    participant Parser as parse_skill_md
+    participant Repo as ISkillRepository
     participant DB as 数据库
 
-    User->>FE: 填写 Skill 信息 / 粘贴 SKILL.md 内容
-    FE->>API: POST /api/skills (CreateSkillDTO)
-    
-    API->>DTO: 验证请求参数
-    DTO->>DTO: 校验 name 唯一性约束
-    
-    alt 名称已存在
-        API-->>FE: 409 DUPLICATE_SKILL_NAME
-        FE-->>User: 显示名称冲突错误
-    else 验证通过
-        API->>Repo: 创建 Skill 实体并保存
+    User->>FE: 选择 ZIP 文件上传
+    FE->>API: POST /api/skills/upload (multipart/form-data)
+
+    API->>Upload: upload(zip_bytes)
+    Upload->>Storage: save_zip(zip_bytes)
+    Note over Storage: 验证大小/格式/安全性
+    Storage->>Storage: 查找并读取 SKILL.md
+    Storage-->>Upload: (dir_name, skill_md_content)
+
+    Upload->>Parser: parse_skill_md(content)
+    Parser-->>Upload: (name, description)
+
+    alt name 为空
+        Upload->>Storage: remove(dir_name)
+        Upload-->>API: SkillUploadError
+        API-->>FE: 400 UPLOAD_FAILED
+    else name 已存在
+        Upload->>Repo: get_by_name(name)
+        Repo-->>Upload: 已有记录
+        Upload->>Storage: remove(dir_name)
+        Upload-->>API: SkillUploadError
+        API-->>FE: 400 名称冲突
+    else 正常流程
+        Upload->>Repo: get_by_name(name)
+        Repo-->>Upload: None
+        Upload->>Repo: add(SkillDef)
         Repo->>DB: INSERT INTO skills
         DB-->>Repo: 返回记录
-        Repo-->>API: 返回 Skill 实体
+        Repo-->>Upload: SkillDef
+        Upload-->>API: SkillDef
         API-->>FE: 201 Created (SkillResponseDTO)
         FE-->>User: 显示创建成功
     end
@@ -98,7 +129,8 @@ sequenceDiagram
     participant FE as 前端
     participant API as /sessions/{id}/messages
     participant UseCase as SendMessageUseCase
-    participant SkillRepo as SkillRepository
+    participant Runner as AgentLoopRunner
+    participant SkillRepo as ISkillRepository
     participant Prompt as PromptAssembleService
     participant LLM as LLM Provider
 
@@ -107,11 +139,13 @@ sequenceDiagram
     FE->>API: POST (content + skill_ids)
     
     API->>UseCase: execute(message, skill_ids)
-    UseCase->>SkillRepo: 根据 skill_ids 查询 SkillDef 列表
-    SkillRepo-->>UseCase: 返回 [SkillDef, ...]
+    UseCase->>Runner: run(skill_ids=skill_ids)
+    Runner->>SkillRepo: get_by_ids(skill_ids)
+    SkillRepo-->>Runner: 返回 [SkillDef, ...]
     
-    UseCase->>Prompt: assemble(skills=[SkillDef, ...])
-    Note over Prompt: Layer 8: <active_skills> 注入
+    Runner->>Prompt: assemble(skills=skill_defs, ...)
+    Note over Prompt: Layer 4: _SKILL_USAGE 行为准则注入
+    Note over Prompt: Layer 8: <active_skills> 技能指令注入
     Prompt-->>UseCase: system_message (含 Skills 指令)
     
     UseCase->>LLM: 发送请求 (system_prompt + messages)

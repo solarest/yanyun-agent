@@ -1,8 +1,10 @@
 # 3. 通信协议设计
 
+> **一句话总结**: 基于 SSE + REST 混合架构的 Agent 流式通信协议，通过 9 大类 31 种事件类型、asyncio.Queue 内存广播与 SQLite 持久化双通道设计，实现 LLM 流式输出、工具调用可视化、断线重连补发的全链路可靠推送。
+
 > 对应 `0_outline.md` 第 3 章「通信协议」  
 > 参考研究：`research/frontend-interaction-design.md`（12 款主流 Coding Agent 前端交互分析）  
-> 最后更新: 2026-05-31 (对照实际代码更新)
+> 最后更新: 2026-06-07 (对照实际代码更新)
 
 ---
 
@@ -211,7 +213,7 @@ stateDiagram-v2
 
 ### 1.6 事件分类体系
 
-所有事件按职责分为 7 大类，共 21 种事件类型（定义于 `backend/src/domain/entities/event_types.py` 中的 `AgentEventType` 枚举）：
+所有事件按职责分为 9 大类，共 31 种事件类型（定义于 `backend/src/domain/agent_loop/event_types.py` 中的 `AgentEventType` 枚举）：
 
 ```
 AgentEvent
@@ -946,7 +948,7 @@ const useChat = ({ agentId, sessionId, ... }) => {
 
 | 维度 | 初始设计文档 | 当前实现 | 说明 |
 |------|-------------|----------|------|
-| 事件类型数 | 14 种 | 21 种（AgentEventType 枚举） | 新增多步骤、sub-agent、thinking chunk、task paused/resumed |
+| 事件类型数 | 14 种 | 31 种（AgentEventType 枚举） | 新增多步骤、sub-agent、thinking chunk、task paused/resumed、Team 协作事件 |
 | stuck:detected | 设计中有 | AgentEventType 中**未定义** | 未实现 |
 | tool:approval_request | 设计中有 | AgentEventType 中**未定义** | 未实现 |
 | 事件持久化 | 先持久化再推送 | 先持久化（锁内）再推送（锁外） | 推送不阻塞其他 emit |
@@ -967,7 +969,7 @@ const useChat = ({ agentId, sessionId, ... }) => {
 
 | 层 | 文件 | 说明 |
 |---|------|------|
-| 领域层 | `backend/src/domain/entities/event_types.py` | `AgentEventType` 枚举（21 种事件） |
+| 领域层 | `backend/src/domain/agent_loop/event_types.py` | `AgentEventType` 枚举（31 种事件） |
 | 领域层 | `backend/src/domain/entities/event.py` | `Event` 领域实体 |
 | 领域层 | `backend/src/domain/services/event_emitter.py` | `IEventEmitter` 接口 + `ProxyEventEmitter` |
 | 领域层 | `backend/src/domain/services/event_utils.py` | `normalize_event_type()` |
