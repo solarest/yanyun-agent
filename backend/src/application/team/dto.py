@@ -27,6 +27,10 @@ class ExecuteTeamDTO(BaseModel):
     model: Optional[str] = Field(default=None, description="LLM 模型")
     max_turns: int = Field(default=100, ge=1, le=500, description="最大轮次")
     workspace: str = Field(default="/tmp/team-workspace", description="工作目录")
+    session_id: Optional[str] = Field(
+        default=None,
+        description="会话 ID，用于澄清链路：用户回复后传入相同 session_id 以恢复上下文继续执行",
+    )
 
 
 class TeamMemberDTO(BaseModel):
@@ -70,6 +74,7 @@ class ExecuteTeamResponseDTO(BaseModel):
     """执行 Team 响应"""
     team_id: str
     execution_id: str
+    session_id: str = ""
     workspace: str = "/tmp/team-workspace"
     status: str = "started"
     message: str = "Team execution started"

@@ -224,11 +224,16 @@ async def execute_team(
     import uuid
     execution_id = f"team-{uuid.uuid4().hex[:12]}"
 
+    # 支持澄清链路：如果传入了 session_id，复用已有会话；否则使用 execution_id
+    leader_session_id = dto.session_id or execution_id
+
     # 后台异步执行
+    # 支持澄清链路：如果传入了 session_id，复用已有会话以保持上下文连续性
     asyncio.create_task(
         execution_uc.execute(
             team_id=team_id,
             goal=dto.goal,
+            session_id=leader_session_id,
             model=dto.model,
             max_turns=dto.max_turns,
             workspace=dto.workspace,
@@ -239,6 +244,7 @@ async def execute_team(
     return ExecuteTeamResponseDTO(
         team_id=team_id,
         execution_id=execution_id,
+        session_id=leader_session_id,
         workspace=dto.workspace,
         status="started",
         message=f"Team '{team.name}' execution started. Stream: /api/tasks/{execution_id}/stream",
