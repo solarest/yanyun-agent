@@ -1,7 +1,7 @@
 # 1.3 Agent-Loop 详细设计
 
 > **一句话总结**: 基于 LangGraph 的 4 节点 ReAct 执行引擎，以 context_compact 为入口守门，通过 loop_detect 前置拦截和 4 级 token 水位压缩实现可靠的自主推理循环。
-
+>
 > 最后更新: 2026-06-07 (文档校审与代码同步)
 
 ## 1. 概述
@@ -12,15 +12,15 @@
 
 1. **可靠的自驱循环**：Agent 能自主推理、调用工具、观察结果，直到任务完成
 2. **多层错误恢复**：HTTP 级重试、语义级自我纠正、边界级兜底策略
-3. **智能观察与检测**：Loop/Stuck 检测与自动恢复，防止死循环和卡住
+3. **智能观察与检测**：Loop 检测与自动恢复，防止死循环
 4. **高效上下文管理**：每轮 ReAct 前置上下文守门，支持 soft-prune、micro-compact、emergency-compact 多层压缩
 5. **完整的可观测性**：Node 级执行追踪、事件发射、结构化日志
 
 ### 1.2 设计原则
 
 | 原则 | 说明 |
-|------|------|
-| 纵深防御 | Loop/Stuck/超时/错误多层保护，任何一层失效都有下一层兜底 |
+| ------ | ------ |
+| 纵深防御 | Loop/超时/错误多层保护，任何一层失效都有下一层兜底 |
 | 语义恢复优先 | 遇到问题时优先通过 Prompt 引导模型自我纠正，而非直接终止 |
 | 可观测性内建 | 每个节点必须发射事件+记录日志，支持外部监控和调试 |
 | 路由极简 | 路由函数只做二元/三元判断，复杂评估在节点内完成 |
@@ -53,9 +53,7 @@
 **当前局限**：
 - Loop 检测仅基于工具调用模式（无法检测工具结果质量、空结果等问题）
 - Loop 检测在工具执行前进行（优势：提前拦截；限制：无法检查结果）
-- ~~Stuck 检测仅实现 MONOLOGUE 一种模式（连续无工具调用）~~ stuck_detect 节点已从主工作流中移除
 - ~~上下文压缩需要演进为 token 水位触发的多层策略~~ 已于 2026-05-31 完成重构
-- ~~完成检查已集成到 stuck_detect_node 中~~ stuck_detect 节点已移除
 - Runner 层 HTTP 重试依赖和错误处理已通过 LLMErrorHandlerRegistry 职责链增强
 - 无实时成本追踪
 
@@ -114,7 +112,7 @@ flowchart TD
 | **tool_execute → context_compact** | 工具执行完毕（无论有无结果） | 每轮 LLM 前先做上下文管理 |
 | **tool_execute → END** | awaiting_user_input=True | 等待用户确认 |
 
-> **拓扑变化（2026-05-31）**：`context_compact` 现在是整个工作流的入口节点，每轮 LLM 调用前都必须经过上下文守门。主循环为 `context_compact → llm_call → loop_detect → tool_execute → context_compact`。`stuck_detect` 节点已从主工作流中移除，其文本评估、完成验证等功能迁移至其他模块处理。
+> **拓扑变化（2026-05-31）**：`context_compact` 现在是整个工作流的入口节点，每轮 LLM 调用前都必须经过上下文守门。主循环为 `context_compact → llm_call → loop_detect → tool_execute → context_compact`。
 
 ### 2.3 三层防护架构
 
@@ -136,97 +134,25 @@ flowchart TD
 
 ### 3.1 状态字段定义
 
-```python
-"""领域层 - AgentState (LangGraph State)"""
+AgentState 是一个纯领域层的 TypedDict 数据结构（无框架依赖），用于在 LangGraph 节点间传递共享状态。约 40 个字段按职责分为以下类别：
 
-from typing import Annotated, Any, Dict, List, Optional
+**消息历史**：`messages` 字段使用 LangGraph 的 `add_messages` reducer 自动合并节点间消息变更。
 
-from typing_extensions import TypedDict
-from langgraph.graph.message import add_messages
+**任务上下文**（只读）：`task_id`、`workspace`、`user_message`、`task_start_message_count`、`model` 记录任务基本信息和当前使用的 LLM 模型名称（用于解析上下文窗口大小）。
 
+**控制流**：`current_turn`、`max_turns`、`phase`、`should_end`、`is_complete` 控制循环执行的生命周期。`phase` 记录当前阶段（idle/thinking/tool_executing/loop_correcting/context_compacting/complete），`should_end` 为 True 时路由到 END 终止节点。
 
-class AgentState(TypedDict):
-    """Agent 运行状态 — 在节点间传递的共享数据
+**工具调用**：`pending_tool_calls` 存储待执行的工具调用列表，`tool_results` 按 tool_call_id 索引执行结果，`awaiting_user_input` 标记需要用户确认的场景，`last_executed_tool_call_ids` 追踪上一轮执行的工具 ID。
 
-    这是纯数据结构定义，无框架依赖，符合 DDD 领域层规范。
-    LangGraph 的 StateGraph 使用此 TypedDict 作为状态传递。
-    """
+**Loop 检测器状态**：`loop_detection_count` 累计检测到循环的次数（达到 3 次触发终止），`loop_detected` 标记当前轮是否检测到循环，`loop_type` 记录循环类型（exact_tool_repeat / alternating_pattern / invalid_tool_call）。
 
-    # === 消息历史 (LangGraph 自动合并) ===
-    messages: Annotated[list, add_messages]
+**流式输出与深度思考**：`current_llm_text` 累积 LLM 流式输出的文本，`thinking_text` 存储 LLM 推理内容（如 DeepSeek reasoning_content），`empty_retry_count` 追踪空响应次数。
 
-    # === 任务上下文 ===
-    task_id: str
-    workspace: str
-    user_message: str
-    task_start_message_count: int
-    model: str
-    """LLM 模型名称（如 gpt-4, deepseek-v4-pro 等），用于解析上下文窗口"""
+**上下文管理**：`max_context_tokens` 为当前模型上下文窗口上限（由 `resolve_max_context_tokens()` 解析），`context_token_estimate` 为当前消息列表的 Token 估算值，`context_token_baseline` 和 `context_token_baseline_message_count` 用于基于 LLM usage 返回值的增量估算校准，`emergency_compact_requested` 和 `context_compaction_attempts` 用于紧急压缩流程控制，`last_context_strategy` 记录最近一次实际执行的压缩策略（skip/soft_prune/micro_compact/emergency_compact）。
 
-    # === 控制流 ===
-    current_turn: int
-    max_turns: int
-    phase: str
-    should_end: bool
-    is_complete: bool
+**结果与错误**：`final_result` 存储最终输出内容，`error` 存储错误信息。
 
-    # === 工具调用 ===
-    pending_tool_calls: List[Dict[str, Any]]
-    tool_results: Dict[str, Dict[str, Any]]
-    awaiting_user_input: bool
-    last_executed_tool_call_ids: List[str]
-
-    # === Loop 检测器状态 ===
-    loop_detection_count: int
-    loop_detected: bool
-    loop_type: Optional[str]
-
-    # === Stuck 检测器状态 ===
-    stuck_detection_count: int
-    stuck_detected: bool
-
-    # === 流式输出 ===
-    current_llm_text: str
-    empty_retry_count: int
-
-    # === 系统提示词 ===
-    system_prompt: str
-
-    # === 深度思考 ===
-    thinking_text: str
-    """LLM 深度思考/推理内容（如 DeepSeek reasoning_content）"""
-
-    # === 结果 ===
-    final_result: Optional[str]
-    error: Optional[str]
-
-    # === 压缩策略 ===
-    compression_strategy: Optional[str]
-    """context_compact 使用的压缩策略：trim / summarize"""
-
-    # === 上下文管理 ===
-    max_context_tokens: int
-    """当前模型上下文窗口 Token 数上限。由 resolve_max_context_tokens() 解析。"""
-    context_token_estimate: int
-    """当前 messages 的 Token 估算值"""
-    context_token_baseline: Optional[int]
-    """最近一次成功 LLM 调用返回的 prompt_tokens"""
-    context_token_baseline_message_count: int
-    """baseline 对应的消息数量，用于增量估算"""
-    context_compaction_attempts: int
-    """连续紧急压缩次数"""
-    emergency_compact_requested: bool
-    """LLM 调用发生上下文超限后置为 True"""
-    last_context_strategy: Optional[str]
-    """最近一次实际执行的压缩策略：skip / soft_prune / micro_compact / emergency_compact"""
-
-    # === Sub-Agent 状态 ===
-    is_sub_agent: bool
-    """是否为子Agent"""
-
-    parent_task_id: Optional[str]
-    """父Agent的task_id(子Agent用)"""
-```
+**Sub-Agent 支持**：`is_sub_agent` 和 `parent_task_id` 用于子 Agent 场景的父子关系追踪。
 
 ### 3.2 字段分组说明
 
@@ -237,7 +163,6 @@ class AgentState(TypedDict):
 | **控制流** | current_turn, phase, should_end, is_complete | llm_call, loop_detect | 控制循环执行 |
 | **工具调用** | pending_tool_calls, tool_results | llm_call, tool_execute | 工具调用生命周期 |
 | **Loop 检测** | loop_detection_count, loop_detected | loop_detect | Loop 检测状态 |
-| **Stuck 检测** | stuck_detection_count, stuck_detected | ~~stuck_detect（已从工作流中移除）~~ | Stuck 检测状态（字段保留用于全局纠正预算计算） |
 | **上下文管理** | compression_strategy, max_context_tokens, context_token_estimate, context_token_baseline, context_token_baseline_message_count, context_compaction_attempts, emergency_compact_requested, last_context_strategy | context_compact, llm_call | token 水位判断、usage 基准校准、紧急压缩 |
 
 ### 3.3 状态流转示例
@@ -322,99 +247,41 @@ sequenceDiagram
 - `phase` — 当前阶段
 
 **输出字段**（写入）：
-```python
-{
-    "messages": [AIMessage(content=full_text, tool_calls=tool_calls_list)],
-    "pending_tool_calls": [{"id": ..., "name": ..., "input": ...}],  # 可能包含不完整的工具调用
-    "last_executed_tool_call_ids": [],  # 清空上一轮工具 ID
-    "current_llm_text": full_text,
-    "thinking_text": thinking_text,     # LLM 深度思考/推理内容（如 DeepSeek reasoning_content）
-    "phase": "complete" if no_tool_calls else "thinking",
-    "current_turn": current_turn + 1,
-    "should_end": len(pending_tool_calls) == 0,  # 无 tool_calls 时完成
-    "is_complete": len(pending_tool_calls) == 0,
-    # Token 基准校准（如果提取到 prompt_tokens）
-    "context_token_baseline": prompt_tokens,
-    "context_token_baseline_message_count": message_count,
-    "context_token_estimate": prompt_tokens,
-}
-```
 
-**说明**：
-- `pending_tool_calls` 可能包含不完整的工具调用（缺少 name 或 id）
-- 这些无效工具调用会在 loop_detect 节点中被检测和处理
-- loop_detect 会识别"无效工具调用循环"并注入纠正反馈
+正常返回时，节点写入以下状态更新：
+
+- 将累积的流式文本和 tool_calls 列表组装为 AIMessage 追加到 messages
+- `pending_tool_calls` 记录待执行的工具调用列表（可能包含不完整的工具调用，如缺少 name 或 id，这些将在 loop_detect 节点中校验）
+- 清空 `last_executed_tool_call_ids` 以准备新一轮
+- `current_llm_text` 和 `thinking_text` 记录本轮输出文本和推理内容
+- `phase` 根据是否有 tool_calls 设为 "complete" 或 "thinking"
+- `current_turn` 递增 1；若无 tool_calls，则 `should_end` 和 `is_complete` 设为 True
+- Token 基准校准：从 LLM usage 提取 prompt_tokens 写入 `context_token_baseline` 和 `context_token_estimate`，同时记录对应的消息数量
 
 **异常处理**（写入）：
-```python
-# 异常委托给 LLMErrorHandlerRegistry（职责链模式）
-{
-    # ContextLimitErrorHandler:
-    "emergency_compact_requested": True,
-    "phase": "context_compacting",
-    "error": str(e),
-    # 不设置 should_end，给 context_compact 一次紧急压缩机会
 
-    # TimeoutErrorHandler:
-    "should_end": True,
-    "error": f"LLM streaming timed out after {llm_timeout_sec}s",
-    "messages": [AIMessage(content=full_text or "LLM call timed out.")],
-
-    # DefaultErrorHandler: re-raise，由 BaseNode._handle_error 兜底
-}
-```
-
-**Token 基准校准**（正常返回时写入）：
-```python
-# 从 AIMessageChunk.usage_metadata 提取 prompt_tokens
-{
-    "context_token_baseline": prompt_tokens,        # LLM 返回的真实 prompt_tokens
-    "context_token_baseline_message_count": message_count,  # 发送给 LLM 的消息数
-    "context_token_estimate": prompt_tokens,        # 与 baseline 同步
-}
-# 如果无法提取 prompt_tokens，则降级为全量 char/4 估算写入 context_token_estimate
-```
+异常委托给 LLMErrorHandlerRegistry（职责链模式），三类处理器的状态输出：
+- ContextLimitErrorHandler：设置 `emergency_compact_requested=True` 和错误信息，不设 should_end，给紧急压缩一次恢复机会
+- TimeoutErrorHandler：设置 `should_end=True` 并附带超时错误信息和已累积的文本作为 AIMessage
+- DefaultErrorHandler：重新抛出异常，由 BaseNode._handle_error 兜底处理
 
 #### 4.1.3 核心逻辑说明
 
 **1. 防御性 SystemMessage 注入**：
-```python
-if system_prompt and (not messages or not isinstance(messages[0], SystemMessage)):
-    messages = [SystemMessage(content=system_prompt)] + messages
-```
-- 确保消息头部始终有 SystemMessage
-- 避免重复注入（检查内容是否相同）
+
+在构建发送给 LLM 的消息列表前，检查消息头是否已有 SystemMessage。若存在 system_prompt 且消息列表为空或首条不是 SystemMessage，则在消息列表起始位置插入。同时检查内容是否相同以避免重复注入。
 
 **2. 流式调用聚合**：
-```python
-accumulated: AIMessageChunk | None = None
-async for chunk in llm.astream(messages):
-    if accumulated is None:
-        accumulated = chunk
-    else:
-        accumulated = accumulated + chunk  # LangChain 自动合并 tool_call_chunks
-```
-- 使用 AIMessageChunk 正确合并流式 tool_call_chunks
-- 避免手动拼接导致的工具调用信息丢失
+
+使用 `AIMessageChunk` 类型的累加器接收流式响应：初始为 None，收到第一个 chunk 时赋值，后续 chunk 通过 LangChain 的 `+` 操作符合并（该运算符自动处理 tool_call_chunks 的增量合并，避免手动拼接导致工具调用信息丢失）。
 
 **3. 工具调用完整性保留**：
-```python
-# 不再过滤无效工具调用，保留给 loop_detect 检测
-tool_calls_list = accumulated.tool_calls if accumulated.tool_calls else []
-```
-- **不静默过滤**：LLM 返回的不完整工具调用（缺少 name 或 id）应该保留
-- **交给 loop_detect 检测**：在工具执行前检测是否为"无效工具调用循环"
-- **纠正机制**：如果连续出现无效工具调用，loop_detect 会注入纠正反馈
-- **避免资源浪费**：防止将无效工具调用传递给 tool_execute 节点
+
+llm_call 节点不再静默过滤不完整的工具调用（缺少 name 或 id）。这些调用保留在 pending_tool_calls 中，交由 loop_detect 节点在工具执行前检测"无效工具调用循环"。如果连续出现无效工具调用，loop_detect 会注入纠正反馈，避免将无效数据传递给 tool_execute 节点。
 
 **4. 超时保护**：
-```python
-async with asyncio.timeout(llm_timeout_sec):  # 默认 300 秒
-    async for chunk in llm.astream(messages):
-        ...
-```
-- 防止网络异常导致 task 永久挂起
-- 超时后由 `TimeoutErrorHandler` 处理，设置 should_end=True
+
+在 LLM 流式调用外层包裹 `asyncio.timeout`（默认 300 秒），防止网络异常导致任务永久挂起。超时后由 TimeoutErrorHandler 接管处理，设置 should_end=True。
 
 #### 4.1.4 LLM 错误处理器工厂
 
@@ -422,26 +289,15 @@ async with asyncio.timeout(llm_timeout_sec):  # 默认 300 秒
 
 **架构**：
 
-```
-ILLMErrorHandler (interface)
-    ├── ContextLimitErrorHandler   # 上下文超限 → 设置 emergency_compact_requested
-    ├── TimeoutErrorHandler        # 网络超时 → 设置 should_end
-    └── DefaultErrorHandler        # 未匹配 → re-raise（由 BaseNode 兜底）
-```
+错误处理器采用职责链模式组织，从 `ILLMErrorHandler` 抽象接口派生：
 
-**接口定义**（`domain/interfaces/llm_error_handler.py`）：
+- ContextLimitErrorHandler：识别上下文超限异常，设置 emergency_compact_requested，不终止循环
+- TimeoutErrorHandler：识别超时异常，设置 should_end 终止
+- DefaultErrorHandler：兜底处理器，重新抛出未匹配的异常
 
-```python
-class ILLMErrorHandler(ABC):
-    def can_handle(self, error: BaseException) -> bool: ...
-    def handle(self, error: BaseException, state: dict, context: NodeContext) -> dict: ...
+**接口定义**：
 
-class LLMErrorHandlerRegistry:
-    """职责链：按注册顺序遍历，第一个 can_handle 返回 True 的处理器处理"""
-    def __init__(self, handlers: list[ILLMErrorHandler] | None = None): ...
-    def register(self, handler: ILLMErrorHandler) -> None: ...
-    def handle(self, error, state, context) -> dict: ...
-```
+ILLMErrorHandler 抽象接口定义两个方法：`can_handle(error)` 判断是否能处理该异常，`handle(error, state, context)` 执行处理并返回状态更新字典。LLMErrorHandlerRegistry 作为职责链容器，按注册顺序遍历处理器列表，委托给第一个 `can_handle` 返回 True 的处理器。支持构造时传入处理器列表或通过 `register()` 方法动态注册。
 
 **ContextLimitErrorHandler**（`infrastructure/agent/error_handlers/context_limit.py`）：
 - 通过 `is_context_limit_error()` 识别上下文超限异常
@@ -498,61 +354,32 @@ sequenceDiagram
 - `workspace` — 工作目录
 
 **输出字段**（写入）：
-```python
-{
-    "messages": [ToolMessage(content=..., tool_call_id=...)],
-    "tool_results": {tool_call_id: {"tool_name": ..., "status": ..., "output": ..., "error": ...}},
-    "pending_tool_calls": [],  # 清空
-    "awaiting_user_input": bool,  # 是否有工具需要用户确认
-    "last_executed_tool_call_ids": [tool_call_id1, tool_call_id2, ...],
-    "final_result": result_output,  # 如果 awaiting_user_input=True
-    "phase": "tool_executing",
-}
-```
+
+节点执行完毕后写入以下状态更新：
+
+- 每个工具调用构造一条 ToolMessage 追加到 messages，content 优先使用工具输出，失败时使用错误信息，确保不为 None
+- `tool_results` 按 tool_call_id 索引，每个结果记录 tool_name、status（success/error）、output、error 和 metadata
+- 清空 `pending_tool_calls`，写入 `last_executed_tool_call_ids` 记录本轮执行的所有工具 ID
+- 如有工具的 metadata 标记 awaiting_user_input，则设置该标志为 True 并提取 final_result
+- `phase` 设为 "tool_executing"
 
 #### 4.2.3 核心逻辑说明
 
 **1. 并行执行**：
-```python
-tasks = [_execute_single_tool(tool_registry, event_emitter, task_id, tc, context) 
-         for tc in pending_tools]
-results = await asyncio.gather(*tasks, return_exceptions=True)
-```
-- 使用 `asyncio.gather` 并发执行多个工具
-- `return_exceptions=True` 确保单个工具失败不影响其他工具
+
+使用 `asyncio.gather` 并发执行所有待执行工具，设置 `return_exceptions=True` 确保单个工具失败不影响其他工具的执行。
 
 **2. 结构化结果存储**：
-```python
-result_dict = {
-    "tool_name": tool_name,
-    "status": "success" or "error",
-    "output": result.output,
-    "error": result.error,
-    "metadata": result.metadata,
-}
-structured_results[tool_call_id] = result_dict
-```
-- 统一工具结果格式，便于后续评估
-- metadata 包含 awaiting_user_input 等特殊标志
+
+每个工具执行结果统一存储为包含 tool_name、status（success/error）、output、error、metadata 的字典结构，以 tool_call_id 为键索引。metadata 中可携带 awaiting_user_input 等特殊标志。
 
 **3. ToolMessage 构建**：
-```python
-content = result_entry.get("output") or result_entry.get("error") or "No result"
-if not isinstance(content, str):
-    content = str(content)  # 防御性转换
-tool_messages.append(ToolMessage(content=content, tool_call_id=tool_call_id))
-```
-- 确保 content 不为 None（LLM provider 不接受）
-- 优先使用 output，失败时使用 error
+
+优先使用 result.output 作为 ToolMessage 内容，不存在时降级为 result.error，最终兜底为 "No result"。对非字符串类型执行防御性 str() 转换，确保 LLM provider 不会因 None content 报错。
 
 **4. awaiting_user_input 处理**：
-```python
-if result_dict.get("metadata", {}).get("awaiting_user_input"):
-    awaiting_user_input = True
-    final_result = result_dict.get("output")
-```
-- 支持需要用户确认的工具（如文件写入确认）
-- 设置 awaiting_user_input=True 触发路由到 END
+
+检查每个工具结果的 metadata.awaiting_user_input 标志。若任一工具需要用户确认，设置全局 awaiting_user_input=True，将工具输出写入 final_result，路由系统随后将状态路由到 END 等待用户响应。
 
 ---
 
@@ -623,104 +450,29 @@ flowchart TD
 **输入字段**（读取）：
 - `pending_tool_calls` — 即将执行的工具调用列表
 - `loop_detection_count` — 当前 Loop 检测次数
-- `empty_retry_count`, `stuck_detection_count` — 全局预算计算
+- `empty_retry_count` — 全局预算计算
 - `messages` — 消息历史（模式循环检测）
 - `task_start_message_count` — 消息起始位置
 
 **输出字段**（写入）：
 
-**场景 1：未检测到循环**：
-```python
-{
-    "loop_detected": False,
-    "loop_type": None,
-    "loop_detection_count": 0,
-}
-```
+**场景 1：未检测到循环** — 设置 `loop_detected=False`，`loop_type=None`，`loop_detection_count=0`。
 
-**场景 2：检测到模式循环**（精确匹配或 A-B-A-B 交替）：
+**场景 2：检测到模式循环**（精确匹配或 A-B-A-B 交替），按检测次数分三级响应：
 
-首次（count=1）：
-```python
-{
-    "loop_detected": True,
-    "loop_detection_count": 1,
-    "loop_type": "exact_tool_repeat" | "alternating_pattern",
-    "phase": "loop_correcting",
-    "messages": [SystemMessage(content="[SYSTEM CORRECTION] You seem to be repeating the same actions...")],
-}
-```
+- 首次（count=1）：设置 `loop_detected=True`，`loop_detection_count=1`，`loop_type` 为 "exact_tool_repeat" 或 "alternating_pattern"，`phase="loop_correcting"`，通过 SystemMessage 注入纠正反馈指导模型更换策略。
 
-二次（count=2）：
-```python
-{
-    "loop_detected": True,
-    "loop_detection_count": 2,
-    "loop_type": "exact_tool_repeat" | "alternating_pattern",
-    "phase": "loop_correcting",
-    "compression_strategy": "summarize",
-}
-```
+- 二次（count=2）：基本同上，`loop_detection_count=2`，同时设置 `compression_strategy="summarize"` 触发上下文压缩（清除可能混淆模型的冗余上下文），不注入 SystemMessage（避免额外消耗 token）。
 
-三次（count>=3）或预算耗尽：
-```python
-{
-    "loop_detected": True,
-    "loop_detection_count": 3,
-    "loop_type": "exact_tool_repeat" | "alternating_pattern",
-    "phase": "loop_correcting",
-    "error": "Loop detected, terminating after 3 attempts",
-    "should_end": True,
-}
-```
+- 三次（count>=3）或全局纠正预算耗尽：设置 `error` 描述循环信息，`should_end=True` 强制终止。
 
-**场景 2.5：检测到无效工具调用**（INVALID_TOOL_CALL）：
+**场景 2.5：检测到无效工具调用**（INVALID_TOOL_CALL），同样三级响应：
 
-首次（count=1）：
-```python
-{
-    "loop_detected": True,
-    "loop_detection_count": 1,
-    "loop_type": "invalid_tool_call",
-    "phase": "loop_correcting",
-    "messages": [SystemMessage(content="[SYSTEM CORRECTION] You provided invalid tool calls with missing information...")],
-}
-```
+- 首次：注入格式纠正反馈 SystemMessage，告知模型工具调用需包含完整的 name、id 和 input 参数。
+- 二次：设置 `compression_strategy="summarize"` 触发压缩（可能上下文中有混淆的格式示例）。
+- 三次或预算耗尽：设置 `error="Invalid tool calls loop, terminating after 3 attempts"`，`should_end=True`。
 
-二次（count=2）：
-```python
-{
-    "loop_detected": True,
-    "loop_detection_count": 2,
-    "loop_type": "invalid_tool_call",
-    "phase": "loop_correcting",
-    "compression_strategy": "summarize",
-}
-```
-
-三次（count>=3）或预算耗尽：
-```python
-{
-    "loop_detected": True,
-    "loop_detection_count": 3,
-    "loop_type": "invalid_tool_call",
-    "phase": "loop_correcting",
-    "error": "Invalid tool calls loop, terminating after 3 attempts",
-    "should_end": True,
-}
-```
-
-**场景 3：全局纠正预算耗尽**：
-```python
-{
-    "loop_detected": True,
-    "loop_detection_count": count,
-    "loop_type": "exact_tool_repeat" | "alternating_pattern",
-    "phase": "loop_correcting",
-    "error": "Global correction budget exhausted",
-    "should_end": True,
-}
-```
+**场景 3：全局纠正预算耗尽**：当各类纠正计数总和达到上限 3 时，设置 `loop_detected=True`、`phase="loop_correcting"`、`error="Global correction budget exhausted"`、`should_end=True`，无论具体检测到何种循环类型均强制终止。
 
 #### 4.3.3 核心逻辑说明
 
@@ -741,23 +493,8 @@ flowchart TD
 **新增：无效工具调用检测**（INVALID_TOOL_CALL）：
 
 **检测逻辑**：
-```python
-# 检查 pending_tool_calls 中是否存在无效工具调用
-invalid_calls = [
-    tc for tc in pending_tool_calls
-    if not tc.get("name") or not tc.get("id")
-]
 
-if invalid_calls:
-    loop_detected = True
-    loop_type = "invalid_tool_call"
-    # 注入纠正反馈
-    correction_prompt = (
-        "[SYSTEM CORRECTION] You provided invalid tool calls with missing information. "
-        "Each tool call must include a valid tool name, tool call ID, and proper input arguments. "
-        "Please fix the tool call format and try again."
-    )
-```
+遍历 pending_tool_calls 列表，筛选出缺少 name 或 id 字段的项。若存在这样的无效调用，则设置 `loop_detected=True`、`loop_type="invalid_tool_call"`，并构造格式纠正反馈的 SystemMessage 注入消息列表。
 
 **为什么需要检测无效工具调用**：
 - LLM 可能返回格式错误的工具调用（缺少 name、id 或 input）
@@ -771,32 +508,12 @@ if invalid_calls:
 - 三次检测：终止循环
 
 #### 精确匹配检测（EXACT_TOOL_REPEAT）
-```python
-# 提取最近 3 轮工具调用签名
-signatures = [
-    (tc["name"], _hash_tool_args(tc["args"]))
-    for tc in tool_calls
-]
-if len(set(signatures)) == 1:  # 完全相同
-    loop_detected = True
-    loop_type = "exact_tool_repeat"
-```
+
+提取最近几轮（通常 3 轮）的工具调用签名（由工具名和参数哈希组成），若所有签名完全相同（取集合后大小为 1），则判定为精确重复循环，设置 `loop_type="exact_tool_repeat"`。
 
 #### A-B-A-B 交替检测（ALTERNATING_PATTERN）
-```python
-# 检测周期为 2 的重复模式
-# 例如：read_file(A) → grep_search(B) → read_file(A) → grep_search(B)
-if len(recent_tool_calls) >= 4:
-    sig_1 = recent_tool_calls[3]  # 最远
-    sig_2 = recent_tool_calls[2]
-    sig_3 = recent_tool_calls[1]
-    sig_4 = recent_tool_calls[0]  # 最近
-    
-    # 检查是否 A-B-A-B 模式
-    if sig_4 == sig_2 and sig_3 == sig_1 and sig_4 != sig_3:
-        loop_detected = True
-        loop_type = "alternating_pattern"
-```
+
+当历史工具调用序列长度至少为 4 时，比较最近 4 次调用的签名。如果呈现 sig4==sig2 且 sig3==sig1 且 sig4!=sig3 的模式，则判定为周期为 2 的交替循环（A-B-A-B 模式），设置 `loop_type="alternating_pattern"`。
 
 #### 为什么需要 A-B-A-B 检测
 - 精确匹配只能检测 AAAA 模式，无法检测 ABAB 模式
@@ -806,157 +523,12 @@ if len(recent_tool_calls) >= 4:
 
 
 **2. 全局纠正预算**：
-```python
-GLOBAL_CORRECTION_BUDGET = 3
 
-correction_total = (
-    empty_retry_count + loop_detection_count + stuck_detection_count
-)
-if correction_total >= GLOBAL_CORRECTION_BUDGET:
-    # 强制终止，防止各类纠正相互叠加导致无限循环
-    should_end = True
-    error = "Global correction budget exhausted"
-```
+全局纠正预算上限设为 3，计算方式为 `empty_retry_count + loop_detection_count` 的总和。当该总和达到上限时，无论当前具体检测到何种问题，均强制设置 `should_end=True` 并附带 "Global correction budget exhausted" 错误信息，防止各类纠正机制相互叠加导致无限循环。
 
 ---
 
-### ~~4.4 stuck_detect 节点~~ (已从主工作流中移除)
-
-> **2026-05-31 变更**：`stuck_detect` 节点已从 LangGraph StateGraph 主工作流中移除。`route_after_llm` 中纯文本（无 tool_calls）直接路由到 END，完成验证逻辑不在主循环中执行。以下内容为历史设计，保留供参考。
-
-**~~职责~~**：检测 Agent 是否卡住（整合了 answer_observe 功能）。
-
-**~~触发时机~~**：仅在 `llm_call` 返回纯文本（无 tool_calls）时执行。
-
-#### 4.4.1 流程图
-
-```mermaid
-flowchart TD
-    Start([stuck_detect_node]) --> Step1[步骤1: 评估 LLM 文本输出]
-    
-    Step1 --> ExtractText[提取最后一条消息文本]
-    ExtractText --> Evaluate[_evaluate_llm_text]
-    
-    Evaluate --> Category{文本分类}
-    
-    Category -->|empty| HandleEmpty[_handle_empty_response]
-    Category -->|complete| HandleComplete[_handle_completion_claim]
-    Category -->|incomplete| HandleIncomplete[_handle_incomplete_completion]
-    Category -->|user_question| HandleQuestion[_handle_user_question]
-    Category -->|planning_only| HandlePlanning[_handle_planning_only]
-    Category -->|substantive_text| Step2[步骤2: 检测 Monologue]
-    
-    HandleEmpty --> Count1{empty_retry_count}
-    Count1 -->|>1| Terminate1[终止]
-    Count1 -->|<=1| InjectEmpty[注入继续指令]
-    
-    HandleComplete --> Validate{实质性验证}
-    Validate -->|通过| Complete1[END: 任务完成]
-    Validate -->|失败| InjectIncomplete[注入纠正反馈]
-    
-    HandleIncomplete --> InjectIncomplete
-    HandleQuestion --> Complete2[END: 返回问题]
-    
-    HandlePlanning --> Count2{planning_retry_count}
-    Count2 -->|>2| Terminate2[终止]
-    Count2 -->|<=2| InjectPlanning[注入执行指令]
-    
-    InjectEmpty --> Return1[返回]
-    InjectIncomplete --> Return2[返回]
-    InjectPlanning --> Return3[返回]
-    Complete1 --> Return4[返回]
-    Complete2 --> Return5[返回]
-    Terminate1 --> Return6[返回]
-    Terminate2 --> Return7[返回]
-    
-    Step2 --> CheckMonologue[_detect_monologue]
-    CheckMonologue --> Consecutive{连续 3 轮无工具?}
-    
-    Consecutive -->|No| NoStuck[stuck_detected=False]
-    Consecutive -->|Yes| HandleStuck[处理 Monologue]
-    
-    HandleStuck --> Count3{stuck_detection_count}
-    Count3 -->|>=3| Terminate3[终止]
-    Count3 -->|<3| InjectStuck[注入行动指令]
-    
-    NoStuck --> Return8[返回]
-    Terminate3 --> Return9[返回]
-    InjectStuck --> Return10[返回]
-```
-
-#### 4.4.2 AgentState 操作转换
-
-**输入字段**（读取）：
-- `messages` — 消息历史
-- `empty_retry_count` — 空响应重试次数
-- `planning_retry_count` — 纯规划重试次数
-- `stuck_detection_count` — Stuck 检测次数
-- `loop_detection_count` — 全局预算计算
-- `task_start_message_count` — 消息起始位置
-
-**输出字段**（写入）：
-
-**场景 1：空响应处理**（empty）：
-
-首次重试（count=1）：
-```python
-{
-    "empty_retry_count": 1,
-    "messages": [SystemMessage(content="[SYSTEM CORRECTION] Your previous response was empty...")],
-    "phase": "thinking",
-}
-```
-
-超过限制（count>1）或预算耗尽：
-```python
-{
-    "empty_retry_count": 2,
-    "should_end": True,
-    "error": "Empty response persists after correction",
-    "final_result": extract_final_result(state),
-    "phase": "complete",
-}
-```
-
-**场景 2：完成声明验证**（complete）：
-
-验证通过：
-```python
-{
-    "phase": "complete",
-    "final_result": text,
-    "is_complete": True,
-    "should_end": True,
-}
-```
-
-**场景 3：完成声明缺少实质内容**（incomplete）：
-```python
-{
-    "messages": [HumanMessage(content="You claimed the task is complete, but it appears there is still work to do...")],
-    "phase": "thinking",
-}
-```
-
-**场景 4：用户提问**（user_question）：
-```python
-{
-    "phase": "complete",
-    "final_result": text,
-    "is_complete": True,
-    "should_end": True,
-}
-```
-
-#### 4.4.3 核心逻辑说明
-
-> **注意**：LLM 文本输出评估、纯规划检测、Monologue 检测等逻辑已在 `v2.0` 重构中移除。
-> 当前 `loop_detect_node` 仅负责工具调用循环检测和全局纠正预算管理，不评估 LLM 文本质量。
-> 详情参见 [loop_detect_node.py](../../backend/src/infrastructure/agent/nodes/loop_detect_node.py)。
-
----
-
-### 4.5 context_compact 节点
+### 4.4 context_compact 节点
 
 **职责**：作为整个 Agent 工作流的**入口节点**，在每一轮 LLM 调用前执行上下文守门。根据当前 token 水位执行 4 级压缩策略，保证模型请求尽量落在目标上下文窗口内。
 
@@ -1033,60 +605,13 @@ flowchart TD
 
 **输出字段**（写入）：
 
-**Skip 策略**：
-```python
-{
-    "phase": "context_compacting",
-    "context_token_estimate": current_tokens,  # 无变化
-    "last_context_strategy": "skip",
-}
-```
+**Skip 策略**：无内容变更，仅设置 `phase="context_compacting"`，保持 `context_token_estimate` 不变，写入 `last_context_strategy="skip"`。
 
-**Soft-prune 策略**：
-```python
-{
-    "messages": [pruned_tool_message, ...],  # 同 id ToolMessage，内容被裁剪
-    "phase": "context_compacting",
-    "context_token_estimate": new_estimate,
-    "context_token_baseline": None,  # 消息内容被修改，baseline 失效
-    "last_context_strategy": "soft_prune",
-}
-```
+**Soft-prune 策略**：messages 中用同 id 的裁剪后 ToolMessage 替换原消息（LangGraph 的 add_messages reducer 自动处理替换）。设置 `context_token_estimate` 为裁剪后估算值，由于消息内容被修改 `context_token_baseline` 置为 None 使其失效，写入 `last_context_strategy="soft_prune"`。
 
-**Micro-compact / Emergency-compact 策略**：
-```python
-{
-    "messages": [
-        RemoveMessage(id=very_old_msg_id),
-        ...,
-        HumanMessage(content="[Context Summary]\n{summary_text}", id=first_compacted_id),
-        RemoveMessage(id=compacted_msg_id),
-        ...,
-        # 保留 SystemMessage + 最近 N 条
-    ],
-    "phase": "context_compacting",
-    "context_token_estimate": after_tokens,
-    "context_token_baseline": None,   # 消息被移除，baseline 失效
-    "context_token_baseline_message_count": 0,
-    "last_context_strategy": "micro_compact" | "emergency_compact",
-}
+**Micro-compact / Emergency-compact 策略**：messages 中插入多条 RemoveMessage 移除旧消息，注入一条 HumanMessage（内容为 "[Context Summary]\n{summary_text}"，id 为被压缩的首条消息 id）保持时间线位置，同时保留 SystemMessage 和最近 N 条消息（micro 保留 10 条，emergency 保留 3 条）。由于消息被移除，`context_token_baseline` 置为 None，`context_token_baseline_message_count` 置为 0。`last_context_strategy` 记录为 "micro_compact" 或 "emergency_compact"。Emergency-compact 额外写入：清零 `emergency_compact_requested` 和 `compression_strategy`，递增 `context_compaction_attempts`。
 
-# Emergency-compact 额外写入：
-{
-    "emergency_compact_requested": False,
-    "compression_strategy": None,
-    "context_compaction_attempts": attempts + 1,
-}
-```
-
-**紧急压缩后仍失败**（由 caller 处理）：
-```python
-{
-    "phase": "failed",
-    "should_end": True,
-    "error": "Context window exceeded after emergency compaction",
-}
-```
+**紧急压缩后仍失败**（由 caller 处理）：设置 `phase="failed"`，`should_end=True`，附带 "Context window exceeded after emergency compaction" 错误信息。
 
 #### 4.5.3 核心逻辑说明
 
@@ -1123,29 +648,14 @@ LLM 调用完成后（`llm_call_node`），通过 `_extract_prompt_tokens()` 从
 
 **3. Soft-prune：40% 水位轻量裁剪**：
 
-触发条件：
-
-```python
-current_tokens > int(max_context_tokens * 0.4)
-```
+触发条件：当 `context_token_estimate` 超过 `max_context_tokens * 0.4` 时触发。
 
 处理对象：
 - 仅处理 `ToolMessage`（含 dict 形式的 tool 消息）。
 - 单条 tool result 内容长度 `> 20000` 字符才裁剪。
 - 从头到尾顺序处理，优先裁剪最先遇到的超长结果。
 
-裁剪规则：
-
-```python
-head = content[:4000]
-tail = content[-4000:]
-pruned_content = f”{head}
-
-[... tool result soft-pruned; middle omitted ...]
-
-{tail}”
-# 使用相同 msg_id 构造 ToolMessage，LangGraph add_messages reducer 自动替换
-```
+裁剪规则：取每条超长 ToolMessage 内容的头 4000 字符和尾 4000 字符，中间用 `[... tool result soft-pruned; middle omitted ...]` 占位符连接，使用相同 msg_id 构造新的 ToolMessage（LangGraph 的 add_messages reducer 自动替换同 id 消息）。
 
 目标：
 - 裁剪后实时用 `estimate_context_tokens` 重新估算。
@@ -1155,11 +665,7 @@ pruned_content = f”{head}
 
 **4. Micro-compact：60% 水位摘要压缩**：
 
-触发条件：
-
-```python
-current_tokens > int(max_context_tokens * 0.6)
-```
+触发条件：当 `context_token_estimate` 超过 `max_context_tokens * 0.6` 时触发。
 
 压缩范围：
 - 永远保留首条 `SystemMessage`（如果存在）。
@@ -1191,21 +697,7 @@ current_tokens > int(max_context_tokens * 0.6)
 
 **6. Summary 压缩输入构建**：
 
-```python
-# 摘要输入预算控制
-summary_budget = min(32000, int(max_tokens * 0.05 * 4))
-
-# 从旧消息后面开始构建（最近的优先，摘要有时间局部性）
-summary_candidates = to_compact[-90:]
-
-# 逐步拼接，超过 budget 时截断
-for msg in summary_candidates:
-    rendered = render_message(msg)
-    if total_chars + len(rendered) > summary_budget:
-        summary_parts.append(rendered[:remaining] + “\n...(truncated)”)
-        break
-    summary_parts.append(rendered)
-```
+摘要输入受预算控制（`summary_budget = min(32000, int(max_tokens * 0.05 * 4))`），防止摘要本身的 token 消耗过大。从最近 90 条待压缩消息中按由近到远的顺序构建摘要输入（摘要有时间局部性），当累计字符数超过 budget 时截断（尾部添加 “...(truncated)” 标记）。`render_message()` 渲染包含 role、tool name、call_id 等元信息，帮助 LLM 理解消息结构。
 
 **关键设计**：
 - 摘要输入受 budget 控制，防止摘要本身的 token 消耗过大。
@@ -1230,27 +722,13 @@ for msg in summary_candidates:
 **职责**：LLM 调用后的路由决策（紧急压缩优先，三分支）。
 
 **逻辑**：
-```python
-def route_after_llm(state: AgentState) -> str:
-    # 紧急压缩优先：ContextLimitErrorHandler 设置了此标志
-    if state.get("emergency_compact_requested"):
-        return "context_compact"
 
-    if state.get("should_end"):
-        return END  # 超时/错误
+该路由函数按以下优先级检查 AgentState 并返回目标节点名称：
 
-    messages = state.get("messages", [])
-    if not messages:
-        return END
-
-    last_msg = messages[-1]
-    tool_calls = _extract_tool_calls(last_msg)
-
-    if tool_calls:
-        return "loop_detect"  # 有 tool_calls，先检测循环
-
-    return END  # 纯文本（任务完成），终止
-```
+1. 若 `emergency_compact_requested=True`（由 ContextLimitErrorHandler 设置），返回 `"context_compact"` 执行紧急压缩
+2. 若 `should_end=True`，返回 `END` 终止（llm_call 超时或错误场景）
+3. 若消息列表为空，返回 `END`
+4. 从最后一条消息提取 tool_calls：若有 tool_calls，返回 `"loop_detect"` 进行循环检测；否则返回 `END`（纯文本视为任务完成）
 
 **路由决策**：
 
@@ -1261,24 +739,19 @@ def route_after_llm(state: AgentState) -> str:
 | 有 tool_calls | loop_detect | 先检测循环，再决定是否执行工具 |
 | 纯文本（无 tool_calls） | END | 任务完成，直接终止 |
 
-> **变更（2026-05-31）**：不再路由到 `stuck_detect` 节点。纯文本（无 tool_calls）直接终止。`stuck_detect` 的文本评估、完成验证等功能已从主工作流中移除。
+> **变更（2026-05-31）**：纯文本（无 tool_calls）直接终止。
 
 ### 5.2 route_after_loop_detect
 
 **职责**：Loop 检测后路由（三分支——所有 feedback 路径统一走 context_compact）。
 
 **逻辑**：
-```python
-def route_after_loop_detect(state: AgentState) -> str:
-    if not state.get("loop_detected"):
-        return "tool_execute"  # 未检测到 loop，执行工具
 
-    if state.get("should_end"):
-        return END  # count>=3 或预算耗尽
+该路由函数按以下优先级检查 AgentState 并返回目标节点名称：
 
-    # count==1（注入反馈后）和 count==2（需要压缩）统一走 context_compact
-    return "context_compact"
-```
+1. 若 `loop_detected=False`，返回 `"tool_execute"` 正常执行工具
+2. 若 `should_end=True`，返回 `END`（loop_detection_count>=3 或全局预算耗尽）
+3. 否则（loop_detected=True 且未达终止条件），返回 `"context_compact"` 统一走上下文守门（count=1 注入反馈后重新估算 token 并进入下一轮 LLM，count=2 触发压缩）
 
 **路由决策**：
 
@@ -1295,14 +768,11 @@ def route_after_loop_detect(state: AgentState) -> str:
 **职责**：工具执行后路由（两分支 —— 回到 context_compact 守门）。
 
 **逻辑**：
-```python
-def route_after_tool_execute(state: AgentState) -> str:
-    if state.get("awaiting_user_input"):
-        return END  # 等待用户确认
 
-    # 工具执行完毕，回到上下文守门（而非直接进 llm_call）
-    return "context_compact"
-```
+该路由函数按以下优先级检查 AgentState 并返回目标节点名称：
+
+1. 若 `awaiting_user_input=True`，返回 `END` 等待用户确认
+2. 否则返回 `"context_compact"`，确保工具结果加入 messages 后先进行 token 水位检查，再决定是否需要压缩
 
 **路由决策**：
 
@@ -1313,81 +783,31 @@ def route_after_tool_execute(state: AgentState) -> str:
 
 > **变更（2026-05-31）**：不再直接路由到 `llm_call`。改为路由到 `context_compact`，确保工具结果加入 messages 后先进行 token 水位检查，再决定是否需要压缩。
 
-### ~~5.4 route_after_stuck_detect~~ (已移除)
-
-> **2026-05-31 变更**：`route_after_stuck_detect` 路由函数已移除。`stuck_detect` 节点不再作为工作流的一部分。`route_after_llm` 中纯文本（无 tool_calls）直接路由到 END。
-
-~~**职责**：Stuck 检测后路由（两分支）。~~
-
-~~**逻辑**：~~
-```python
-# def route_after_stuck_detect(state: AgentState) -> str:
-#     if state.get("should_end"):
-#         return END  # count>=3 或预算耗尽或完成
-#     
-#     return "llm_call"  # 已注入反馈或正常文本
-```
-
-~~**路由决策**：~~
-
-| 条件 | 路由目标 | 说明 |
-|------|---------|------|
-| should_end=True | END | count>=3 或预算耗尽或完成验证通过 |
-| 其他 | llm_call | 已注入反馈消息或正常文本继续 |
-
 ---
 
 ## 6. Prompt 模板
 
 **Loop 纠正 Prompt**（模式循环）：
-```markdown
+
+```text
 [SYSTEM CORRECTION] You seem to be repeating the same actions. 
 Please try a different approach to solve the task. 
 Analyze what went wrong and propose a new strategy.
 ```
 
 **Loop 纠正 Prompt**（无效工具调用）：
-```markdown
+
+```text
 [SYSTEM CORRECTION] You provided invalid tool calls with missing information. 
 Each tool call must include a valid tool name, tool call ID, and proper input arguments. 
 Please fix the tool call format and try again.
 ```
 
-### ~~6.2 Stuck 纠正 Prompt~~ (已移除)
-
-> **2026-05-31 变更**：stuck_detect 节点已从主工作流中移除，以下 Prompt 不再使用。
-
-~~**Empty Response**：~~
-```markdown
-[SYSTEM CORRECTION] Your previous response was empty. 
-Please continue working on the task. 
-If you're unsure about the next step, read relevant files first.
-```
-
-~~**Planning-only**：~~
-```markdown
-[SYSTEM CORRECTION] You outlined a plan but haven't taken action yet. 
-Please proceed with executing the plan using the available tools.
-```
-
-~~**Monologue**：~~
-```markdown
-[SYSTEM CORRECTION] You have been providing analysis without taking action. 
-Please use an appropriate tool to make progress on the task. 
-If you need more information, use the available tools first.
-```
-
-~~**Completion 缺少实质内容**：~~
-```markdown
-You claimed the task is complete, but it appears there is still work to do. 
-Please continue working on the task and provide detailed results.
-```
-
-### 6.3 上下文压缩 Prompt
+### 6.2 上下文压缩 Prompt
 
 实际使用的摘要 prompt 为 `_COMPACTION_SUMMARY_PROMPT`（定义于 `context_compact_node.py`），聚焦任务连续性：
 
-```markdown
+```text
 You are compacting an agent execution context.
 
 Summarize the older messages so the agent can continue the same task 
@@ -1413,7 +833,8 @@ Rules:
 ```
 
 ~~旧通用 prompt（不再使用）：~~
-```markdown
+
+```text
 You are a conversation summarizer. Summarize the following conversation messages 
 into a concise summary that preserves:
 1. Key decisions and actions taken
@@ -1431,15 +852,13 @@ Be concise but preserve critical context. Output only the summary.
 ### 7.1 事件类型定义
 
 | 事件类型 | 数据字段 | 触发节点 |
-|---------|---------|---------|
+| --------- | --------- | --------- |
 | **phase:changed** | phase, previousPhase, turn | 所有节点 |
 | **llm:chunk** | turn, text | llm_call |
 | **llm:complete** | turn, fullText, toolCalls | llm_call |
 | **tool:call** | toolCallId, toolName, input | tool_execute |
 | **tool:result** | toolCallId, toolName, status, output | tool_execute |
 | **loop:detected** | loopType, count, action | loop_detect |
-| ~~**stuck:detected**~~ | ~~stuckType, count, action~~ | ~~stuck_detect（已移除）~~ |
-| ~~**completion:validated**~~ | ~~turn, quality, summary~~ | ~~stuck_detect（已移除）~~ |
 | **context:compacting** | strategy, beforeTokens, afterTokens, maxContextTokens, beforeCount, afterCount, removedCount, prunedToolResults (soft_prune), summaryLength (micro/emergency), reason | context_compact |
 
 ### 7.2 Node 级监控
@@ -1468,11 +887,6 @@ Be concise but preserve critical context. Output only the summary.
 [NODE:tool_execute] TOOL_CALL_INPUT | tool_name=%s | input=%s
 [NODE:tool_execute] TOOL_CALL_SUCCESS | status=%s | output_preview=%s
 [NODE:tool_execute] COMPLETE | total_tools=%d | success=%d | error=%d | awaiting_user_input=%s
-```
-
-~~**stuck_detect**~~ (节点已从主工作流中移除)：
-```
-# [NODE:stuck_detect] — 不再执行
 ```
 
 **context_compact**：
@@ -1527,8 +941,6 @@ Be concise but preserve critical context. Output only the summary.
 - ✅ 结构化日志（Node/LLM/Tool）
 - ✅ SSE 事件发射
 - ✅ 超时保护
-- ~~Stuck 检测（Monologue + Empty Response + Planning-only）~~ 节点已从主工作流中移除
-- ~~完成检查（关键词 + 实质性验证）~~ stuck_detect 已移除
 
 ### 8.2 待增强的能力
 
@@ -1547,45 +959,7 @@ Be concise but preserve critical context. Output only the summary.
 
 ---
 
-## 附录 A：文件清单
-
-当前实现涉及的文件：
-
-```
-backend/src/
-├── domain/
-│   ├── agent_loop/                              # Agent Loop 领域核心模块（真实定义位置）
-│   │   ├── state.py                             # AgentState TypedDict（纯领域，无框架依赖）
-│   │   ├── agent_routing.py                     # 路由函数（route_after_llm / loop_detect / tool_execute）
-│   │   ├── token_utils.py                       # Token 估算、模型窗口解析、超限识别
-│   │   ├── llm_error_handler.py                 # LLM 错误处理器接口（ILLMErrorHandler + Registry）
-│   │   ├── event_emitter.py                     # 事件发射器实现
-│   │   ├── prompt_assemble_service.py           # Prompt 组装服务
-│   │   └── sub_agent_orchestrator.py            # Sub-Agent 编排器
-│   ├── aggregates/agent/
-│   │   └── agent_state.py                       # AgentState re-export（向后兼容）
-│   ├── services/
-│   │   ├── token_utils.py                       # Shim: re-export from agent_loop
-│   │   └── agent_routing.py                     # Shim: re-export from agent_loop
-│   └── interfaces/
-│       └── llm_error_handler.py                 # Shim: re-export from agent_loop
-├── infrastructure/agent/
-│   ├── nodes/
-│   │   ├── llm_call_node.py                     # LLM 调用节点（含 baseline 校准 + 错误委托）
-│   │   ├── loop_detect_node.py                  # Loop 检测（含 tool_observe）
-│   │   ├── tool_execute_node.py                 # 工具执行节点
-│   │   ├── context_compact_node.py              # 上下文压缩节点（入口节点，4 级水位策略）
-│   │   └── base_node.py                         # BaseNode + NodeContext
-│   ├── error_handlers/
-│   │   ├── context_limit.py                     # ContextLimitErrorHandler
-│   │   ├── timeout.py                           # TimeoutErrorHandler
-│   │   └── default_handler.py                   # DefaultErrorHandler
-│   └── workflow_builder.py                      # AgentWorkflowBuilder（StateGraph 编译，入口 context_compact）
-└── infrastructure/llm/callback/
-    └── llm_call_logger.py                       # LLM 调用日志回调
-```
-
-## 附录 B：Prompt 模板索引
+## 附录 A：Prompt 模板索引
 
 | Prompt 名称 | 使用节点 | 模板位置 |
 |------------|---------|---------|
@@ -1594,14 +968,11 @@ backend/src/
 | Loop 纠正 Prompt (无效工具调用) | loop_detect_node | 6 节 |
 | 上下文压缩 Prompt | context_compact_node | 6.3 节 |
 | 上下文摘要 Prompt（任务聚焦） | context_compact_node | `_COMPACTION_SUMMARY_PROMPT` in context_compact_node.py |
-| ~~Stuck 纠正 Prompt (Empty)~~ | ~~stuck_detect_node（已移除）~~ | ~~6.2 节~~ |
-| ~~Stuck 纠正 Prompt (Planning)~~ | ~~stuck_detect_node（已移除）~~ | ~~6.2 节~~ |
-| ~~Stuck 纠正 Prompt (Monologue)~~ | ~~stuck_detect_node（已移除）~~ | ~~6.2 节~~ |
 
-## 附录 C：终止条件汇总
+## 附录 B：终止条件汇总
 
 | 触发源 | 条件 | 最终状态 |
-|--------|------|---------|
+| -------- | ------ | --------- |
 | llm_call | LLM 超时（TimeoutErrorHandler） | should_end=True, error = timeout |
 | llm_call | 无 tool_calls（任务完成） | should_end=True, is_complete=True, final_result=LLM 文本 |
 | llm_call | 未处理异常（DefaultErrorHandler re-raise） | 由 BaseNode._handle_error 兜底 |
@@ -1613,14 +984,4 @@ backend/src/
 | context_compact | 紧急压缩后仍超限 | error = "Context window exceeded after emergency compaction" |
 | tool_execute | awaiting_user_input=True | END, final_result = 工具输出 |
 
-> **2026-05-31 变更**：所有 stuck_detect 相关的终止条件已移除。`route_after_llm` 中纯文本直接路由到 END。新增 context_compact 紧急压缩失败终止条件。
-
-~~以下为已移除的 stuck_detect 终止条件（保留供参考）：~~
-
-| ~~触发源~~ | ~~条件~~ | ~~最终状态~~ |
-|--------|------|---------|
-| ~~stuck_detect~~ | ~~Empty response > 1 次~~ | ~~error = "Empty response persists after correction"~~ |
-| ~~stuck_detect~~ | ~~Planning-only > 2 次~~ | ~~error = "Planning-only persists after correction"~~ |
-| ~~stuck_detect~~ | ~~Monologue count >= 3~~ | ~~error = "Stuck detected (monologue), unrecoverable"~~ |
-| ~~stuck_detect~~ | ~~完成声明验证通过~~ | ~~final_result = LLM 文本, is_complete=True~~ |
-| ~~stuck_detect~~ | ~~用户提问~~ | ~~final_result = LLM 文本, is_complete=True~~ |
+> **2026-05-31 变更**：`route_after_llm` 中纯文本直接路由到 END。新增 context_compact 紧急压缩失败终止条件。

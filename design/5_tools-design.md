@@ -177,8 +177,9 @@ sequenceDiagram
 **职责**：实现 Agent 核心内置工具集。
 
 **工具清单**：
+
 | 工具名 | 分类 | 默认提供商 | 说明 |
-|--------|------|-----------|------|
+| ---- | ---- | ---- | ---- |
 | `web_search` | web_search | **Tavily** | 网络搜索，获取实时信息；针对 LLM/Agent 场景优化，返回结构化结果与 AI 摘要 |
 | `file_read` | file | 本地 FS | 读取文件内容 |
 | `file_write` | file | 本地 FS | 写入文件内容 |
@@ -211,203 +212,59 @@ sequenceDiagram
 
 ### 3.1 领域层设计
 
-#### 3.1.1 ITool 接口（工具协议）
+#### 3.1.1 核心实体：ToolResult 与 ToolContext
 
-```python
-# backend/src/domain/entities/tool.py
+**ToolResult** 是工具执行结果的统一数据结构，包含四个字段：
 
-from __future__ import annotations
-from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+- `output`（str）：文本输出，作为 tool message content 返回给 LLM
+- `success`（bool，默认 True）：标识执行是否成功
+- `error`（Optional[str]）：失败时的错误信息
+- `metadata`（Dict[str, Any]）：附加元数据（如 token 消耗、执行耗时等），不返回给 LLM
 
-
-@dataclass
-class ToolResult:
-    """工具执行结果
-    
-    所有工具执行后统一返回此结构。
-    """
-    output: str
-    """文本输出（将作为 tool message content 返回给 LLM）"""
-    
-    success: bool = True
-    """是否执行成功"""
-    
-    error: Optional[str] = None
-    """错误信息（失败时填写）"""
-    
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    """附加元数据（如 token 消耗、执行耗时等，不返回给 LLM）"""
-
-
-@dataclass
-class ToolContext:
-    """工具执行上下文
-    
-    传递给工具的运行时上下文信息，工具可按需使用。
-    """
-    task_id: str
-    """当前任务 ID"""
-    
-    workspace: str = ""
-    """工作目录路径"""
-    
-    user_id: Optional[str] = None
-    """当前用户 ID"""
-    
-    agent_id: Optional[str] = None
-    """当前 Agent ID"""
-    
-    extra: Dict[str, Any] = field(default_factory=dict)
-    """扩展上下文（由具体工具自行解析）"""
-```
+**ToolContext** 是传递给工具的运行时上下文信息，包含 `task_id`、`workspace`、`user_id`、`agent_id` 和一个可扩展的 `extra` 字典。工具可按需使用这些上下文信息。
 
 #### 3.1.2 IToolRegistry 接口
 
-```python
-# backend/src/domain/repositories/tool_registry.py
+`IToolRegistry` 是定义在领域层的抽象接口，遵循 DDD 原则（接口在领域层，实现在基础设施层）。它定义了工具注册、发现和执行的完整契约：
 
-from abc import ABC, abstractmethod
-from typing import Dict, List, Optional
-
-from src.domain.entities.tool_def import ToolDef
-from src.domain.entities.tool import ToolContext, ToolResult
-
-
-class IToolRegistry(ABC):
-    """工具注册表接口
-    
-    定义工具注册、发现和执行的抽象接口。
-    遵循 DDD 原则：接口在领域层，实现在基础设施层。
-    """
-    
-    @abstractmethod
-    def register(self, tool: "RegisteredTool") -> None:
-        """注册一个工具"""
-        ...
-    
-    @abstractmethod
-    def unregister(self, name: str) -> bool:
-        """取消注册一个工具"""
-        ...
-    
-    @abstractmethod
-    def resolve(self, name: str) -> Optional["RegisteredTool"]:
-        """按名称查找工具"""
-        ...
-    
-    @abstractmethod
-    def list_tools(self, category: Optional[str] = None) -> List["RegisteredTool"]:
-        """列出所有已注册工具（可按分类筛选）"""
-        ...
-    
-    @abstractmethod
-    def get_tool_defs(self, category: Optional[str] = None) -> List[ToolDef]:
-        """获取所有工具的 ToolDef 定义（用于 Prompt Builder）"""
-        ...
-    
-    @abstractmethod
-    async def execute(self, name: str, input: Dict, context: Optional[ToolContext] = None) -> ToolResult:
-        """执行指定工具"""
-        ...
-```
+- `register(tool)` / `unregister(name)`：工具注册与注销
+- `resolve(name)`：按名称查找工具，返回 RegisteredTool 或 None
+- `list_tools(category)`：列出已注册工具，可按分类筛选
+- `get_tool_defs(category)`：获取所有工具的 ToolDef 列表，供 Prompt Builder 使用
+- `execute(name, input, context)`：异步执行指定工具，返回 ToolResult
 
 #### 3.1.3 ToolPolicy 值对象
 
-```python
-# backend/src/domain/entities/tool_policy.py
+`ToolPolicy` 是一个不可变值对象（frozen dataclass），定义单个工具的执行约束策略。包含以下字段：
 
-from dataclasses import dataclass, field
-from typing import List, Optional
+| 字段 | 类型 | 默认值 | 说明 |
+| ---- | ---- | ------ | ---- |
+| `timeout_ms` | int | 30000 | 执行超时时间（毫秒） |
+| `max_calls_per_minute` | int | 60 | 每分钟最大调用次数 |
+| `requires_approval` | bool | false | 是否需要用户审批才能执行 |
+| `sandboxed` | bool | false | 是否需要沙箱隔离执行 |
+| `allowed_paths` | List[str] | [] | 允许访问的文件路径前缀（file 类工具使用） |
+| `risk_level` | str | "low" | 风险等级：low / medium / high |
 
-
-@dataclass(frozen=True)
-class ToolPolicy:
-    """工具执行策略（值对象）
-    
-    定义单个工具的执行约束。作为 RegisteredTool 的不可变属性。
-    """
-    
-    timeout_ms: int = 30000
-    """执行超时时间（毫秒），默认 30 秒"""
-    
-    max_calls_per_minute: int = 60
-    """每分钟最大调用次数"""
-    
-    requires_approval: bool = False
-    """是否需要用户审批才能执行"""
-    
-    sandboxed: bool = False
-    """是否需要沙箱隔离执行"""
-    
-    allowed_paths: List[str] = field(default_factory=list)
-    """允许访问的文件路径前缀（仅 file 类工具使用）"""
-    
-    risk_level: str = "low"
-    """风险等级：low / medium / high"""
-```
+`ToolPolicy` 作为 `RegisteredTool` 的不可变属性，在工具注册时即确定其执行约束。
 
 #### 3.1.4 RegisteredTool 实体
 
-```python
-# backend/src/domain/entities/registered_tool.py
+`RegisteredTool` 是将工具函数、元数据定义和执行策略绑定在一起的聚合实体。它由 `@tool` 装饰器自动创建，或由扩展适配器手动构建。
 
-from dataclasses import dataclass, field
-from typing import Any, Callable, Coroutine, Dict, List, Optional
+核心属性：
 
-from src.domain.entities.tool import ToolContext, ToolResult
-from src.domain.entities.tool_def import ToolDef, ToolParameter
-from src.domain.entities.tool_policy import ToolPolicy
+| 属性 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| `name` | str | 工具唯一名称 |
+| `description` | str | 功能描述（供 LLM 理解何时调用） |
+| `func` | ToolFunction | 实际执行函数，签名为 `async (Dict, Optional[ToolContext]) -> ToolResult` |
+| `parameters` | List[ToolParameter] | 参数定义列表 |
+| `returns` | str | 返回值描述 |
+| `category` | str | 工具分类（默认 "general"） |
+| `policy` | ToolPolicy | 执行策略（默认 ToolPolicy()） |
 
-
-# 工具函数类型：接收 Dict 参数和可选 Context，返回 ToolResult
-ToolFunction = Callable[..., Coroutine[Any, Any, ToolResult]]
-
-
-@dataclass
-class RegisteredTool:
-    """已注册的工具实体
-    
-    将工具函数、元数据定义、执行策略绑定在一起。
-    由 @tool 装饰器自动创建，或由适配器手动构建。
-    """
-    
-    name: str
-    """工具唯一名称"""
-    
-    description: str
-    """功能描述（用于 LLM 理解何时调用）"""
-    
-    func: ToolFunction
-    """实际执行函数"""
-    
-    parameters: List[ToolParameter] = field(default_factory=list)
-    """参数定义列表"""
-    
-    returns: str = ""
-    """返回值描述"""
-    
-    category: str = "general"
-    """工具分类"""
-    
-    policy: ToolPolicy = field(default_factory=ToolPolicy)
-    """执行策略"""
-    
-    def to_tool_def(self) -> ToolDef:
-        """转换为 ToolDef 实体（供 Prompt Builder 使用）
-        
-        Returns:
-            与 2_prompt-builder.md 定义的 ToolDef 结构对齐
-        """
-        return ToolDef(
-            name=self.name,
-            description=self.description,
-            parameters=self.parameters,
-            returns=self.returns,
-            category=self.category,
-        )
-```
+`RegisteredTool` 提供 `to_tool_def()` 方法，将自身转换为 `ToolDef` 实体供 Prompt Builder 使用，确保与 1.2 设计对齐。
 
 ---
 
@@ -415,260 +272,38 @@ class RegisteredTool:
 
 #### 3.2.1 @tool 装饰器
 
-这是整个工具系统的核心入口，开发者通过装饰器声明工具：
+`@tool` 是整个工具系统的核心入口。开发者通过装饰器声明工具，装饰器自动完成以下工作：
 
-```python
-# backend/src/infrastructure/tools/decorator.py
+1. **名称推导**：优先使用显式指定的 `name` 参数，否则使用函数名
+2. **描述提取**：优先使用 `description` 参数，否则从 docstring 首行提取
+3. **参数解析**：调用 `_extract_parameters(func)` 从函数签名中提取参数定义：
+   - 从类型注解（`get_type_hints`）提取参数类型并映射到 JSON Schema 类型（str->"string", int->"integer", float->"number", bool->"boolean", list->"array", dict->"object"）
+   - 从 Google-style docstring 的 Args 段落提取参数描述
+   - 跳过 `self`、`context`、`ctx` 等内部参数
+4. **策略构建**：根据装饰器参数创建 `ToolPolicy` 值对象
+5. **函数包装**：通过 `_wrap_tool_function` 将原始函数包装为统一的异步调用接口，支持：同步/异步函数的自动适配（同步函数通过 `asyncio.to_thread` 执行），统一的 `Dict + ToolContext -> ToolResult` 签名，以及返回值规范化（str/dict 自动包装为 ToolResult）
+6. **全局收集**：将构建好的 `RegisteredTool` 加入全局收集器 `_tool_collector` 列表
+7. **元数据附加**：在包装后的函数上附加 `_registered_tool` 属性，便于测试和内省
 
-import asyncio
-import inspect
-import functools
-from typing import Any, Callable, Dict, List, Optional, get_type_hints
+装饰器参数列表：
 
-from src.domain.entities.tool import ToolContext, ToolResult
-from src.domain.entities.tool_def import ToolParameter
-from src.domain.entities.tool_policy import ToolPolicy
-from src.domain.entities.registered_tool import RegisteredTool
-
-
-# 全局工具收集器（模块加载时收集，后由 Registry 统一注册）
-_tool_collector: List[RegisteredTool] = []
-
-
-def get_collected_tools() -> List[RegisteredTool]:
-    """获取所有通过 @tool 装饰器收集的工具"""
-    return list(_tool_collector)
-
-
-def tool(
-    name: Optional[str] = None,
-    description: str = "",
-    category: str = "general",
-    returns: str = "",
-    timeout_ms: int = 30000,
-    max_calls_per_minute: int = 60,
-    requires_approval: bool = False,
-    sandboxed: bool = False,
-    risk_level: str = "low",
-) -> Callable:
-    """工具定义装饰器
-    
-    使用方式：
-    
-        @tool(
-            name="web_search",
-            description="搜索网络获取实时信息",
-            category="web_search",
-            returns="搜索结果文本",
-            timeout_ms=15000,
-        )
-        async def web_search(query: str, max_results: int = 5) -> ToolResult:
-            '''
-            Args:
-                query: 搜索关键词
-                max_results: 最大返回结果数
-            '''
-            ...
-    
-    装饰器自动完成：
-    1. 从函数签名提取参数类型和默认值
-    2. 从 docstring 提取参数描述
-    3. 构建 ToolParameter 列表
-    4. 创建 RegisteredTool 并加入收集器
-    
-    Args:
-        name: 工具名称（默认使用函数名）
-        description: 工具功能描述
-        category: 工具分类
-        returns: 返回值描述
-        timeout_ms: 超时时间（毫秒）
-        max_calls_per_minute: 每分钟最大调用次数
-        requires_approval: 是否需要审批
-        sandboxed: 是否沙箱执行
-        risk_level: 风险等级
-    """
-    def decorator(func: Callable) -> Callable:
-        tool_name = name or func.__name__
-        tool_desc = description or (func.__doc__ or "").split("\n")[0].strip()
-        
-        # 解析参数
-        parameters = _extract_parameters(func)
-        
-        # 构建策略
-        policy = ToolPolicy(
-            timeout_ms=timeout_ms,
-            max_calls_per_minute=max_calls_per_minute,
-            requires_approval=requires_approval,
-            sandboxed=sandboxed,
-            risk_level=risk_level,
-        )
-        
-        # 包装为统一的异步调用签名
-        wrapped = _wrap_tool_function(func)
-        
-        # 创建 RegisteredTool
-        registered = RegisteredTool(
-            name=tool_name,
-            description=tool_desc,
-            func=wrapped,
-            parameters=parameters,
-            returns=returns,
-            category=category,
-            policy=policy,
-        )
-        
-        # 加入收集器
-        _tool_collector.append(registered)
-        
-        # 保留原始函数的元信息
-        @functools.wraps(func)
-        async def wrapper(*args, **kwargs):
-            return await wrapped(*args, **kwargs)
-        
-        # 在 wrapper 上附加元数据，便于测试和内省
-        wrapper._registered_tool = registered
-        
-        return wrapper
-    
-    return decorator
-
-
-def _extract_parameters(func: Callable) -> List[ToolParameter]:
-    """从函数签名和 docstring 提取参数定义
-    
-    支持的类型映射：
-    - str → "string"
-    - int → "integer"
-    - float → "number"
-    - bool → "boolean"
-    - list → "array"
-    - dict → "object"
-    """
-    sig = inspect.signature(func)
-    type_hints = get_type_hints(func)
-    doc_params = _parse_docstring_params(func.__doc__ or "")
-    
-    parameters = []
-    for param_name, param in sig.parameters.items():
-        # 跳过 self、context 参数
-        if param_name in ("self", "context", "ctx"):
-            continue
-        
-        # 类型映射
-        param_type = type_hints.get(param_name, str)
-        type_str = _python_type_to_schema_type(param_type)
-        
-        # 是否必填
-        required = param.default is inspect.Parameter.empty
-        
-        # 描述（从 docstring 提取）
-        desc = doc_params.get(param_name, "")
-        
-        parameters.append(ToolParameter(
-            name=param_name,
-            type=type_str,
-            description=desc,
-            required=required,
-        ))
-    
-    return parameters
-
-
-def _python_type_to_schema_type(py_type: Any) -> str:
-    """Python 类型到 JSON Schema 类型的映射"""
-    type_map = {
-        str: "string",
-        int: "integer",
-        float: "number",
-        bool: "boolean",
-        list: "array",
-        dict: "object",
-    }
-    # 处理 Optional 等泛型
-    origin = getattr(py_type, "__origin__", None)
-    if origin is list:
-        return "array"
-    if origin is dict:
-        return "object"
-    return type_map.get(py_type, "string")
-
-
-def _parse_docstring_params(docstring: str) -> Dict[str, str]:
-    """从 Google-style docstring 解析 Args 段落"""
-    params = {}
-    in_args = False
-    current_param = None
-    
-    for line in docstring.split("\n"):
-        stripped = line.strip()
-        if stripped.lower().startswith("args:"):
-            in_args = True
-            continue
-        if in_args:
-            if stripped and not stripped.startswith("-") and ":" in stripped:
-                # 新参数行：param_name: description
-                parts = stripped.split(":", 1)
-                current_param = parts[0].strip()
-                params[current_param] = parts[1].strip()
-            elif stripped.startswith("returns:") or stripped.startswith("raises:"):
-                break
-            elif current_param and stripped:
-                # 续行
-                params[current_param] += " " + stripped
-    
-    return params
-
-
-def _wrap_tool_function(func: Callable) -> Callable:
-    """包装工具函数为统一的异步调用接口
-    
-    统一签名：async def(input: Dict, context: ToolContext) -> ToolResult
-    """
-    sig = inspect.signature(func)
-    is_async = asyncio.iscoroutinefunction(func)
-    
-    # 检查函数是否接受 context 参数
-    accepts_context = "context" in sig.parameters or "ctx" in sig.parameters
-    
-    async def wrapped(input: Dict[str, Any], context: Optional[ToolContext] = None) -> ToolResult:
-        # 构建调用参数
-        kwargs = dict(input)
-        if accepts_context and context:
-            ctx_name = "context" if "context" in sig.parameters else "ctx"
-            kwargs[ctx_name] = context
-        
-        # 调用原始函数
-        if is_async:
-            result = await func(**kwargs)
-        else:
-            result = await asyncio.to_thread(func, **kwargs)
-        
-        # 规范化返回值
-        if isinstance(result, ToolResult):
-            return result
-        elif isinstance(result, str):
-            return ToolResult(output=result)
-        elif isinstance(result, dict):
-            return ToolResult(
-                output=result.get("output", str(result)),
-                success=result.get("success", True),
-                metadata=result.get("metadata", {}),
-            )
-        else:
-            return ToolResult(output=str(result))
-    
-    return wrapped
-```
+| 参数 | 类型 | 默认值 | 说明 |
+| ---- | ---- | ---- | ---- |
+| `name` | Optional[str] | 函数名 | 工具唯一名称 |
+| `description` | str | docstring 首行 | 功能描述 |
+| `category` | str | "general" | 工具分类 |
+| `returns` | str | "" | 返回值描述 |
+| `timeout_ms` | int | 30000 | 超时时间（毫秒） |
+| `max_calls_per_minute` | int | 60 | 每分钟最大调用次数 |
+| `requires_approval` | bool | false | 是否需要审批 |
+| `sandboxed` | bool | false | 是否沙箱执行 |
+| `risk_level` | str | "low" | 风险等级 |
 
 #### 3.2.2 使用示例
 
-```python
-# 示例：定义一个 web_search 工具
+使用 `@tool` 装饰器定义一个工具的典型模式如下：
 
-from src.infrastructure.tools.decorator import tool
-from src.domain.entities.tool import ToolResult, ToolContext
-
-
+```text
 @tool(
     name="web_search",
     description="搜索互联网获取实时信息。当需要获取最新资讯、查找事实或验证信息时使用。",
@@ -684,193 +319,47 @@ async def web_search(query: str, max_results: int = 5, context: ToolContext = No
         query: 搜索关键词或问题
         max_results: 最大返回结果数量（1-10）
     """
-    # 具体实现...
-    results = await _do_search(query, max_results)
-    return ToolResult(
-        output=_format_results(results),
-        metadata={"result_count": len(results)},
-    )
+    # 具体实现：调用搜索 API，返回 ToolResult
+    ...
 ```
+
+装饰器自动提取函数签名中的类型信息（`query: str` -> string，`max_results: int` -> integer）和 docstring 中的参数描述，构建完整的工具元数据，无需手动编写 Schema。
 
 ---
 
 ### 3.3 基础设施层设计 — ToolRegistry 实现
 
-```python
-# backend/src/infrastructure/tools/registry.py
+`ToolRegistry` 是 `IToolRegistry` 接口的具体实现，负责管理所有已注册工具的生命周期。
 
-import logging
-from typing import Dict, List, Optional
+核心设计要点：
 
-from src.domain.entities.tool import ToolContext, ToolResult
-from src.domain.entities.tool_def import ToolDef
-from src.domain.entities.registered_tool import RegisteredTool
-from src.domain.repositories.tool_registry import IToolRegistry
-from src.infrastructure.tools.decorator import get_collected_tools
-from src.infrastructure.tools.pipeline import ExecutionPipeline
-
-logger = logging.getLogger(__name__)
-
-
-class ToolRegistry(IToolRegistry):
-    """工具注册表实现
-    
-    职责：
-    1. 管理所有已注册工具
-    2. 提供工具查找和发现
-    3. 通过 ExecutionPipeline 执行工具
-    """
-    
-    def __init__(self, pipeline: Optional[ExecutionPipeline] = None):
-        self._tools: Dict[str, RegisteredTool] = {}
-        self._pipeline = pipeline or ExecutionPipeline()
-    
-    def register(self, tool: RegisteredTool) -> None:
-        """注册工具"""
-        if tool.name in self._tools:
-            logger.warning(f"Tool '{tool.name}' already registered, overwriting")
-        self._tools[tool.name] = tool
-        logger.info(f"Tool registered: {tool.name} (category={tool.category})")
-    
-    def unregister(self, name: str) -> bool:
-        """取消注册"""
-        if name in self._tools:
-            del self._tools[name]
-            logger.info(f"Tool unregistered: {name}")
-            return True
-        return False
-    
-    def resolve(self, name: str) -> Optional[RegisteredTool]:
-        """按名称查找工具"""
-        return self._tools.get(name)
-    
-    def list_tools(self, category: Optional[str] = None) -> List[RegisteredTool]:
-        """列出工具"""
-        tools = list(self._tools.values())
-        if category:
-            tools = [t for t in tools if t.category == category]
-        return tools
-    
-    def get_tool_defs(self, category: Optional[str] = None) -> List[ToolDef]:
-        """获取 ToolDef 列表（供 Prompt Builder Layer 5 使用）"""
-        tools = self.list_tools(category)
-        return [t.to_tool_def() for t in tools]
-    
-    async def execute(self, name: str, input: Dict, context: Optional[ToolContext] = None) -> ToolResult:
-        """执行工具（经过中间件管道）"""
-        tool = self.resolve(name)
-        if not tool:
-            return ToolResult(
-                output=f"Error: Tool '{name}' not found",
-                success=False,
-                error=f"Tool '{name}' is not registered",
-            )
-        
-        return await self._pipeline.execute(tool, input, context)
-    
-    def auto_register_collected(self) -> None:
-        """自动注册所有通过 @tool 装饰器收集的工具"""
-        for tool in get_collected_tools():
-            self.register(tool)
-    
-    @property
-    def tool_count(self) -> int:
-        return len(self._tools)
-```
+- **内部存储**：使用 `Dict[str, RegisteredTool]` 以工具名为键存储已注册工具
+- **执行委托**：`execute()` 方法首先通过 `resolve()` 查找工具，若未找到则返回包含 "Tool not found" 错误信息的 `ToolResult`；若找到则委托给 `ExecutionPipeline` 执行
+- **自动注册**：`auto_register_collected()` 方法从全局收集器批量导入所有通过 `@tool` 装饰器标记的工具
+- **ToolDef 生成**：`get_tool_defs()` 遍历已注册工具并调用各自的 `to_tool_def()` 方法，生成供 Prompt Builder Layer 5 使用的 ToolDef 列表
+- **分类筛选**：`list_tools()` 和 `get_tool_defs()` 均支持可选的 `category` 参数进行筛选
+- **重复注册处理**：同名工具重复注册时记录警告并覆盖旧定义
+- **管道注入**：构造时接受可选的 `ExecutionPipeline` 实例，未提供时使用默认空管道
 
 ---
 
 ### 3.4 应用层设计 — ExecutionPipeline
 
-```python
-# backend/src/infrastructure/tools/pipeline.py
+`ExecutionPipeline` 是工具执行的编排核心，采用洋葱模型（Onion Model）组织中间件链。
 
-import asyncio
-import logging
-import time
-from typing import Any, Dict, List, Optional, Protocol
+**中间件协议**：每个中间件遵循统一协议 -- `async def process(tool, input, context, next_handler) -> ToolResult`，其中 `next_handler` 是调用链中的下一个处理器。中间件可在调用 `next_handler` 前后执行逻辑（前置/后置处理）。
 
-from src.domain.entities.tool import ToolContext, ToolResult
-from src.domain.entities.registered_tool import RegisteredTool
+**执行流程**：
 
-logger = logging.getLogger(__name__)
+1. 记录起始时间
+2. 以 `final_handler`（直接调用 `tool.func`）为内层，逆序遍历中间件列表，逐层构建洋葱调用链：每个中间件包裹下一个 handler
+3. 执行最外层 handler，中间件按注册顺序依次处理
+4. 成功时在 `result.metadata` 中记录 `duration_ms` 并记录 info 日志
+5. 任意异常被捕获后返回统一的失败 `ToolResult`，记录 error 日志
 
+**默认中间件顺序**：Security -> RateLimit -> Timeout -> Sandbox -> Invoke（即工具实际执行）。
 
-class Middleware(Protocol):
-    """中间件协议"""
-    
-    async def process(
-        self,
-        tool: RegisteredTool,
-        input: Dict[str, Any],
-        context: Optional[ToolContext],
-        next_handler: "MiddlewareHandler",
-    ) -> ToolResult:
-        ...
-
-
-MiddlewareHandler = Any  # Callable that takes (tool, input, context) -> ToolResult
-
-
-class ExecutionPipeline:
-    """工具执行管道
-    
-    按顺序执行中间件链：Security → RateLimit → Timeout → Sandbox → Invoke
-    """
-    
-    def __init__(self, middlewares: Optional[List[Middleware]] = None):
-        self._middlewares: List[Middleware] = middlewares or []
-    
-    def add_middleware(self, middleware: Middleware) -> None:
-        """添加中间件"""
-        self._middlewares.append(middleware)
-    
-    async def execute(
-        self,
-        tool: RegisteredTool,
-        input: Dict[str, Any],
-        context: Optional[ToolContext] = None,
-    ) -> ToolResult:
-        """执行工具（经过中间件链）"""
-        start_time = time.time()
-        
-        # 构建中间件链（洋葱模型）
-        async def final_handler(t: RegisteredTool, inp: Dict, ctx: Optional[ToolContext]) -> ToolResult:
-            return await t.func(inp, ctx)
-        
-        handler = final_handler
-        for mw in reversed(self._middlewares):
-            handler = _make_next(mw, handler)
-        
-        try:
-            result = await handler(tool, input, context)
-            duration_ms = int((time.time() - start_time) * 1000)
-            result.metadata["duration_ms"] = duration_ms
-            logger.info(
-                f"Tool executed: {tool.name}",
-                extra={"tool": tool.name, "duration_ms": duration_ms, "success": result.success},
-            )
-            return result
-        except Exception as e:
-            duration_ms = int((time.time() - start_time) * 1000)
-            logger.error(
-                f"Tool execution failed: {tool.name}",
-                extra={"tool": tool.name, "error": str(e), "duration_ms": duration_ms},
-            )
-            return ToolResult(
-                output=f"Tool execution error: {str(e)}",
-                success=False,
-                error=str(e),
-                metadata={"duration_ms": duration_ms},
-            )
-
-
-def _make_next(mw: Middleware, next_handler):
-    """构建洋葱模型中间件调用链"""
-    async def handler(tool, input, context):
-        return await mw.process(tool, input, context, next_handler)
-    return handler
-```
+管道支持构造时传入中间件列表或通过 `add_middleware()` 动态添加，支持灵活配置不同的中间件组合。
 
 ---
 
@@ -878,195 +367,23 @@ def _make_next(mw: Middleware, next_handler):
 
 #### 3.5.1 超时中间件
 
-```python
-# backend/src/infrastructure/tools/middleware/timeout.py
-
-import asyncio
-from typing import Any, Dict, Optional
-
-from src.domain.entities.tool import ToolContext, ToolResult
-from src.domain.entities.registered_tool import RegisteredTool
-
-
-class TimeoutMiddleware:
-    """超时控制中间件
-    
-    根据工具的 policy.timeout_ms 设置执行超时。
-    超时后返回错误结果而非抛出异常。
-    """
-    
-    async def process(
-        self,
-        tool: RegisteredTool,
-        input: Dict[str, Any],
-        context: Optional[ToolContext],
-        next_handler,
-    ) -> ToolResult:
-        timeout_sec = tool.policy.timeout_ms / 1000.0
-        
-        try:
-            return await asyncio.wait_for(
-                next_handler(tool, input, context),
-                timeout=timeout_sec,
-            )
-        except asyncio.TimeoutError:
-            return ToolResult(
-                output=f"Tool '{tool.name}' timed out after {tool.policy.timeout_ms}ms",
-                success=False,
-                error="timeout",
-                metadata={"timeout_ms": tool.policy.timeout_ms},
-            )
-```
+`TimeoutMiddleware` 基于 `asyncio.wait_for` 实现工具执行超时控制。它从 `tool.policy.timeout_ms` 读取每个工具的超时阈值。当 `next_handler` 在指定时间内未完成时，捕获 `asyncio.TimeoutError` 并返回一个包含 "timed out" 消息和 `error="timeout"` 的失败 `ToolResult`，而非向上层抛出异常。
 
 #### 3.5.2 限流中间件
 
-```python
-# backend/src/infrastructure/tools/middleware/rate_limit.py
-
-import time
-from collections import defaultdict
-from typing import Any, Dict, Optional
-
-from src.domain.entities.tool import ToolContext, ToolResult
-from src.domain.entities.registered_tool import RegisteredTool
-
-
-class RateLimitMiddleware:
-    """令牌桶限流中间件
-    
-    基于滑动窗口实现 per-tool 限流。
-    """
-    
-    def __init__(self, global_max_per_minute: int = 300):
-        self._call_records: Dict[str, list] = defaultdict(list)
-        self._global_max = global_max_per_minute
-    
-    async def process(
-        self,
-        tool: RegisteredTool,
-        input: Dict[str, Any],
-        context: Optional[ToolContext],
-        next_handler,
-    ) -> ToolResult:
-        now = time.time()
-        window_start = now - 60.0
-        
-        # 清理过期记录
-        tool_records = self._call_records[tool.name]
-        self._call_records[tool.name] = [t for t in tool_records if t > window_start]
-        
-        # 检查 per-tool 限流
-        if len(self._call_records[tool.name]) >= tool.policy.max_calls_per_minute:
-            return ToolResult(
-                output=f"Tool '{tool.name}' rate limited: max {tool.policy.max_calls_per_minute} calls/min",
-                success=False,
-                error="rate_limited",
-            )
-        
-        # 记录调用
-        self._call_records[tool.name].append(now)
-        
-        return await next_handler(tool, input, context)
-```
+`RateLimitMiddleware` 基于滑动窗口实现 per-tool 调用频率限制。每次调用前清理 60 秒窗口外的过期记录，然后检查当前窗口内的调用次数是否超过 `tool.policy.max_calls_per_minute`。超限时直接返回 `error="rate_limited"` 的失败 `ToolResult`，不执行实际调用；未超限则记录本次调用时间戳后放行。支持构造时设置 `global_max_per_minute` 全局上限（当前仅预留接口）。
 
 #### 3.5.3 安全检查中间件
 
-```python
-# backend/src/infrastructure/tools/middleware/security.py
+`SecurityMiddleware` 负责工具执行前的安全检查，包含三层防护：
 
-import os
-from typing import Any, Dict, List, Optional
-
-from src.domain.entities.tool import ToolContext, ToolResult
-from src.domain.entities.registered_tool import RegisteredTool
-
-
-class SecurityMiddleware:
-    """安全检查中间件
-    
-    职责：
-    1. 检查工具是否在白名单中（如果启用白名单）
-    2. 验证文件路径是否在允许范围内
-    3. 检查是否需要审批
-    """
-    
-    def __init__(self, allowed_tools: Optional[List[str]] = None):
-        self._allowed_tools = allowed_tools  # None 表示不限制
-    
-    async def process(
-        self,
-        tool: RegisteredTool,
-        input: Dict[str, Any],
-        context: Optional[ToolContext],
-        next_handler,
-    ) -> ToolResult:
-        # 白名单检查
-        if self._allowed_tools is not None and tool.name not in self._allowed_tools:
-            return ToolResult(
-                output=f"Tool '{tool.name}' is not allowed in current context",
-                success=False,
-                error="permission_denied",
-            )
-        
-        # 文件路径安全检查（file 类工具）
-        if tool.category == "file" and tool.policy.allowed_paths:
-            path = input.get("path", "") or input.get("file_path", "")
-            if path and not self._is_path_allowed(path, tool.policy.allowed_paths):
-                return ToolResult(
-                    output=f"Access denied: path '{path}' is outside allowed directories",
-                    success=False,
-                    error="path_not_allowed",
-                )
-        
-        # 审批检查（需要 HITL 支持）
-        if tool.policy.requires_approval:
-            # TODO: 集成 HITL 审批流程
-            pass
-        
-        return await next_handler(tool, input, context)
-    
-    def _is_path_allowed(self, path: str, allowed_paths: List[str]) -> bool:
-        """检查路径是否在允许的目录下"""
-        abs_path = os.path.abspath(path)
-        return any(abs_path.startswith(os.path.abspath(p)) for p in allowed_paths)
-```
+1. **工具白名单**：构造时传入 `allowed_tools` 列表（`None` 表示不限制），不在白名单中的工具调用返回 `error="permission_denied"`
+2. **文件路径校验**：对 file 类工具，检查请求路径（从 `input` 中的 `path` 或 `file_path` 字段提取）是否在 `tool.policy.allowed_paths` 范围内，通过绝对路径前缀匹配实现，越权访问返回 `error="path_not_allowed"`
+3. **审批检查**：检查 `tool.policy.requires_approval` 标志，预留 HITL（Human-in-the-Loop）审批流程集成点
 
 #### 3.5.4 沙箱中间件
 
-```python
-# backend/src/infrastructure/tools/middleware/sandbox.py
-
-from typing import Any, Dict, Optional
-
-from src.domain.entities.tool import ToolContext, ToolResult
-from src.domain.entities.registered_tool import RegisteredTool
-
-
-class SandboxMiddleware:
-    """沙箱执行中间件
-    
-    对标记为 sandboxed=True 的工具，在受限环境中执行。
-    当前实现为标记检查 + 资源限制预留接口。
-    后续可扩展为 subprocess 隔离或容器沙箱。
-    """
-    
-    async def process(
-        self,
-        tool: RegisteredTool,
-        input: Dict[str, Any],
-        context: Optional[ToolContext],
-        next_handler,
-    ) -> ToolResult:
-        if not tool.policy.sandboxed:
-            return await next_handler(tool, input, context)
-        
-        # 沙箱执行：限制资源访问
-        # 当前阶段：直接执行 + 标记
-        # 后续可扩展为 subprocess + seccomp 或 Docker 隔离
-        result = await next_handler(tool, input, context)
-        result.metadata["sandboxed"] = True
-        return result
-```
+`SandboxMiddleware` 为标记了 `sandboxed=True` 的工具提供隔离执行环境。当前阶段实现为标记检查：非 sandboxed 工具直接放行；sandboxed 工具执行后在 `result.metadata` 中记录 `sandboxed=True` 标记。后续可扩展为 subprocess + seccomp 或容器（Docker）级别的沙箱隔离。
 
 ---
 
@@ -1085,465 +402,69 @@ Tavily 是专为 LLM / AI Agent 设计的搜索 API，具备以下特点：
 
 **依赖与配置**：
 
-```bash
-# 添加依赖
-uv add tavily-python
-```
+- 依赖包：`tavily-python`（通过 `uv add tavily-python` 安装）
+- 环境变量配置：
 
-```bash
-# .env 配置
-SEARCH_PROVIDER=tavily
-TAVILY_API_KEY=tvly-xxxxxxxxxxxxxxxxxxxxxxxxxxxx
-TAVILY_SEARCH_DEPTH=basic          # basic | advanced
-TAVILY_INCLUDE_ANSWER=true         # 是否返回 AI 摘要
-```
+| 环境变量 | 必填 | 默认值 | 说明 |
+| ---- | ---- | ---- | ---- |
+| `SEARCH_PROVIDER` | 否 | tavily | 搜索提供商标识 |
+| `TAVILY_API_KEY` | 是 | — | Tavily API 密钥 |
+| `TAVILY_SEARCH_DEPTH` | 否 | basic | 搜索深度：basic 或 advanced |
+| `TAVILY_INCLUDE_ANSWER` | 否 | true | 是否返回 AI 生成的摘要 |
 
-**完整实现**：
+**工具设计要点**：
 
-```python
-# backend/src/infrastructure/tools/builtin/web_search.py
+`web_search` 工具通过 `@tool` 装饰器声明，核心设计要点如下：
 
-import asyncio
-import logging
-import os
-from typing import Any, Dict, List, Optional
+- **装饰器配置**：`category="web_search"`、`timeout_ms=15000`、`max_calls_per_minute=20`、`risk_level="low"`
+- **参数设计**：接受 `query`（搜索关键词，必填）、`max_results`（1-10，默认 5）、`search_depth`（basic/advanced，默认 basic）、`include_domains` 和 `exclude_domains`（可选域名过滤）
+- **输入验证**：空查询直接返回 `error="invalid_input"`；`max_results` 约束到 [1, 10] 范围；无效 `search_depth` 回退到 "basic"
+- **多提供商架构**：通过 `SEARCH_PROVIDER` 环境变量选择提供商（当前仅实现 Tavily），不支持的提供商返回 `error="unsupported_provider"`
 
-from src.infrastructure.tools.decorator import tool
-from src.domain.entities.tool import ToolResult, ToolContext
+**Tavily 提供商实现要点**：
 
-logger = logging.getLogger(__name__)
+- **配置检查**：构造时验证 `TAVILY_API_KEY` 环境变量是否存在，缺少时抛出 `_TavilyConfigError`；验证 `tavily-python` 包是否已安装
+- **同步 SDK 适配**：Tavily SDK 的 `client.search` 是同步调用，通过 `asyncio.to_thread` 包装以在线程池中执行，避免阻塞事件循环
+- **搜索参数**：透传 `query`、`max_results`、`search_depth`、`include_answer`（从 `TAVILY_INCLUDE_ANSWER` 环境变量读取）、`include_domains` 和 `exclude_domains`
 
+**结果格式化**：`_format_tavily_results` 将 Tavily 返回的 JSON 结构格式化为 LLM 可读的 Markdown 文本：
 
-@tool(
-    name="web_search",
-    description="搜索互联网获取实时信息。当需要查找最新资讯、验证事实或获取不确定的知识时使用。",
-    category="web_search",
-    returns="搜索结果列表，包含标题、摘要、来源链接，可选 AI 摘要",
-    timeout_ms=15000,
-    max_calls_per_minute=20,
-    risk_level="low",
-)
-async def web_search(
-    query: str,
-    max_results: int = 5,
-    search_depth: str = "basic",
-    include_domains: Optional[List[str]] = None,
-    exclude_domains: Optional[List[str]] = None,
-    context: Optional[ToolContext] = None,
-) -> ToolResult:
-    """网络搜索工具（默认使用 Tavily）
-    
-    Args:
-        query: 搜索关键词或问题
-        max_results: 最大返回结果数量（1-10）
-        search_depth: 检索深度，basic（快速）或 advanced（更全面但更慢更贵）
-        include_domains: 仅在这些域名中搜索（可选）
-        exclude_domains: 排除这些域名（可选）
-    """
-    # 输入验证
-    if not query.strip():
-        return ToolResult(
-            output="Error: query cannot be empty",
-            success=False,
-            error="invalid_input",
-        )
-
-    max_results = max(1, min(10, max_results))
-    if search_depth not in ("basic", "advanced"):
-        search_depth = "basic"
-
-    provider = os.getenv("SEARCH_PROVIDER", "tavily").lower()
-
-    try:
-        if provider == "tavily":
-            payload = await _tavily_search(
-                query=query,
-                max_results=max_results,
-                search_depth=search_depth,
-                include_domains=include_domains,
-                exclude_domains=exclude_domains,
-            )
-            formatted = _format_tavily_results(payload)
-            return ToolResult(
-                output=formatted,
-                metadata={
-                    "provider": "tavily",
-                    "result_count": len(payload.get("results", [])),
-                    "has_answer": bool(payload.get("answer")),
-                    "search_depth": search_depth,
-                },
-            )
-        else:
-            return ToolResult(
-                output=f"Unsupported search provider: {provider}",
-                success=False,
-                error="unsupported_provider",
-            )
-    except _TavilyConfigError as e:
-        logger.error("Tavily config error: %s", e)
-        return ToolResult(
-            output=f"Search not configured: {e}",
-            success=False,
-            error="config_missing",
-        )
-    except Exception as e:
-        logger.exception("Web search failed")
-        return ToolResult(
-            output=f"Search failed: {str(e)}",
-            success=False,
-            error=str(e),
-        )
-
-
-# ---------------------------------------------------------------------------
-# Tavily 提供商实现
-# ---------------------------------------------------------------------------
-
-class _TavilyConfigError(Exception):
-    """Tavily 配置错误（如缺少 API Key）"""
-
-
-async def _tavily_search(
-    query: str,
-    max_results: int,
-    search_depth: str,
-    include_domains: Optional[List[str]],
-    exclude_domains: Optional[List[str]],
-) -> Dict[str, Any]:
-    """调用 Tavily API 执行搜索
-    
-    使用官方 SDK `tavily-python`，其 client.search 为同步调用，
-    通过 asyncio.to_thread 包装避免阻塞事件循环。
-    """
-    api_key = os.getenv("TAVILY_API_KEY")
-    if not api_key:
-        raise _TavilyConfigError("TAVILY_API_KEY is not set")
-
-    try:
-        from tavily import TavilyClient
-    except ImportError as e:
-        raise _TavilyConfigError(
-            "tavily-python not installed. Run: uv add tavily-python"
-        ) from e
-
-    include_answer = os.getenv("TAVILY_INCLUDE_ANSWER", "true").lower() == "true"
-
-    def _call() -> Dict[str, Any]:
-        client = TavilyClient(api_key=api_key)
-        return client.search(
-            query=query,
-            max_results=max_results,
-            search_depth=search_depth,
-            include_answer=include_answer,
-            include_domains=include_domains or None,
-            exclude_domains=exclude_domains or None,
-        )
-
-    # 同步 SDK 用线程池执行，避免阻塞
-    return await asyncio.to_thread(_call)
-
-
-def _format_tavily_results(payload: Dict[str, Any]) -> str:
-    """将 Tavily 返回格式化为 LLM 可读文本
-    
-    Tavily 返回结构示例：
-    {
-        "query": "...",
-        "answer": "AI 生成的摘要（可选）",
-        "results": [
-            {"title": "...", "url": "...", "content": "...", "score": 0.95},
-            ...
-        ]
-    }
-    """
-    results = payload.get("results", []) or []
-    answer = payload.get("answer")
-
-    if not results and not answer:
-        return "No results found."
-
-    parts: List[str] = []
-
-    # 优先展示 AI 摘要（如果启用）
-    if answer:
-        parts.append("## Summary")
-        parts.append(answer.strip())
-        parts.append("")
-
-    parts.append("## Search Results")
-    for i, r in enumerate(results, 1):
-        title = r.get("title") or "Untitled"
-        url = r.get("url", "")
-        content = (r.get("content") or "").strip()
-        score = r.get("score")
-
-        parts.append(f"{i}. **{title}**")
-        if url:
-            parts.append(f"   URL: {url}")
-        if content:
-            # 限制单条长度，避免 context 爆炸
-            snippet = content if len(content) <= 500 else content[:500] + "..."
-            parts.append(f"   {snippet}")
-        if score is not None:
-            parts.append(f"   Relevance: {score:.2f}")
-        parts.append("")
-
-    return "\n".join(parts).rstrip()
-```
+- 优先展示 AI 摘要（`answer` 字段，如果有）
+- 逐条展示搜索结果，包含序号、标题（加粗）、URL、正文摘要（限制 500 字符）、相关性评分
+- 单条内容截断到 500 字符，避免 context 窗口溢出
 
 #### 3.6.2 file 操作工具
 
-```python
-# backend/src/infrastructure/tools/builtin/file_ops.py
+文件操作模块包含三个工具，均通过 `@tool` 装饰器声明，共享一个路径解析辅助函数 `_resolve_path`（绝对路径直接使用，相对路径基于 `workspace` 拼接）。
 
-import os
-import glob as glob_module
-from typing import Optional
+**file_read**：
 
-from src.infrastructure.tools.decorator import tool
-from src.domain.entities.tool import ToolResult, ToolContext
+- 装饰器配置：`category="file"`、`timeout_ms=10000`、`risk_level="low"`
+- 参数：`path`（文件路径）、`offset`（起始行号，0 起）、`limit`（最大行数，默认 2000）
+- 行为：UTF-8 编码读取，解码错误用替换字符；文件不存在返回 `error="file_not_found"`；输出包含文件位置信息头（"File: ... lines X-Y of Z"）
+- metadata 包含 `total_lines` 和 `read_lines`
 
+**file_write**：
 
-@tool(
-    name="file_read",
-    description="读取指定路径的文件内容。支持文本文件。",
-    category="file",
-    returns="文件内容文本",
-    timeout_ms=10000,
-    risk_level="low",
-)
-async def file_read(
-    path: str,
-    offset: int = 0,
-    limit: int = 2000,
-    context: Optional[ToolContext] = None,
-) -> ToolResult:
-    """读取文件内容
-    
-    Args:
-        path: 文件路径（相对于 workspace 或绝对路径）
-        offset: 起始行号（从 0 开始）
-        limit: 读取的最大行数
-    """
-    workspace = context.workspace if context else ""
-    full_path = _resolve_path(path, workspace)
-    
-    if not os.path.isfile(full_path):
-        return ToolResult(output=f"File not found: {path}", success=False, error="file_not_found")
-    
-    try:
-        with open(full_path, "r", encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
-        
-        total_lines = len(lines)
-        selected = lines[offset:offset + limit]
-        content = "".join(selected)
-        
-        header = f"File: {path} (lines {offset+1}-{min(offset+limit, total_lines)} of {total_lines})\n"
-        return ToolResult(
-            output=header + content,
-            metadata={"total_lines": total_lines, "read_lines": len(selected)},
-        )
-    except Exception as e:
-        return ToolResult(output=f"Error reading file: {str(e)}", success=False, error=str(e))
+- 装饰器配置：`category="file"`、`timeout_ms=10000`、`requires_approval=True`、`risk_level="medium"`
+- 参数：`path`、`content`
+- 行为：自动创建父目录（`os.makedirs(exist_ok=True)`）；覆盖写入；返回写入字符数和字节数
+- 因为 `requires_approval=True`，执行前需通过 SecurityMiddleware 审批检查
 
+**file_search**：
 
-@tool(
-    name="file_write",
-    description="写入内容到指定文件。如果文件不存在则创建，存在则覆盖。",
-    category="file",
-    returns="写入结果确认",
-    timeout_ms=10000,
-    requires_approval=True,
-    risk_level="medium",
-)
-async def file_write(
-    path: str,
-    content: str,
-    context: Optional[ToolContext] = None,
-) -> ToolResult:
-    """写入文件
-    
-    Args:
-        path: 文件路径
-        content: 要写入的文件内容
-    """
-    workspace = context.workspace if context else ""
-    full_path = _resolve_path(path, workspace)
-    
-    try:
-        os.makedirs(os.path.dirname(full_path), exist_ok=True)
-        with open(full_path, "w", encoding="utf-8") as f:
-            f.write(content)
-        
-        return ToolResult(
-            output=f"Successfully wrote {len(content)} characters to {path}",
-            metadata={"bytes_written": len(content.encode("utf-8"))},
-        )
-    except Exception as e:
-        return ToolResult(output=f"Error writing file: {str(e)}", success=False, error=str(e))
-
-
-@tool(
-    name="file_search",
-    description="在工作目录中搜索文件。支持 glob 模式匹配文件名，或在文件内容中搜索关键词。",
-    category="file",
-    returns="匹配的文件路径列表或包含关键词的行",
-    timeout_ms=15000,
-    risk_level="low",
-)
-async def file_search(
-    pattern: str,
-    search_content: Optional[str] = None,
-    max_results: int = 20,
-    context: Optional[ToolContext] = None,
-) -> ToolResult:
-    """文件搜索
-    
-    Args:
-        pattern: glob 模式（如 "**/*.py"）用于匹配文件名
-        search_content: 在匹配文件中搜索的关键词（可选）
-        max_results: 最大返回结果数
-    """
-    workspace = context.workspace if context else os.getcwd()
-    
-    try:
-        search_path = os.path.join(workspace, pattern)
-        matches = glob_module.glob(search_path, recursive=True)
-        matches = matches[:max_results]
-        
-        if search_content and matches:
-            # 在匹配文件中搜索内容
-            content_matches = []
-            for fpath in matches:
-                if os.path.isfile(fpath):
-                    try:
-                        with open(fpath, "r", encoding="utf-8", errors="replace") as f:
-                            for i, line in enumerate(f, 1):
-                                if search_content in line:
-                                    rel = os.path.relpath(fpath, workspace)
-                                    content_matches.append(f"{rel}:{i}: {line.rstrip()}")
-                    except (OSError, UnicodeDecodeError):
-                        continue
-            
-            output = "\n".join(content_matches[:max_results]) or "No content matches found."
-        else:
-            rel_paths = [os.path.relpath(m, workspace) for m in matches]
-            output = "\n".join(rel_paths) or "No files found matching pattern."
-        
-        return ToolResult(output=output, metadata={"match_count": len(matches)})
-    except Exception as e:
-        return ToolResult(output=f"Search error: {str(e)}", success=False, error=str(e))
-
-
-def _resolve_path(path: str, workspace: str) -> str:
-    """解析文件路径"""
-    if os.path.isabs(path):
-        return path
-    return os.path.join(workspace, path) if workspace else os.path.abspath(path)
-```
+- 装饰器配置：`category="file"`、`timeout_ms=15000`、`risk_level="low"`
+- 参数：`pattern`（glob 模式）、`search_content`（可选关键词）、`max_results`（默认 20）
+- 行为：使用 `glob` 递归匹配文件路径；若提供 `search_content`，则在匹配文件中逐行搜索关键词；结果截断到 `max_results`；跳过二进制/不可读文件
+- 路径解析基于 `context.workspace` 或当前工作目录
 
 #### 3.6.3 clarify 工具
 
-```python
-# backend/src/infrastructure/tools/builtin/clarify.py
-
-from typing import List, Optional
-
-from src.infrastructure.tools.decorator import tool
-from src.domain.entities.tool import ToolResult, ToolContext
-
-
-@tool(
-    name="clarify",
-    description="当任务需求不明确或存在歧义时，向用户发起澄清提问。提供选项可降低用户回答负担。",
-    category="clarify",
-    returns="标记为等待用户回复的特殊响应",
-    timeout_ms=5000,
-    risk_level="low",
-)
-async def clarify(
-    question: str,
-    options: Optional[List[str]] = None,
-    context: Optional[ToolContext] = None,
-) -> ToolResult:
-    """澄清提问工具
-    
-    Args:
-        question: 要向用户提出的问题
-        options: 可选的选项列表，提供给用户选择
-    """
-    if not question.strip():
-        return ToolResult(output="Error: question cannot be empty", success=False, error="invalid_input")
-    
-    # 构建澄清消息（由事件系统推送给前端）
-    output_parts = [f"**Question**: {question}"]
-    if options:
-        output_parts.append("\n**Options**:")
-        for i, opt in enumerate(options, 1):
-            output_parts.append(f"  {i}. {opt}")
-    
-    return ToolResult(
-        output="\n".join(output_parts),
-        metadata={
-            "type": "clarify",
-            "question": question,
-            "options": options or [],
-            "awaiting_user_input": True,
-        },
-    )
-```
+`clarify` 工具用于在任务需求不明确时向用户发起澄清提问。装饰器配置：`category="clarify"`、`timeout_ms=5000`、`risk_level="low"`。参数包括 `question`（必填，提给用户的问题）和 `options`（可选列表，提供选项降低用户回答负担）。空问题返回 `error="invalid_input"`。输出格式为 Markdown 结构（加粗的 Question + 带编号的 Options 列表），metadata 中标记 `type="clarify"` 和 `awaiting_user_input=True`，由事件系统识别并推送给前端等待用户回复。
 
 #### 3.6.4 plan 工具
 
-```python
-# backend/src/infrastructure/tools/builtin/plan.py
-
-from typing import List, Optional
-
-from src.infrastructure.tools.decorator import tool
-from src.domain.entities.tool import ToolResult, ToolContext
-
-
-@tool(
-    name="plan",
-    description="将复杂任务分解为可执行的步骤计划。用于在执行前组织思路和明确行动路径。",
-    category="plan",
-    returns="结构化的任务计划",
-    timeout_ms=5000,
-    risk_level="low",
-)
-async def plan(
-    goal: str,
-    steps: List[str],
-    context: Optional[ToolContext] = None,
-) -> ToolResult:
-    """任务规划工具
-    
-    Args:
-        goal: 任务目标描述
-        steps: 执行步骤列表
-    """
-    if not goal.strip():
-        return ToolResult(output="Error: goal cannot be empty", success=False, error="invalid_input")
-    
-    if not steps:
-        return ToolResult(output="Error: steps cannot be empty", success=False, error="invalid_input")
-    
-    # 格式化计划
-    output_parts = [f"## Plan: {goal}\n"]
-    for i, step in enumerate(steps, 1):
-        output_parts.append(f"- [ ] Step {i}: {step}")
-    
-    return ToolResult(
-        output="\n".join(output_parts),
-        metadata={
-            "type": "plan",
-            "goal": goal,
-            "step_count": len(steps),
-        },
-    )
-```
+`plan` 工具用于将复杂任务分解为可执行的步骤计划。装饰器配置：`category="plan"`、`timeout_ms=5000`、`risk_level="low"`。参数包括 `goal`（任务目标描述，必填）和 `steps`（步骤列表，必填）。空目标或空步骤均返回 `error="invalid_input"`。输出格式为 Markdown 二级标题 + 带 checkbox 的编号步骤列表（`- [ ] Step N: ...`），metadata 中记录 `type="plan"`、`goal` 和 `step_count`。
 
 ---
 
@@ -1551,195 +472,40 @@ async def plan(
 
 #### 3.7.1 MCP 工具适配器
 
-```python
-# backend/src/infrastructure/tools/adapters/mcp_adapter.py
+`MCPToolAdapter` 将 MCP Server 暴露的工具转换为 `RegisteredTool` 格式，使其可注册到 `ToolRegistry` 中被 Agent 统一调用。
 
-from typing import Any, Dict, List, Optional
+核心设计：
 
-from src.domain.entities.tool import ToolContext, ToolResult
-from src.domain.entities.tool_def import ToolParameter
-from src.domain.entities.tool_policy import ToolPolicy
-from src.domain.entities.registered_tool import RegisteredTool
-
-
-class MCPToolAdapter:
-    """MCP 工具适配器
-    
-    将 MCP Server 暴露的工具转换为 RegisteredTool 格式，
-    使其可以注册到 ToolRegistry 中被 Agent 统一调用。
-    """
-    
-    def __init__(self, mcp_client):
-        """
-        Args:
-            mcp_client: MCP 客户端实例（负责与 MCP Server 通信）
-        """
-        self._client = mcp_client
-    
-    async def discover_tools(self) -> List[RegisteredTool]:
-        """从 MCP Server 发现并转换所有可用工具
-        
-        Returns:
-            转换后的 RegisteredTool 列表
-        """
-        mcp_tools = await self._client.list_tools()
-        registered_tools = []
-        
-        for mcp_tool in mcp_tools:
-            tool = self._convert_mcp_tool(mcp_tool)
-            registered_tools.append(tool)
-        
-        return registered_tools
-    
-    def _convert_mcp_tool(self, mcp_tool: Dict[str, Any]) -> RegisteredTool:
-        """将 MCP 工具定义转换为 RegisteredTool"""
-        name = f"mcp_{mcp_tool['name']}"  # 添加前缀避免命名冲突
-        
-        # 转换参数 Schema
-        parameters = self._convert_parameters(mcp_tool.get("inputSchema", {}))
-        
-        # 创建调用函数
-        async def invoke(input: Dict[str, Any], context: Optional[ToolContext] = None) -> ToolResult:
-            try:
-                result = await self._client.call_tool(mcp_tool["name"], input)
-                return ToolResult(output=str(result.get("content", "")))
-            except Exception as e:
-                return ToolResult(output=f"MCP tool error: {str(e)}", success=False, error=str(e))
-        
-        return RegisteredTool(
-            name=name,
-            description=mcp_tool.get("description", ""),
-            func=invoke,
-            parameters=parameters,
-            category="mcp",
-            policy=ToolPolicy(timeout_ms=60000),  # MCP 工具默认更长超时
-        )
-    
-    def _convert_parameters(self, schema: Dict) -> List[ToolParameter]:
-        """将 JSON Schema 转换为 ToolParameter 列表"""
-        parameters = []
-        properties = schema.get("properties", {})
-        required = set(schema.get("required", []))
-        
-        for name, prop in properties.items():
-            parameters.append(ToolParameter(
-                name=name,
-                type=prop.get("type", "string"),
-                description=prop.get("description", ""),
-                required=name in required,
-            ))
-        
-        return parameters
-```
+- **构造**：接受一个 MCP 客户端实例（负责与 MCP Server 通信）
+- **工具发现**：`discover_tools()` 调用客户端 `list_tools()` 获取 MCP 工具列表，逐个转换为 `RegisteredTool`
+- **命名策略**：MCP 工具名加 `mcp_` 前缀避免与内置工具冲突
+- **参数转换**：`_convert_parameters()` 将 MCP 的 `inputSchema`（JSON Schema 格式）中的 `properties` 和 `required` 字段转换为 `ToolParameter` 列表
+- **调用包装**：为每个 MCP 工具创建闭包 `invoke` 函数，调用客户端 `call_tool()` 并处理异常
+- **策略默认**：MCP 工具默认超时 60 秒（长于内置工具的 30 秒），分类为 `"mcp"`
 
 #### 3.7.2 Skill 工具适配器
 
-```python
-# backend/src/infrastructure/tools/adapters/skill_adapter.py
+`SkillToolAdapter` 将 Skill 系统中的技能包装为 `RegisteredTool`，使 Agent 通过统一的工具调用接口触发 Skill 执行。
 
-from typing import Any, Dict, List, Optional
+核心设计：
 
-from src.domain.entities.tool import ToolContext, ToolResult
-from src.domain.entities.tool_def import ToolParameter
-from src.domain.entities.tool_policy import ToolPolicy
-from src.domain.entities.registered_tool import RegisteredTool
-
-
-class SkillToolAdapter:
-    """Skill 工具适配器
-    
-    将 Skill 系统中的技能包装为 RegisteredTool，
-    使 Agent 可以通过统一的工具调用接口触发 Skill 执行。
-    """
-    
-    def __init__(self, skill_registry):
-        """
-        Args:
-            skill_registry: Skill 注册表（提供 Skill 列表和执行能力）
-        """
-        self._skill_registry = skill_registry
-    
-    def wrap_skills(self) -> List[RegisteredTool]:
-        """将所有已注册 Skill 包装为工具"""
-        tools = []
-        for skill in self._skill_registry.list_skills():
-            tool = self._wrap_skill(skill)
-            tools.append(tool)
-        return tools
-    
-    def _wrap_skill(self, skill) -> RegisteredTool:
-        """包装单个 Skill 为工具"""
-        async def invoke(input: Dict[str, Any], context: Optional[ToolContext] = None) -> ToolResult:
-            try:
-                result = await self._skill_registry.execute(skill.name, input, context)
-                return ToolResult(output=str(result))
-            except Exception as e:
-                return ToolResult(output=f"Skill error: {str(e)}", success=False, error=str(e))
-        
-        return RegisteredTool(
-            name=f"skill_{skill.name}",
-            description=skill.description,
-            func=invoke,
-            parameters=skill.parameters,
-            category="skill",
-            policy=ToolPolicy(timeout_ms=120000),  # Skill 通常耗时较长
-        )
-```
+- **构造**：接受一个 Skill 注册表实例（提供 Skill 列表和执行能力）
+- **批量包装**：`wrap_skills()` 遍历 Skill 注册表，将每个 Skill 包装为工具
+- **命名策略**：Skill 名加 `skill_` 前缀区分来源
+- **调用委托**：为每个 Skill 创建闭包 `invoke` 函数，调用 Skill 注册表的 `execute()` 方法并处理异常
+- **策略默认**：Skill 工具默认超时 120 秒（Skill 通常耗时较长），分类为 `"skill"`
 
 #### 3.7.3 Sub-Agent 工具适配器
 
-```python
-# backend/src/infrastructure/tools/adapters/sub_agent_adapter.py
+`SubAgentToolAdapter` 将任务委派给子 Agent 的能力包装为一个名为 `delegate_task` 的工具。Agent 可通过此工具将特定子任务委派给专门的 Sub-Agent。
 
-from typing import Any, Dict, List, Optional
+核心设计：
 
-from src.domain.entities.tool import ToolContext, ToolResult
-from src.domain.entities.tool_def import ToolParameter
-from src.domain.entities.tool_policy import ToolPolicy
-from src.domain.entities.registered_tool import RegisteredTool
-
-
-class SubAgentToolAdapter:
-    """Sub-Agent 委派工具适配器
-    
-    将任务委派给子 Agent 的能力包装为工具。
-    Agent 可通过此工具将特定子任务委派给专门的 Sub-Agent。
-    """
-    
-    def create_delegate_tool(self, available_agents: List[Dict]) -> RegisteredTool:
-        """创建委派工具"""
-        agent_names = [a["name"] for a in available_agents]
-        
-        async def invoke(input: Dict[str, Any], context: Optional[ToolContext] = None) -> ToolResult:
-            agent_name = input.get("agent_name", "")
-            task = input.get("task", "")
-            
-            if agent_name not in agent_names:
-                return ToolResult(
-                    output=f"Unknown agent: {agent_name}. Available: {', '.join(agent_names)}",
-                    success=False,
-                    error="unknown_agent",
-                )
-            
-            # TODO: 实际委派逻辑（通过 Multi-Agent 模块）
-            return ToolResult(
-                output=f"Task delegated to {agent_name}: {task}",
-                metadata={"delegated_to": agent_name, "task": task},
-            )
-        
-        return RegisteredTool(
-            name="delegate_task",
-            description="将子任务委派给专门的 Sub-Agent 执行。当任务需要特定领域专家处理时使用。",
-            func=invoke,
-            parameters=[
-                ToolParameter(name="agent_name", type="string", description="目标 Agent 名称", required=True),
-                ToolParameter(name="task", type="string", description="任务描述", required=True),
-            ],
-            returns="委派结果",
-            category="sub_agent",
-            policy=ToolPolicy(timeout_ms=300000, risk_level="medium"),
-        )
-```
+- **工具生成**：`create_delegate_tool(available_agents)` 根据当前可用的子 Agent 列表动态创建委派工具
+- **参数**：`agent_name`（目标 Agent 名称，必填）+ `task`（任务描述，必填）
+- **校验**：执行时检查 `agent_name` 是否在可用列表中，无效时返回 `error="unknown_agent"` 并列出可用选项
+- **委派逻辑**：当前为占位实现，标记 TODO 待对接 Multi-Agent 模块进行实际委派
+- **策略**：`timeout_ms=300000`（5 分钟，子 Agent 执行耗时较长），`risk_level="medium"`，分类为 `"sub_agent"`
 
 ---
 
@@ -1747,70 +513,22 @@ class SubAgentToolAdapter:
 
 #### 3.8.1 tool_execute_node 对接
 
-现有 `tool_execute_node` 已通过 `config["configurable"]["tool_registry"]` 获取 Registry 实例。
-本模块只需确保 `ToolRegistry` 实现了 `execute(name, input)` 接口即可无缝对接。
+现有 `tool_execute_node` 已通过 `config["configurable"]["tool_registry"]` 获取 Registry 实例。本模块只需确保 `ToolRegistry` 实现了 `execute(name, input)` 接口即可无缝对接。
 
-**集成方式**（在 Agent 启动时注入）：
+**集成方式**（在 Agent 启动时注入）：在 `create_tool_registry()` 工厂函数中完成以下步骤：
 
-```python
-# backend/src/presentation/dependencies.py（部分）
-
-from src.infrastructure.tools.registry import ToolRegistry
-from src.infrastructure.tools.pipeline import ExecutionPipeline
-from src.infrastructure.tools.middleware.timeout import TimeoutMiddleware
-from src.infrastructure.tools.middleware.rate_limit import RateLimitMiddleware
-from src.infrastructure.tools.middleware.security import SecurityMiddleware
-from src.infrastructure.tools.middleware.sandbox import SandboxMiddleware
-
-# 导入内置工具（触发 @tool 装饰器注册）
-# 注意：web_search 默认使用 Tavily，需要配置 TAVILY_API_KEY 环境变量
-#      未配置时工具仍可注册，仅在实际调用时返回 config_missing 错误
-import src.infrastructure.tools.builtin.web_search  # noqa: F401
-import src.infrastructure.tools.builtin.file_ops    # noqa: F401
-import src.infrastructure.tools.builtin.clarify     # noqa: F401
-import src.infrastructure.tools.builtin.plan        # noqa: F401
-import src.infrastructure.tools.builtin.shell       # noqa: F401
-
-
-def create_tool_registry(workspace: str = "") -> ToolRegistry:
-    """创建并配置工具注册表"""
-    # 构建中间件管道
-    pipeline = ExecutionPipeline()
-    pipeline.add_middleware(SecurityMiddleware(allowed_tools=None))
-    pipeline.add_middleware(RateLimitMiddleware(global_max_per_minute=300))
-    pipeline.add_middleware(TimeoutMiddleware())
-    pipeline.add_middleware(SandboxMiddleware())
-    
-    # 创建 Registry
-    registry = ToolRegistry(pipeline=pipeline)
-    
-    # 自动注册 @tool 装饰器收集的工具
-    registry.auto_register_collected()
-    
-    return registry
-```
+1. 创建 `ExecutionPipeline` 实例并按顺序添加中间件：`SecurityMiddleware` -> `RateLimitMiddleware` -> `TimeoutMiddleware` -> `SandboxMiddleware`
+2. 创建 `ToolRegistry` 并注入 Pipeline
+3. 调用 `auto_register_collected()` 自动注册所有通过 `@tool` 装饰器标记的工具
+4. 通过 import 语句触发内置工具模块加载（`web_search`、`file_ops`、`clarify`、`plan`、`shell`），使用 `# noqa: F401` 标记避免 linter 告警
 
 #### 3.8.2 tool_execute_node 返回值兼容
 
-现有 `tool_execute_node` 期望 `execute()` 返回 `dict`，新实现返回 `ToolResult`。
-
-**兼容方案**：`ToolRegistry.execute()` 返回 `ToolResult`，在 `tool_execute_node` 中转换：
-
-```python
-# 修改 tool_execute_node 中的调用方式
-result: ToolResult = await tool_registry.execute(tool_name, tool_input, context)
-results[tool_call_id] = result.output  # 取 output 字段作为 tool message content
-```
+现有 `tool_execute_node` 期望 `execute()` 返回 `dict`，新实现返回 `ToolResult`。兼容方案为：`tool_execute_node` 调用 `tool_registry.execute()` 获取 `ToolResult` 后，取 `result.output` 字段作为 tool message content 存入结果字典。这样下游代码仅需改动一行取值逻辑，其余不变。
 
 #### 3.8.3 ToolDef 集成到 Prompt Builder
 
-在 Agent Loop 启动时，通过 Registry 获取 ToolDef 列表，传递给 Prompt Builder：
-
-```python
-# 在 Agent 执行前构建 Prompt 时
-tool_defs: List[ToolDef] = registry.get_tool_defs()
-system_prompt = prompt_assembler.assemble(template=..., tools=tool_defs, ...)
-```
+在 Agent 执行前，通过 `registry.get_tool_defs()` 获取 `List[ToolDef]`，传递给 `prompt_assembler.assemble()` 方法，由 Prompt Builder 将其渲染到 Layer 5 Tooling Section 中，最终嵌入 system prompt 供 LLM 理解可用工具。
 
 ---
 
@@ -1926,248 +644,33 @@ backend/src/
 
 ### 测试模块: @tool 装饰器
 
-#### 测试用例 1: _extract_parameters_正确解析函数签名
+**测试策略**：覆盖装饰器的三个核心功能点，通过构造示例函数验证装饰器行为。
 
-- **测试目标**: 验证从函数签名提取参数类型和默认值
-- **输入参数**: 定义带类型注解的函数
-- **预期行为**: 返回正确的 ToolParameter 列表
-
-```python
-def test_extract_parameters_from_typed_function():
-    # Arrange
-    async def sample(query: str, count: int = 5, verbose: bool = False) -> ToolResult:
-        """Sample tool
-        
-        Args:
-            query: Search query
-            count: Result count
-            verbose: Enable verbose output
-        """
-        pass
-    
-    # Act
-    params = _extract_parameters(sample)
-    
-    # Assert
-    assert len(params) == 3
-    assert params[0].name == "query"
-    assert params[0].type == "string"
-    assert params[0].required is True
-    assert params[1].name == "count"
-    assert params[1].type == "integer"
-    assert params[1].required is False
-    assert params[2].description == "Enable verbose output"
-```
-
-#### 测试用例 2: tool_装饰器_自动收集到全局列表
-
-```python
-def test_tool_decorator_auto_collects():
-    # Arrange
-    initial_count = len(get_collected_tools())
-    
-    # Act
-    @tool(name="test_tool", description="A test tool")
-    async def test_tool(x: str) -> ToolResult:
-        """Args:
-            x: Input value
-        """
-        return ToolResult(output=x)
-    
-    # Assert
-    assert len(get_collected_tools()) == initial_count + 1
-    collected = get_collected_tools()[-1]
-    assert collected.name == "test_tool"
-    assert collected.description == "A test tool"
-```
-
-#### 测试用例 3: RegisteredTool_to_tool_def_格式正确
-
-```python
-def test_registered_tool_to_tool_def():
-    # Arrange
-    tool = RegisteredTool(
-        name="web_search",
-        description="Search the web",
-        func=lambda i, c: None,
-        parameters=[
-            ToolParameter(name="query", type="string", description="Search query", required=True),
-        ],
-        returns="Search results",
-        category="web_search",
-    )
-    
-    # Act
-    tool_def = tool.to_tool_def()
-    
-    # Assert
-    assert tool_def.name == "web_search"
-    assert tool_def.description == "Search the web"
-    assert len(tool_def.parameters) == 1
-    assert tool_def.category == "web_search"
-    # 验证 to_prompt_section() 生成 XML 格式
-    xml = tool_def.to_prompt_section()
-    assert '<tool name="web_search">' in xml
-```
+- **用例 1 (_extract_parameters 参数解析)**：验证 `_extract_parameters` 能从带类型注解和 Google-style docstring 的函数中正确提取参数名、类型映射（str->string, int->integer, bool->boolean）和必填标志
+- **用例 2 (装饰器自动收集)**：验证 `@tool` 装饰器应用后，工具自动加入全局收集器列表，并通过收集器可获取正确的工具名和描述
+- **用例 3 (RegisteredTool.to_tool_def 格式)**：验证 `to_tool_def()` 方法能正确转换 name、description、parameters、category 字段，且 `to_prompt_section()` 生成的 XML 格式符合 Prompt Builder 期望
 
 ### 测试模块: ExecutionPipeline
 
-#### 测试用例 4: pipeline_无中间件_直接执行
+**测试策略**：验证管道在无中间件和有多中间件两种场景下的正确行为。
 
-```python
-async def test_pipeline_direct_execution():
-    # Arrange
-    pipeline = ExecutionPipeline()
-    tool = RegisteredTool(
-        name="echo",
-        func=lambda input, ctx: ToolResult(output=input["msg"]),
-        description="Echo tool",
-    )
-    
-    # Act
-    result = await pipeline.execute(tool, {"msg": "hello"})
-    
-    # Assert
-    assert result.output == "hello"
-    assert result.success is True
-    assert "duration_ms" in result.metadata
-```
-
-#### 测试用例 5: pipeline_中间件链_按顺序执行
-
-```python
-async def test_pipeline_middleware_order():
-    # Arrange
-    order = []
-    
-    class MW1:
-        async def process(self, tool, input, context, next_handler):
-            order.append("MW1_before")
-            result = await next_handler(tool, input, context)
-            order.append("MW1_after")
-            return result
-    
-    class MW2:
-        async def process(self, tool, input, context, next_handler):
-            order.append("MW2_before")
-            result = await next_handler(tool, input, context)
-            order.append("MW2_after")
-            return result
-    
-    pipeline = ExecutionPipeline(middlewares=[MW1(), MW2()])
-    tool = RegisteredTool(name="t", func=lambda i, c: ToolResult(output="ok"), description="")
-    
-    # Act
-    await pipeline.execute(tool, {})
-    
-    # Assert
-    assert order == ["MW1_before", "MW2_before", "MW2_after", "MW1_after"]
-```
+- **用例 4 (无中间件直接执行)**：创建空管道，注册简单的 echo 工具，验证 `pipeline.execute()` 返回正确的 `ToolResult`（output、success、metadata 中包含 duration_ms）
+- **用例 5 (中间件洋葱顺序)**：注册两个追踪执行顺序的中间件（记录 before/after），验证执行顺序符合洋葱模型（MW1_before -> MW2_before -> MW2_after -> MW1_after）
 
 ### 测试模块: ToolRegistry
 
-#### 测试用例 6: registry_execute_工具不存在_返回错误
+**测试策略**：验证 Registry 的错误处理路径。
 
-```python
-async def test_registry_execute_tool_not_found():
-    # Arrange
-    registry = ToolRegistry()
-    
-    # Act
-    result = await registry.execute("nonexistent", {})
-    
-    # Assert
-    assert result.success is False
-    assert "not found" in result.output.lower()
-```
+- **用例 6 (工具不存在)**：对空 Registry 执行不存在的工具名，验证返回 `success=False` 且输出包含 "not found" 提示
 
 ### 测试模块: web_search (Tavily)
 
-#### 测试用例 7: web_search_缺少API_Key_返回config_missing
+**测试策略**：覆盖配置错误、输入校验、结果格式化和 SDK 集成四个维度。
 
-```python
-async def test_web_search_missing_api_key(monkeypatch):
-    # Arrange
-    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
-    monkeypatch.setenv("SEARCH_PROVIDER", "tavily")
-
-    # Act
-    result = await web_search(query="hello")
-
-    # Assert
-    assert result.success is False
-    assert result.error == "config_missing"
-```
-
-#### 测试用例 8: web_search_空查询_返回invalid_input
-
-```python
-async def test_web_search_empty_query():
-    # Act
-    result = await web_search(query="   ")
-
-    # Assert
-    assert result.success is False
-    assert result.error == "invalid_input"
-```
-
-#### 测试用例 9: format_tavily_results_包含answer与results
-
-```python
-def test_format_tavily_results_with_answer():
-    # Arrange
-    payload = {
-        "answer": "Python is a programming language.",
-        "results": [
-            {"title": "Python.org", "url": "https://python.org",
-             "content": "The official site", "score": 0.98},
-        ],
-    }
-
-    # Act
-    output = _format_tavily_results(payload)
-
-    # Assert
-    assert "## Summary" in output
-    assert "Python is a programming language." in output
-    assert "Python.org" in output
-    assert "https://python.org" in output
-    assert "Relevance: 0.98" in output
-```
-
-#### 测试用例 10: tavily_search_SDK调用参数正确（mock）
-
-```python
-async def test_tavily_search_invokes_sdk(monkeypatch):
-    # Arrange
-    monkeypatch.setenv("TAVILY_API_KEY", "test-key")
-    captured = {}
-
-    class FakeClient:
-        def __init__(self, api_key):
-            captured["api_key"] = api_key
-        def search(self, **kwargs):
-            captured.update(kwargs)
-            return {"results": [{"title": "t", "url": "u", "content": "c"}]}
-
-    import sys, types
-    fake_mod = types.ModuleType("tavily")
-    fake_mod.TavilyClient = FakeClient
-    monkeypatch.setitem(sys.modules, "tavily", fake_mod)
-
-    # Act
-    result = await _tavily_search(
-        query="q", max_results=3, search_depth="basic",
-        include_domains=None, exclude_domains=None,
-    )
-
-    # Assert
-    assert captured["api_key"] == "test-key"
-    assert captured["query"] == "q"
-    assert captured["max_results"] == 3
-    assert captured["search_depth"] == "basic"
-    assert result["results"][0]["title"] == "t"
-```
+- **用例 7 (缺少 API Key)**：通过 monkeypatch 清除 `TAVILY_API_KEY` 环境变量，调用 `web_search`，验证返回 `success=False` 且 `error="config_missing"`
+- **用例 8 (空查询)**：传入纯空格查询字符串，验证返回 `error="invalid_input"`
+- **用例 9 (结果格式化)**：构造包含 `answer` 和 `results` 的标准 Tavily 响应 payload，调用 `_format_tavily_results`，验证输出包含 "## Summary"、AI 摘要文本、结果标题和 URL、相关性评分
+- **用例 10 (SDK 调用参数)**：通过 monkeypatch 注入假 TavilyClient，捕获 `search()` 调用参数，验证 API key、query、max_results、search_depth 等参数正确从环境和调用方传入
 
 ---
 
@@ -2188,16 +691,7 @@ async def test_tavily_search_invokes_sdk(monkeypatch):
 
 ### 自动化验证
 
-```bash
-# 运行工具模块单元测试
-uv run pytest tests/unit/tools/ -v
-
-# 运行集成测试（工具 + Agent Loop）
-uv run pytest tests/integration/test_tool_execution.py -v
-
-# 运行回归测试
-uv run pytest tests/ -k "tool" -v
-```
+通过 pytest 分层执行测试：单元测试（`tests/unit/tools/`）验证各模块独立行为，集成测试（`tests/integration/test_tool_execution.py`）验证工具与 Agent Loop 的协作，回归测试（`-k "tool"`）覆盖全量工具相关用例。
 
 ---
 

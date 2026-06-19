@@ -249,113 +249,44 @@ flowchart TD
 
 #### 3.1.2 DTO 定义
 
-```python
-# backend/src/application/dtos/skill_dto.py
+**SkillStepDTO** -- 定义一个执行步骤，包含三个字段：
+- `name` (必填, 1-100 字符)：步骤名称
+- `description` (必填, 1-500 字符)：步骤描述
+- `tool_name` (可选, 最多 100 字符)：关联的工具名称
 
-from typing import Optional
-from pydantic import BaseModel, Field
+**CreateSkillDTO** -- 创建 Skill 的请求体，包含以下字段：
 
+- `name` (必填, 1-100 字符)：Skill 唯一名称标识
+- `description` (必填, 1-1000 字符)：Skill 功能描述
+- `content` (可选, 默认空字符串, 最多 50000 字符)：Skill 完整 Markdown 内容
+- `trigger_keywords` (可选, 默认空列表)：触发关键词列表
+- `steps` (可选, 默认空列表)：执行步骤列表，每个元素为 SkillStepDTO
+- `category` (可选, 默认 "general", 最多 50 字符)：分类标签
 
-class SkillStepDTO(BaseModel):
-    """Skill 步骤 DTO"""
-    name: str = Field(..., min_length=1, max_length=100)
-    description: str = Field(..., min_length=1, max_length=500)
-    tool_name: Optional[str] = Field(default=None, max_length=100)
+**UpdateSkillDTO** -- 更新 Skill 的请求体（PATCH 语义），所有字段均为可选。字段集合与 CreateSkillDTO 相同，但每项可为 null 表示不修改。
 
+**SkillResponseDTO** -- Skill 的响应体，包含所有字段：id, name, description, content, trigger_keywords, steps, category, enabled, created_at, updated_at（可能为空）。
 
-class CreateSkillDTO(BaseModel):
-    """创建 Skill 请求 DTO"""
-    name: str = Field(
-        ...,
-        min_length=1,
-        max_length=100,
-        description="Skill 名称（唯一标识）",
-    )
-    description: str = Field(
-        ...,
-        min_length=1,
-        max_length=1000,
-        description="Skill 功能描述",
-    )
-    content: str = Field(
-        default="",
-        max_length=50000,
-        description="Skill 完整内容（Markdown 格式）",
-    )
-    trigger_keywords: list[str] = Field(
-        default_factory=list,
-        description="触发关键词列表",
-    )
-    steps: list[SkillStepDTO] = Field(
-        default_factory=list,
-        description="执行步骤定义",
-    )
-    category: str = Field(
-        default="general",
-        max_length=50,
-        description="Skill 分类",
-    )
-
-
-class UpdateSkillDTO(BaseModel):
-    """更新 Skill 请求 DTO（PATCH 语义）"""
-    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
-    description: Optional[str] = Field(default=None, min_length=1, max_length=1000)
-    content: Optional[str] = Field(default=None, max_length=50000)
-    trigger_keywords: Optional[list[str]] = None
-    steps: Optional[list[SkillStepDTO]] = None
-    category: Optional[str] = Field(default=None, max_length=50)
-
-
-class SkillResponseDTO(BaseModel):
-    """Skill 响应 DTO"""
-    id: str
-    name: str
-    description: str
-    content: str
-    trigger_keywords: list[str]
-    steps: list[SkillStepDTO]
-    category: str
-    enabled: bool
-    created_at: str
-    updated_at: Optional[str] = None
-
-
-class SkillListResponseDTO(BaseModel):
-    """Skill 列表响应 DTO"""
-    data: list[SkillResponseDTO]
-    total: int
-```
+**SkillListResponseDTO** -- 分页列表响应，包含 `data`（SkillResponseDTO 数组）和 `total`（总数）两个字段。
 
 ### 3.2 数据库设计
 
 #### 3.2.1 表结构
 
-```sql
-CREATE TABLE skills (
-    -- 主键
-    id VARCHAR(36) PRIMARY KEY,
-    
-    -- 基本信息
-    name VARCHAR(100) NOT NULL UNIQUE,
-    description TEXT NOT NULL DEFAULT '',
-    
-    -- 内容
-    content TEXT NOT NULL DEFAULT '',
-    
-    -- 结构化数据（JSON）
-    trigger_keywords TEXT NOT NULL DEFAULT '[]',
-    steps TEXT NOT NULL DEFAULT '[]',
-    
-    -- 分类与状态
-    category VARCHAR(50) NOT NULL DEFAULT 'general',
-    enabled INTEGER NOT NULL DEFAULT 1,
-    
-    -- 时间戳
-    created_at DATETIME NOT NULL DEFAULT (datetime('now')),
-    updated_at DATETIME
-);
-```
+`skills` 表设计如下：
+
+| 字段 | 类型 | 约束 | 默认值 | 说明 |
+| ------ | ------ | ------ | ------ | ------ |
+| `id` | VARCHAR(36) | PRIMARY KEY | - | UUID 主键 |
+| `name` | VARCHAR(100) | NOT NULL, UNIQUE | - | Skill 唯一名称 |
+| `description` | TEXT | NOT NULL | `''` | 功能描述 |
+| `content` | TEXT | NOT NULL | `''` | 完整 Markdown 内容 |
+| `trigger_keywords` | TEXT | NOT NULL | `'[]'` | 触发关键词（JSON 数组） |
+| `steps` | TEXT | NOT NULL | `'[]'` | 执行步骤（JSON 数组） |
+| `category` | VARCHAR(50) | NOT NULL | `'general'` | 分类标签 |
+| `enabled` | INTEGER | NOT NULL | `1` | 启用状态（0/1） |
+| `created_at` | DATETIME | NOT NULL | `datetime('now')` | 创建时间 |
+| `updated_at` | DATETIME | - | NULL | 更新时间 |
 
 #### 3.2.2 字段说明
 
@@ -374,160 +305,46 @@ CREATE TABLE skills (
 
 #### 3.2.3 索引设计
 
-```sql
--- 唯一索引（建表时 UNIQUE 自动创建）
--- CREATE UNIQUE INDEX idx_skills_name ON skills(name);
+索引设计：`name` 字段通过 UNIQUE 约束自动创建唯一索引；额外创建以下查询索引：
 
--- 查询索引
-CREATE INDEX idx_skills_category ON skills(category);
-CREATE INDEX idx_skills_enabled ON skills(enabled);
-CREATE INDEX idx_skills_created_at ON skills(created_at DESC);
-```
+- `idx_skills_category`：按分类筛选查询
+- `idx_skills_enabled`：按启用状态过滤（对话注入场景）
+- `idx_skills_created_at`：按创建时间倒序排列（列表页默认排序）
 
 #### 3.2.4 SQLAlchemy 模型
 
-```python
-# 在 backend/src/infrastructure/database/models/agent_model.py 中新增
-
-class SkillModel(Base):
-    """Skill 数据库模型"""
-
-    __tablename__ = "skills"
-
-    id = Column(String(36), primary_key=True)
-    name = Column(String(100), nullable=False, unique=True, index=True)
-    description = Column(Text, nullable=False, default="")
-    content = Column(Text, nullable=False, default="")
-    trigger_keywords = Column(Text, nullable=False, default="[]")  # JSON
-    steps = Column(Text, nullable=False, default="[]")  # JSON
-    category = Column(String(50), nullable=False, default="general")
-    enabled = Column(Integer, nullable=False, default=1)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=True)
-
-    def __repr__(self) -> str:
-        return f"<SkillModel(id={self.id}, name={self.name}, enabled={self.enabled})>"
-```
+在 `agent_model.py` 中新增 `SkillModel` 类，映射到 `skills` 表。字段与表结构一一对应：id (String/36, 主键)、name (String/100, 唯一索引)、description (Text)、content (Text)、trigger_keywords (Text, JSON 存储)、steps (Text, JSON 存储)、category (String/50)、enabled (Integer, 0/1)、created_at (DateTime)、updated_at (DateTime, 可为空)。
 
 #### 3.2.5 领域实体扩展
 
 现有 `SkillDef` 实体需扩展以支持持久化：
 
-```python
-# backend/src/domain/entities/skill_def.py（扩展）
+`SkillDef` 是 Skills 有界上下文的核心领域实体（dataclass），扩展后包含以下字段：
 
-@dataclass
-class SkillDef:
-    """技能定义领域实体"""
+- **核心字段**（已有）：`name`、`description`、`steps`（SkillStep 列表）、`trigger_keywords`（字符串列表）、`category`（默认 "general"）
+- **新增持久化字段**：`id`（主键 UUID）、`content`（完整 Markdown 原始内容）、`enabled`（布尔，默认 true）、`created_at`（创建时间）、`updated_at`（更新时间，可为空）
 
-    name: str
-    description: str
-    steps: list[SkillStep] = field(default_factory=list)
-    trigger_keywords: list[str] = field(default_factory=list)
-    category: str = "general"
-    
-    # === 新增字段（持久化支持） ===
-    id: str = ""
-    """主键 ID"""
-    
-    content: str = ""
-    """Skill 完整 Markdown 内容（原始内容存储）"""
-    
-    enabled: bool = True
-    """是否启用"""
-    
-    created_at: datetime = field(default_factory=datetime.now)
-    updated_at: Optional[datetime] = None
+实体提供两个关键行为方法：
 
-    def to_prompt_section(self) -> str:
-        """生成为 Prompt 中的技能描述段落
-        
-        如果有 content（完整 SKILL.md 内容），优先使用 content；
-        否则使用结构化的 steps 生成摘要。
-        """
-        # 如果有完整内容，直接使用
-        if self.content:
-            return self.content
-        
-        # 否则根据结构化数据生成
-        parts = [self.description]
-
-        if self.trigger_keywords:
-            parts.append(f"\n**Triggers:** {', '.join(self.trigger_keywords)}")
-
-        if self.steps:
-            parts.append("\n**Steps:**")
-            for i, step in enumerate(self.steps, 1):
-                tool_info = f" (using `{step.tool_name}`)" if step.tool_name else ""
-                parts.append(f"{i}. **{step.name}**{tool_info}: {step.description}")
-
-        return "\n".join(parts)
-    
-    def toggle_enabled(self) -> None:
-        """切换启用状态"""
-        self.enabled = not self.enabled
-        self.updated_at = datetime.now()
-```
+- `to_prompt_section()` -- 生成注入 LLM 系统提示词的技能描述段落。策略：若 `content` 非空（即用户上传了完整 SKILL.md 内容），直接返回原始内容；否则根据 `steps` 和 `trigger_keywords` 结构化拼装摘要文本。
+- `toggle_enabled()` -- 切换启用状态并更新 `updated_at` 时间戳。
 
 #### 3.2.6 Repository 接口
 
-```python
-# backend/src/domain/repositories/skill_repository.py
+`ISkillRepository` 是 Skills 有界上下文的仓储接口（抽象类），定义了以下数据访问方法：
 
-from abc import ABC, abstractmethod
-from typing import Optional
-from src.domain.entities.skill_def import SkillDef
+| 方法 | 参数 | 返回值 | 用途 |
+|------|------|--------|------|
+| `add` | `SkillDef` | `SkillDef` | 新增 Skill 记录 |
+| `get_by_id` | `skill_id: str` | `Optional[SkillDef]` | 按 ID 查询单条 |
+| `get_by_name` | `name: str` | `Optional[SkillDef]` | 按名称查询（唯一性校验） |
+| `list_all` | `limit, offset, category, enabled` | `(list[SkillDef], int)` | 分页 + 条件筛选列表 |
+| `get_enabled` | 无 | `list[SkillDef]` | 获取所有启用的 Skills（对话注入用） |
+| `get_by_ids` | `skill_ids: list[str]` | `list[SkillDef]` | 批量按 ID 查询（对话注入用） |
+| `update` | `SkillDef` | `SkillDef` | 更新 Skill 记录 |
+| `remove` | `skill_id: str` | `bool` | 删除 Skill 记录 |
 
-
-class ISkillRepository(ABC):
-    """Skill 仓储接口"""
-
-    @abstractmethod
-    async def add(self, skill: SkillDef) -> SkillDef:
-        """新增 Skill"""
-        pass
-
-    @abstractmethod
-    async def get_by_id(self, skill_id: str) -> Optional[SkillDef]:
-        """根据 ID 获取 Skill"""
-        pass
-
-    @abstractmethod
-    async def get_by_name(self, name: str) -> Optional[SkillDef]:
-        """根据名称获取 Skill（唯一性校验）"""
-        pass
-
-    @abstractmethod
-    async def list_all(
-        self,
-        limit: int = 100,
-        offset: int = 0,
-        category: Optional[str] = None,
-        enabled: Optional[bool] = None,
-    ) -> tuple[list[SkillDef], int]:
-        """获取 Skill 列表（分页 + 筛选），返回 (列表, 总数)"""
-        pass
-
-    @abstractmethod
-    async def get_enabled(self) -> list[SkillDef]:
-        """获取所有启用的 Skills（对话注入用）"""
-        pass
-
-    @abstractmethod
-    async def get_by_ids(self, skill_ids: list[str]) -> list[SkillDef]:
-        """根据 ID 列表批量获取 Skills（对话注入用）"""
-        pass
-
-    @abstractmethod
-    async def update(self, skill: SkillDef) -> SkillDef:
-        """更新 Skill"""
-        pass
-
-    @abstractmethod
-    async def remove(self, skill_id: str) -> bool:
-        """删除 Skill"""
-        pass
-```
+所有方法均为异步（`async`）。具体实现类 `SQLiteSkillRepository` 使用 SQLAlchemy 将 `SkillModel` 与 `SkillDef` 互转。
 
 ### 3.3 前端设计
 
@@ -565,143 +382,33 @@ class ISkillRepository(ABC):
 
 #### 3.3.3 前端实体类型
 
-```typescript
-// frontend/src/domain/entities/skill.ts
+前端实体类型定义（TypeScript interfaces）：
 
-export interface Skill {
-  id: string;
-  name: string;
-  description: string;
-  content: string;
-  trigger_keywords: string[];
-  steps: SkillStep[];
-  category: string;
-  enabled: boolean;
-  created_at: string;
-  updated_at: string | null;
-}
+- `Skill` -- 与后端 `SkillResponseDTO` 对应，包含 id, name, description, content, trigger_keywords, steps, category, enabled, created_at, updated_at
+- `SkillStep` -- 步骤子结构，包含 name, description, tool_name（可为 null）
+- `CreateSkillRequest` -- 创建请求体，name 和 description 必填，其余字段可选
+- `UpdateSkillRequest` -- 更新请求体，所有字段可选（PATCH 语义）
+- `SkillListResponse` -- 列表响应，包含 data 数组和 total 总数
 
-export interface SkillStep {
-  name: string;
-  description: string;
-  tool_name: string | null;
-}
-
-export interface CreateSkillRequest {
-  name: string;
-  description: string;
-  content?: string;
-  trigger_keywords?: string[];
-  steps?: SkillStep[];
-  category?: string;
-}
-
-export interface UpdateSkillRequest {
-  name?: string;
-  description?: string;
-  content?: string;
-  trigger_keywords?: string[];
-  steps?: SkillStep[];
-  category?: string;
-}
-
-export interface SkillListResponse {
-  data: Skill[];
-  total: number;
-}
-
-/** Skill 分类常量 */
-export const SKILL_CATEGORIES: Record<string, string> = {
-  general: '通用',
-  development: '开发',
-  analysis: '分析',
-  writing: '写作',
-  design: '设计',
-};
-```
+分类常量 `SKILL_CATEGORIES` 定义中文映射：general（通用）、development（开发）、analysis（分析）、writing（写作）、design（设计）。
 
 #### 3.3.4 API 客户端
 
-```typescript
-// frontend/src/infrastructure/api/skillApi.ts
+前端 API 客户端 `skillApi` 封装对 `/api/skills` 端点的所有 HTTP 调用，使用项目统一的 `apiClient` 实例：
 
-import { apiClient } from './client';
-import type {
-  Skill,
-  SkillListResponse,
-  CreateSkillRequest,
-  UpdateSkillRequest,
-} from '../../domain/entities/skill';
-
-export const skillApi = {
-  /** 获取 Skill 列表 */
-  list: async (params?: {
-    page?: number;
-    pageSize?: number;
-    category?: string;
-    enabled?: boolean;
-  }): Promise<SkillListResponse> => {
-    const response = await apiClient.get('/skills', {
-      params: {
-        page: params?.page ?? 1,
-        page_size: params?.pageSize ?? 20,
-        category: params?.category,
-        enabled: params?.enabled,
-      },
-    });
-    return response.data;
-  },
-
-  /** 获取 Skill 详情 */
-  get: async (id: string): Promise<Skill> => {
-    const response = await apiClient.get(`/skills/${id}`);
-    return response.data;
-  },
-
-  /** 创建 Skill */
-  create: async (data: CreateSkillRequest): Promise<Skill> => {
-    const response = await apiClient.post('/skills', data);
-    return response.data;
-  },
-
-  /** 更新 Skill */
-  update: async (id: string, data: UpdateSkillRequest): Promise<Skill> => {
-    const response = await apiClient.put(`/skills/${id}`, data);
-    return response.data;
-  },
-
-  /** 删除 Skill */
-  delete: async (id: string): Promise<void> => {
-    await apiClient.delete(`/skills/${id}`);
-  },
-
-  /** 切换启用状态 */
-  toggle: async (id: string): Promise<Skill> => {
-    const response = await apiClient.patch(`/skills/${id}/toggle`);
-    return response.data;
-  },
-
-  /** 获取所有启用的 Skills（对话选择用） */
-  listEnabled: async (): Promise<SkillListResponse> => {
-    const response = await apiClient.get('/skills/enabled');
-    return response.data;
-  },
-};
-```
+| 方法 | HTTP 方法 | 路径 | 说明 |
+| ------ | ------ | ------ | ------ |
+| `list` | GET | `/skills` | 分页列表，支持 page/pageSize/category/enabled 查询参数 |
+| `get` | GET | `/skills/:id` | 获取单条详情 |
+| `create` | POST | `/skills` | 创建新 Skill |
+| `update` | PUT | `/skills/:id` | 更新已有 Skill |
+| `delete` | DELETE | `/skills/:id` | 删除 Skill |
+| `toggle` | PATCH | `/skills/:id/toggle` | 切换启用/禁用状态 |
+| `listEnabled` | GET | `/skills/enabled` | 获取所有启用 Skills（对话选择器用） |
 
 #### 3.3.5 对话消息接口修改
 
-```typescript
-// frontend/src/domain/entities/session.ts（修改 SendMessageRequest）
-
-export interface SendMessageRequest {
-  content: string;
-  model?: string;
-  max_turns?: number;
-  workspace?: string;
-  skill_ids?: string[];  // 新增：选中的 Skill ID 列表
-}
-```
+前端 `SendMessageRequest` 接口扩展：在现有字段（`content`, `model`, `max_turns`, `workspace`）基础上新增可选字段 `skill_ids: string[]`，用于携带用户在对话页选择的 Skill ID 列表发送到后端。
 
 ### 3.4 错误处理
 
@@ -720,39 +427,11 @@ export interface SendMessageRequest {
 
 #### 4.1.1 SendMessageRequest 扩展
 
-```python
-# backend/src/application/dtos/session_dto.py（修改）
-
-class SendMessageRequestDTO(BaseModel):
-    content: str = Field(..., min_length=1, max_length=10000)
-    model: Optional[str] = None
-    max_turns: Optional[int] = Field(default=None, ge=1, le=200)
-    workspace: Optional[str] = None
-    skill_ids: list[str] = Field(default_factory=list, description="选中的 Skill ID 列表")
-```
+`SendMessageRequestDTO` 扩展：在现有字段基础上新增 `skill_ids: list[str]`（默认空列表），由前端对话页传递用户选中的 Skill ID 列表。
 
 #### 4.1.2 SendMessageUseCase 修改
 
-```python
-# backend/src/application/use_cases/send_message.py（修改 _run_agent_loop）
-
-# 原来的:
-# skills=[],  # Skills 模块待实现
-
-# 改为:
-skill_defs = []
-if skill_ids:
-    skill_defs = await self.skill_repo.get_by_ids(skill_ids)
-
-assembly_result = assemble_service.assemble(
-    template=template,
-    tools=tool_defs,
-    skills=skill_defs,  # 注入选中的 Skills
-    workspace=workspace,
-    environment={...},
-    memory_enabled=bool(template.memory_md),
-)
-```
+`SendMessageUseCase._run_agent_loop()` 修改要点：将原来硬编码的 `skills=[]` 替换为运行时逻辑——若请求携带 `skill_ids`，则通过 `skill_repo.get_by_ids(skill_ids)` 查询对应的 `SkillDef` 列表，传入 `assemble_service.assemble(skills=skill_defs, ...)` 完成 Layer 8 注入。不传 `skill_ids` 时维持空列表行为，确保向后兼容。
 
 ### 4.2 前端交互设计
 
@@ -764,7 +443,7 @@ assembly_result = assemble_service.assemble(
 - 每个 Skill 可勾选/取消
 - 选中的 Skills 以 badge 形式显示在输入框上方
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │ [Skills ▾]  已选: [code_review ×] [debug_assistant ×]      │
 ├─────────────────────────────────────────────────────────────┤
@@ -782,22 +461,13 @@ assembly_result = assemble_service.assemble(
 
 ## 5. 路由注册
 
-```python
-# backend/src/presentation/app.py（新增）
-from src.presentation.routes.skills import router as skills_router
+**后端路由注册**：在 `app.py` 中导入 `skills_router` 并通过 `app.include_router(skills_router)` 注册到 FastAPI 应用。
 
-app.include_router(skills_router)
-```
+**前端路由注册**：在 `App.tsx` 中新增三条路由映射：
 
-```typescript
-// frontend/src/presentation/App.tsx（新增路由）
-import { SkillManagementPage } from './pages/SkillManagementPage';
-import { SkillEditPage } from './pages/SkillEditPage';
-
-<Route path="/skills" element={<SkillManagementPage />} />
-<Route path="/skills/new" element={<SkillEditPage />} />
-<Route path="/skills/:id/edit" element={<SkillEditPage />} />
-```
+- `/skills` 渲染 `SkillManagementPage`（列表页）
+- `/skills/new` 渲染 `SkillEditPage`（新建页）
+- `/skills/:id/edit` 渲染 `SkillEditPage`（编辑页，路径参数传递 skill ID）
 
 ---
 
@@ -806,6 +476,7 @@ import { SkillEditPage } from './pages/SkillEditPage';
 ### 6.1 功能测试
 
 #### 测试场景 1: 创建 Skill - 正常流程
+
 - **前置条件**: 数据库为空
 - **测试步骤**:
   1. POST /api/skills，携带合法的 CreateSkillDTO
@@ -815,6 +486,7 @@ import { SkillEditPage } from './pages/SkillEditPage';
 - **验收标准**: 响应包含完整字段，enabled 默认为 true
 
 #### 测试场景 2: 创建 Skill - 名称重复
+
 - **前置条件**: 已存在名为 "code_review" 的 Skill
 - **测试步骤**:
   1. POST /api/skills，name="code_review"
@@ -822,6 +494,7 @@ import { SkillEditPage } from './pages/SkillEditPage';
 - **验收标准**: 不创建重复记录
 
 #### 测试场景 3: 对话注入 Skills
+
 - **前置条件**: 存在启用状态的 Skill
 - **测试步骤**:
   1. POST /api/agents/{id}/sessions/{sid}/messages，携带 skill_ids
@@ -830,6 +503,7 @@ import { SkillEditPage } from './pages/SkillEditPage';
 - **验收标准**: Layer 8 正确注入
 
 #### 测试场景 4: 切换启用状态
+
 - **前置条件**: 已存在启用状态的 Skill
 - **测试步骤**:
   1. PATCH /api/skills/{id}/toggle
@@ -839,56 +513,23 @@ import { SkillEditPage } from './pages/SkillEditPage';
 
 ### 6.2 单元测试
 
-```python
-# backend/tests/unit/domain/test_skill_def.py
+单元测试策略聚焦 `SkillDef` 实体的核心行为方法，覆盖以下场景：
 
-def test_skill_def_to_prompt_section_with_content():
-    """有 content 时优先使用 content"""
-    skill = SkillDef(
-        name="test",
-        description="Test skill",
-        content="# Custom Content\nDetailed instructions...",
-    )
-    assert skill.to_prompt_section() == "# Custom Content\nDetailed instructions..."
-
-
-def test_skill_def_to_prompt_section_structured():
-    """无 content 时使用结构化数据生成"""
-    skill = SkillDef(
-        name="test",
-        description="Test skill",
-        trigger_keywords=["test", "check"],
-        steps=[
-            SkillStep(name="analyze", description="Analyze code", tool_name="read_file"),
-            SkillStep(name="report", description="Report issues"),
-        ],
-    )
-    result = skill.to_prompt_section()
-    assert "**Triggers:** test, check" in result
-    assert "1. **analyze** (using `read_file`): Analyze code" in result
-    assert "2. **report**: Report issues" in result
-
-
-def test_skill_def_toggle_enabled():
-    """切换启用状态"""
-    skill = SkillDef(name="test", description="desc", enabled=True)
-    skill.toggle_enabled()
-    assert skill.enabled is False
-    assert skill.updated_at is not None
-```
+- `to_prompt_section()` 有 content 时 -- 验证优先返回原始 content
+- `to_prompt_section()` 无 content 时 -- 验证结构化生成包含 triggers 和 steps 的正确格式
+- `toggle_enabled()` -- 验证状态翻转及 `updated_at` 时间戳更新
 
 ### 6.3 回归测试
 
 #### 受影响的现有功能
+
 - [ ] Prompt 组装：确认 skills=[] 时行为不变
 - [ ] 发送消息 API：确认不传 skill_ids 时向后兼容
 - [ ] 数据库初始化：确认 init_db() 能正确创建 skills 表
 
 #### 自动化验证
-```bash
-uv run pytest tests/ -k "skill"
-uv run pytest tests/unit/domain/test_prompt_assemble_service.py
-```
+
+自动化验证将通过两条 pytest 命令执行：一是运行所有 skill 相关的测试用例（按名称过滤 `-k "skill"`），二是单独验证 Prompt 组装服务的现有行为未被破坏。
 
 ---
 

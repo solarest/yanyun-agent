@@ -122,11 +122,11 @@ flowchart TB
 └── USER.md        — 用户画像与偏好（新增）
 ```
 
-### 2.3 模块说明
+### 2.4 模块说明
 
 本模块包含以下功能模块：
 
-#### 2.3.1 Agent 信息管理模块
+#### 2.4.1 Agent 信息管理模块
 
 **职责**：管理 Agent 的基本信息（名称、描述、vibe 标签）
 
@@ -142,7 +142,7 @@ flowchart TB
 - 后端：`backend/src/infrastructure/database/models/agent_model.py`（数据库模型）
 - 后端：`backend/src/presentation/routes/agents.py`（API 路由）
 
-#### 2.3.2 配置文件管理模块
+#### 2.4.2 配置文件管理模块
 
 **职责**：管理 Agent 的七个配置文件（IDENTITY.md、SOUL.md、AGENTS.md、BOOTSTRAP.md、MEMORY.md、TOOLS.md、USER.md）
 
@@ -157,7 +157,7 @@ flowchart TB
 - 后端：`backend/src/domain/services/agent_config_service.py`（配置验证服务）
 - 后端：`backend/src/application/dtos/agent_dto.py`（UpdateAgentConfigDTO）
 
-#### 2.3.3 简化表单创建器模块
+#### 2.4.3 简化表单创建器模块
 
 **职责**：提供简化的表单界面，自动生成配置文件内容
 
@@ -174,7 +174,7 @@ flowchart TB
 - 前端：`frontend/src/presentation/components/CreateAgentWizard/LivePreview.tsx`（实时预览）
 - 前端：`frontend/src/application/services/useAgentGenerator.ts`（自动生成 Hook）
 
-#### 2.3.4 Agent 列表管理模块
+#### 2.4.4 Agent 列表管理模块
 
 **职责**：提供 Agent 列表展示和搜索功能
 
@@ -189,7 +189,7 @@ flowchart TB
 - 前端：`frontend/src/presentation/components/AgentList.tsx`（列表组件）
 - 后端：`backend/src/presentation/routes/agents.py`（列表 API）
 
-#### 2.3.5 Agent 详情编辑模块
+#### 2.4.5 Agent 详情编辑模块
 
 **职责**：提供 Agent 详情查看和编辑功能
 
@@ -223,114 +223,21 @@ flowchart TB
 
 #### 3.1.2 DTO 定义
 
-**CreateAgentDTO**
-```python
-class CreateAgentDTO(BaseModel):
-    name: str = Field(..., min_length=1, max_length=100)
-    description: str = Field("", max_length=500)
-    identity_md: Optional[str] = Field(None, max_length=50000)
-    soul_md: Optional[str] = Field(None, max_length=50000)
-    agents_md: Optional[str] = Field(None, max_length=50000)
-    bootstrap_md: Optional[str] = Field(None, max_length=50000)
-    memory_md: Optional[str] = Field(None, max_length=50000)
-    tools_md: Optional[str] = Field(None, max_length=50000)
-    user_md: Optional[str] = Field(None, max_length=50000)
-```
+**CreateAgentDTO**：用于创建 Agent 的请求体。必填字段 `name`（1-100 字符），可选字段 `description`（最大 500 字符），七个配置文件字段（identity_md 至 user_md）均为可选，最大 50000 字符。基于 Pydantic BaseModel 进行输入验证。
 
-**UpdateAgentDTO**（PATCH 语义，所有字段可选）
-```python
-class UpdateAgentDTO(BaseModel):
-    name: Optional[str] = Field(None, min_length=1, max_length=100)
-    description: Optional[str] = Field(None, max_length=500)
-    identity_md: Optional[str] = Field(None, max_length=50000)
-    soul_md: Optional[str] = Field(None, max_length=50000)
-    agents_md: Optional[str] = Field(None, max_length=50000)
-    bootstrap_md: Optional[str] = Field(None, max_length=50000)
-    memory_md: Optional[str] = Field(None, max_length=50000)
-    tools_md: Optional[str] = Field(None, max_length=50000)
-    user_md: Optional[str] = Field(None, max_length=50000)
-```
+**UpdateAgentDTO**：用于更新 Agent 基本信息和配置文件（PATCH 语义）。所有字段均可选：`name`（1-100 字符）、`description`（最大 500 字符），七个配置文件字段（identity_md 至 user_md，最大 50000 字符）。
 
-**UpdateAgentConfigDTO**（专门用于配置文件更新）
-```python
-class UpdateAgentConfigDTO(BaseModel):
-    identity_md: Optional[str] = Field(None, max_length=50000)
-    soul_md: Optional[str] = Field(None, max_length=50000)
-    agents_md: Optional[str] = Field(None, max_length=50000)
-    bootstrap_md: Optional[str] = Field(None, max_length=50000)
-    memory_md: Optional[str] = Field(None, max_length=50000)
-    tools_md: Optional[str] = Field(None, max_length=50000)
-    user_md: Optional[str] = Field(None, max_length=50000)
-```
+**UpdateAgentConfigDTO**：专门用于仅更新配置文件（不包含 name/description）。七个配置文件字段（identity_md 至 user_md）均为可选，最大 50000 字符。
 
-**AgentResponseDTO**
-```python
-class AgentResponseDTO(BaseModel):
-    id: str
-    name: str
-    description: str
-    identity_md: str
-    soul_md: str
-    agents_md: str
-    bootstrap_md: str
-    memory_md: str
-    tools_md: str
-    user_md: str
-    config_version: int
-    created_at: str
-    updated_at: Optional[str]
-```
+**AgentResponseDTO**：Agent 的完整响应结构。包含所有字段：`id`、`name`、`description`，七个配置文件字段（identity_md 至 user_md），`config_version`（配置版本号），`created_at` 和 `updated_at`（时间戳字符串）。
 
-**AgentConfigResponseDTO**
-```python
-class AgentConfigResponseDTO(BaseModel):
-    identity_md: str
-    soul_md: str
-    agents_md: str
-    bootstrap_md: str
-    memory_md: str
-    tools_md: str
-    user_md: str
-    config_version: int
-```
+**AgentConfigResponseDTO**：仅返回配置文件内容的响应结构。包含七个配置文件字段（identity_md 至 user_md）和 `config_version`。
 
 ### 3.2 数据库设计
 
 #### 3.2.1 agents 表完整设计
 
-采用单表设计，所有 Agent 相关字段存储在一张表中：
-
-```sql
-CREATE TABLE agents (
-    -- 主键
-    id VARCHAR(36) PRIMARY KEY,
-    
-    -- 基本信息
-    name VARCHAR(100) NOT NULL UNIQUE,
-    description TEXT NOT NULL DEFAULT '',
-    
-    -- 简化表单创建器字段（UI 层）
-    avatar_style VARCHAR(50) NOT NULL DEFAULT 'pixel_art',
-    avatar_id VARCHAR(100) NOT NULL DEFAULT '',
-    vibes TEXT NOT NULL DEFAULT '[]',  -- JSON 数组：["Professional", "Friendly"]
-    
-    -- 配置文件内容（OpenClaw 七文件模式，定义域）
-    identity_md TEXT NOT NULL DEFAULT '',   -- IDENTITY.md: 身份定义与系统边界约束
-    soul_md TEXT NOT NULL DEFAULT '',       -- SOUL.md: 响应语气、行为特征及输出格式
-    agents_md TEXT NOT NULL DEFAULT '',     -- AGENTS.md: 调度规则与标准作业程序
-    bootstrap_md TEXT NOT NULL DEFAULT '',  -- BOOTSTRAP.md: 初始化序列与核心系统提示词
-    memory_md TEXT NOT NULL DEFAULT '',     -- MEMORY.md: 长期上下文数据与既定规则（初始为空）
-    tools_md TEXT NOT NULL DEFAULT '',      -- TOOLS.md: 工具授权注册表及调用参数
-    user_md TEXT NOT NULL DEFAULT '',       -- USER.md: 用户画像数据与交互限制
-    
-    -- 版本管理
-    config_version INTEGER NOT NULL DEFAULT 1,
-    
-    -- 时间戳
-    created_at DATETIME NOT NULL DEFAULT (datetime('now')),
-    updated_at DATETIME NOT NULL DEFAULT (datetime('now'))
-);
-```
+采用单表设计，所有 Agent 相关字段存储在一张表中。
 
 **字段说明：**
 
@@ -355,198 +262,44 @@ CREATE TABLE agents (
 
 #### 3.2.2 索引设计
 
-```sql
--- 名称唯一索引（已在 CREATE TABLE 中定义）
--- UNIQUE (name)
-
--- 创建时间索引（用于列表排序）
-CREATE INDEX idx_agents_created_at ON agents(created_at DESC);
-
--- 更新时间索引（用于列表排序和缓存失效）
-CREATE INDEX idx_agents_updated_at ON agents(updated_at DESC);
-```
+- `name` 列：唯一索引（表定义中已包含），用于 Agent 名称唯一性约束和按名称查找。
+- `idx_agents_created_at`：在 `created_at` 列上按降序建索引，用于列表按创建时间排序。
+- `idx_agents_updated_at`：在 `updated_at` 列上按降序建索引，用于列表按更新时间排序和缓存失效判断。
 
 #### 3.2.3 SQLAlchemy 模型
 
-```python
-from sqlalchemy import Column, String, Text, Integer, DateTime, func
-from sqlalchemy.orm import declarative_base
-
-Base = declarative_base()
-
-class AgentModel(Base):
-    """Agent 数据库模型 - 单表设计（OpenClaw 七文件模式）"""
-    __tablename__ = "agents"
-    
-    # 主键
-    id = Column(String(36), primary_key=True)
-    
-    # 基本信息
-    name = Column(String(100), unique=True, nullable=False, index=True)
-    description = Column(Text, nullable=False, default="")
-    
-    # 简化表单创建器字段
-    avatar_style = Column(String(50), nullable=False, default="pixel_art")
-    avatar_id = Column(String(100), nullable=False, default="")
-    vibes = Column(Text, nullable=False, default="[]")  # JSON 数组
-    
-    # 配置文件内容（OpenClaw 七文件模式）
-    identity_md = Column(Text, nullable=False, default="")    # IDENTITY.md
-    soul_md = Column(Text, nullable=False, default="")        # SOUL.md
-    agents_md = Column(Text, nullable=False, default="")      # AGENTS.md
-    bootstrap_md = Column(Text, nullable=False, default="")   # BOOTSTRAP.md
-    memory_md = Column(Text, nullable=False, default="")      # MEMORY.md（初始为空）
-    tools_md = Column(Text, nullable=False, default="")       # TOOLS.md
-    user_md = Column(Text, nullable=False, default="")        # USER.md
-    
-    # 版本管理
-    config_version = Column(Integer, nullable=False, default=1)
-    
-    # 时间戳
-    created_at = Column(DateTime, nullable=False, server_default=func.datetime('now'))
-    updated_at = Column(DateTime, nullable=False, server_default=func.datetime('now'), onupdate=func.datetime('now'))
-    
-    def __repr__(self):
-        return f"<Agent(id={self.id}, name={self.name}, version={self.config_version})>"
-```
+`AgentModel` 是 SQLAlchemy ORM 模型类，映射到 `agents` 表。列定义与 3.2.1 节的表结构一一对应：`id`（String(36)，主键）、`name`（String(100)，唯一索引）、`description`（Text）、表单字段 `avatar_style`/`avatar_id`/`vibes`、七个配置文件字段 `identity_md` 至 `user_md`（均为 Text，默认空字符串）、`config_version`（Integer，默认 1）、`created_at` 和 `updated_at`（DateTime，使用服务器端默认时间戳函数，updated_at 在更新时自动刷新）。
 
 #### 3.2.4 领域实体
 
-```python
-from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Optional
-import json
+`Agent` 是一个数据类（dataclass），代表 Agent 定义域的核心实体，包含以下字段分组：
 
-# OpenClaw 配置文件名称常量
-CONFIG_FILES = [
-    "identity_md", "soul_md", "agents_md", "bootstrap_md",
-    "memory_md", "tools_md", "user_md",
-]
+**基本信息**：`id`（字符串 UUID）、`name`（Agent 名称）、`description`（功能描述）
 
-@dataclass
-class Agent:
-    """Agent 领域实体（OpenClaw 七文件模式）"""
-    id: str
-    name: str
-    description: str = ""
-    
-    # 简化表单字段
-    avatar_style: str = "pixel_art"
-    avatar_id: str = ""
-    vibes: list = field(default_factory=list)
-    
-    # 配置文件内容（OpenClaw 七文件）
-    identity_md: str = ""    # IDENTITY.md: 身份定义与系统边界约束
-    soul_md: str = ""        # SOUL.md: 响应语气、行为特征及输出格式
-    agents_md: str = ""      # AGENTS.md: 调度规则与标准作业程序
-    bootstrap_md: str = ""   # BOOTSTRAP.md: 初始化序列与核心系统提示词
-    memory_md: str = ""      # MEMORY.md: 长期上下文数据与既定规则（初始为空）
-    tools_md: str = ""       # TOOLS.md: 工具授权注册表及调用参数
-    user_md: str = ""        # USER.md: 用户画像数据与交互限制
-    
-    # 版本管理
-    config_version: int = 1
-    
-    # 时间戳
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: Optional[datetime] = None
-    
-    def set_vibes(self, vibes: list[str]) -> None:
-        """设置 vibe 标签（最多 3 个）"""
-        if len(vibes) > 3:
-            raise ValueError("vibes 最多只能选择 3 个")
-        self.vibes = vibes
-    
-    def get_vibes(self) -> list[str]:
-        """获取 vibe 标签列表"""
-        if isinstance(self.vibes, str):
-            return json.loads(self.vibes)
-        return self.vibes
-    
-    def update_config(self, **config_fields: str) -> None:
-        """
-        更新配置文件，自动递增版本号
-        
-        Args:
-            **config_fields: 配置文件字段，键名为 identity_md/soul_md/agents_md/
-                             bootstrap_md/memory_md/tools_md/user_md
-        """
-        for field_name, value in config_fields.items():
-            if field_name in CONFIG_FILES and value is not None:
-                setattr(self, field_name, value)
-        self.config_version += 1
-        self.updated_at = datetime.utcnow()
-    
-    def build_full_system_prompt(self) -> str:
-        """
-        组装完整的系统提示词（定义域内容）
-        
-        组装顺序：BOOTSTRAP → IDENTITY → AGENTS → SOUL → MEMORY → TOOLS → USER
-        此顺序确保：系统基础设定在前，身份和规则居中，记忆和工具在后，用户适配最末。
-        """
-        sections = [
-            ("Bootstrap", self.bootstrap_md),
-            ("Identity", self.identity_md),
-            ("Agents", self.agents_md),
-            ("Soul", self.soul_md),
-            ("Memory", self.memory_md),
-            ("Tools", self.tools_md),
-            ("User", self.user_md),
-        ]
-        
-        parts = []
-        for title, content in sections:
-            if content:
-                parts.append(f"# {title}\n{content}")
-        
-        return "\n\n".join(parts) if parts else ""
-```
+**简化表单字段**：`avatar_style`（头像风格，默认 "pixel_art"）、`avatar_id`（具体头像 ID）、`vibes`（列表类型，存储选中的 vibe 标签）
+
+**OpenClaw 七文件内容**：`identity_md`、`soul_md`、`agents_md`、`bootstrap_md`、`memory_md`、`tools_md`、`user_md`，均为字符串类型，默认空字符串。配置文件名称常量 `CONFIG_FILES` 列出这七个字段名。
+
+**版本与时间戳**：`config_version`（整数，默认 1）、`created_at`（datetime）、`updated_at`（可选 datetime）
+
+**关键方法**：
+
+- `set_vibes(vibes)`：设置 vibe 标签，若超过 3 个则抛出 ValueError。
+- `get_vibes()`：返回 vibe 列表，处理字符串与列表两种内部表示。
+- `update_config(**config_fields)`：接收键值对形式的配置文件字段更新，只允许更新 CONFIG_FILES 中定义的字段且值非 None，更新后自动将 `config_version` 加 1 并刷新 `updated_at`。
+- `build_full_system_prompt()`：按 BOOTSTRAP -> IDENTITY -> AGENTS -> SOUL -> MEMORY -> TOOLS -> USER 顺序组装完整系统提示词。每个有内容的配置段以 `# 标题\n内容` 格式输出，段之间以双换行分隔。空的配置段（如初始 MEMORY.md）不出现在输出中。若所有配置均为空，返回空字符串。
 
 #### 3.2.5 Repository 接口
 
-```python
-from abc import ABC, abstractmethod
-from typing import Optional, List, Dict, Any
+`IAgentRepository` 是一个抽象接口，定义 Agent 持久化的标准协议，所有方法均为异步。接口包含以下方法签名：
 
-class IAgentRepository(ABC):
-    """Agent Repository 接口"""
-    
-    @abstractmethod
-    async def create(self, agent: Agent) -> Agent:
-        """创建 Agent"""
-        pass
-    
-    @abstractmethod
-    async def get_by_id(self, agent_id: str) -> Optional[Agent]:
-        """根据 ID 获取 Agent"""
-        pass
-    
-    @abstractmethod
-    async def get_by_name(self, name: str) -> Optional[Agent]:
-        """根据名称获取 Agent"""
-        pass
-    
-    @abstractmethod
-    async def list(self, page: int = 1, page_size: int = 20) -> tuple[List[Agent], int]:
-        """分页获取 Agent 列表，返回 (列表, 总数)"""
-        pass
-    
-    @abstractmethod
-    async def update(self, agent: Agent) -> Agent:
-        """更新 Agent"""
-        pass
-    
-    @abstractmethod
-    async def delete(self, agent_id: str) -> bool:
-        """删除 Agent"""
-        pass
-    
-    @abstractmethod
-    async def update_config(self, agent_id: str, config_fields: Dict[str, Any]) -> Optional[Agent]:
-        """部分更新配置文件，自动递增版本号"""
-        pass
-```
+- `create(agent) -> Agent`：创建新 Agent 记录。
+- `get_by_id(agent_id) -> Optional[Agent]`：按 ID 查找，不存在时返回 None。
+- `get_by_name(name) -> Optional[Agent]`：按名称查找（用于唯一性校验）。
+- `list(page, page_size) -> tuple[List[Agent], int]`：分页查询，返回 (Agent 列表, 总记录数) 元组。
+- `update(agent) -> Agent`：全量更新 Agent 记录。
+- `delete(agent_id) -> bool`：按 ID 删除，返回是否删除成功。
+- `update_config(agent_id, config_fields) -> Optional[Agent]`：部分更新配置文件字段，由仓储层负责自动递增版本号。
 
 ### 3.3 前端设计
 
@@ -581,55 +334,16 @@ class IAgentRepository(ABC):
 
 #### 3.3.3 API 客户端
 
-```typescript
-// frontend/src/infrastructure/api/agentApi.ts
+前端 API 客户端 `agentApi` 封装了对后端所有 Agent 相关端点的 HTTP 调用。提供以下方法：
 
-export const agentApi = {
-  // 基础 CRUD
-  list: async (params?: { page?: number; pageSize?: number }) => 
-    axios.get('/api/agents', { params }),
-  
-  get: async (id: string) => 
-    axios.get(`/api/agents/${id}`),
-  
-  create: async (data: CreateAgentRequest) => 
-    axios.post('/api/agents', data),
-  
-  update: async (id: string, data: UpdateAgentRequest) => 
-    axios.put(`/api/agents/${id}`, data),
-  
-  delete: async (id: string) => 
-    axios.delete(`/api/agents/${id}`),
-  
-  // 配置文件管理
-  getConfig: async (id: string) => 
-    axios.get(`/api/agents/${id}/config`),
-  
-  updateConfig: async (id: string, data: UpdateConfigRequest) => 
-    axios.put(`/api/agents/${id}/config`, data),
-};
-```
+- **基础 CRUD**：`list`（分页查询）、`get`（按 ID 获取）、`create`、`update`、`delete`
+- **配置文件管理**：`getConfig`（获取七文件配置）、`updateConfig`（部分更新配置文件）
+
+所有方法通过 HTTP 客户端库（如 axios）与 `/api/agents` 路由交互，请求和响应体对应后端 DTO 结构。
 
 #### 3.3.4 路由配置
 
-```typescript
-// frontend/src/presentation/App.tsx
-
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
-
-function App() {
-  return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<HomePage />} />
-        <Route path="/agents" element={<AgentManagementPage />} />
-        <Route path="/agents/new" element={<AgentEditPage />} />
-        <Route path="/agents/:id/edit" element={<AgentEditPage />} />
-      </Routes>
-    </BrowserRouter>
-  );
-}
-```
+前端使用 React Router 进行页面路由。路由映射为：`/` 指向首页，`/agents` 指向 Agent 列表管理页（AgentManagementPage），`/agents/new` 指向新建 Agent 向导页（AgentEditPage），`/agents/:id/edit` 指向指定 Agent 的编辑页（AgentEditPage），其中 `:id` 为动态路由参数。
 
 ### 3.4 错误处理
 
@@ -897,193 +611,23 @@ CreateAgentWizard/
 
 **前端 Hook: useAgentGenerator**
 
-```typescript
-// frontend/src/application/services/useAgentGenerator.ts
+`useAgentGenerator` 是一个 React Hook，接收 `GenerationInput` 对象（包含 name、description、avatarStyle、avatarId、vibes 字段）并返回 `generate` 函数。`generate` 依次调用各文件的生成函数，将结果组装为 `GeneratedContent` 对象（包含 identity_md、soul_md、agents_md、bootstrap_md、memory_md、tools_md、user_md 七个字段），其中 memory_md 初始为空字符串。
 
-interface GenerationInput {
-  name: string;
-  description: string;
-  avatarStyle: string;
-  avatarId: string;
-  vibes: string[];
-}
+##### 生成规则
 
-interface GeneratedContent {
-  identity_md: string;
-  soul_md: string;
-  agents_md: string;
-  bootstrap_md: string;
-  memory_md: string;
-  tools_md: string;
-  user_md: string;
-}
+各生成函数接收 `GenerationInput`（名称、描述、头像风格/ID、vibe 列表）并返回对应配置文件的 Markdown 字符串。核心逻辑包括：
 
-export const useAgentGenerator = () => {
-  const generate = (input: GenerationInput): GeneratedContent => {
-    const identity_md = generateIdentityMd(input);
-    const soul_md = generateSoulMd(input);
-    const agents_md = generateAgentsMd(input);
-    const bootstrap_md = generateBootstrapMd(input);
-    const memory_md = "";  // MEMORY.md 初始为空
-    const tools_md = generateToolsMd(input);
-    const user_md = generateUserMd(input);
-    
-    return { identity_md, soul_md, agents_md, bootstrap_md, memory_md, tools_md, user_md };
-  };
-  
-  return { generate };
-};
-```
-
-**生成规则函数示例**
-
-```typescript
-// 映射表
-const VIBE_MAP = {
-  Professional: {
-    trait: '严谨、专业、可靠',
-    style: '正式、准确、逻辑清晰',
-    quote: '专业成就卓越',
-  },
-  Friendly: {
-    trait: '温暖、亲切、耐心',
-    style: '友好、鼓励、平易近人',
-    quote: '用微笑服务每一位',
-  },
-  // ... 其他 vibe 映射
-};
-
-function generateIdentityMd(input: GenerationInput): string {
-  return `# ${input.name}
-
-## 身份
-你是 ${input.name}，${input.description}。
-
-## 边界
-- 不提供超出能力范围的服务
-- 不存储或泄露用户隐私信息
-
-## 版本
-- v1.0.0`;
-}
-
-function generateSoulMd(input: GenerationInput): string {
-  const vibeTraits = input.vibes.map(v => VIBE_MAP[v].trait).join('、');
-  const vibeStyle = input.vibes.map(v => VIBE_MAP[v].style).join('、');
-  const quote = VIBE_MAP[input.vibes[0]].quote;
-  
-  return `# 人格定义
-
-## 性格特征
-${vibeTraits}
-
-## 语言风格
-${vibeStyle}
-
-## 座右铭
-"${quote}"`;
-}
-
-function generateAgentsMd(input: GenerationInput): string {
-  return `# 调度规则与标准作业程序
-
-## 任务处理流程
-1. 接收用户请求
-2. 分析任务类型和优先级
-3. 按能力范围执行任务
-4. 返回结构化结果
-
-## 决策规则
-- 遇到不确定的需求时，主动澄清
-- 涉及高风险操作时，请求用户确认`;
-}
-
-function generateBootstrapMd(input: GenerationInput): string {
-  return `# 初始化配置
-
-## 系统约束
-- 遵守安全边界，不执行危险操作
-- 保护用户隐私，不泄露敏感信息
-
-## 格式要求
-- 使用 Markdown 格式输出
-- 代码块使用语法高亮`;
-}
-
-function generateToolsMd(_input: GenerationInput): string {
-  return `# 工具授权
-
-## 可用工具
-（待在 Tools 配置步骤中设定）
-
-## 调用约束
-- 遵守工具调用频率限制
-- 高风险工具需用户确认后执行`;
-}
-
-function generateUserMd(input: GenerationInput): string {
-  return `# 用户画像
-
-## 目标用户
-使用 ${input.name} 的用户
-
-## 交互偏好
-- 语言：中文
-- 详细程度：适中`;
-}
-```
-
-#### 3.5.8 新增文件清单
-
-**前端新增**
-
-| 文件路径 | 说明 |
-|----------|------|
-| `frontend/src/presentation/components/CreateAgentWizard/WizardContainer.tsx` | 向导容器 |
-| `frontend/src/presentation/components/CreateAgentWizard/StepIndicator.tsx` | 步骤指示器 |
-| `frontend/src/presentation/components/CreateAgentWizard/steps/IdentityModelStep.tsx` | Identity & Model 步骤 |
-| `frontend/src/presentation/components/CreateAgentWizard/AvatarSelector.tsx` | 头像选择器 |
-| `frontend/src/presentation/components/CreateAgentWizard/VibeSelector.tsx` | Vibe 选择器 |
-| `frontend/src/presentation/components/CreateAgentWizard/LivePreview.tsx` | 实时预览面板 |
-| `frontend/src/application/services/useAgentGenerator.ts` | 自动生成 Hook |
-| `frontend/src/domain/types/agentWizard.ts` | 向导类型定义 |
-| `frontend/src/infrastructure/assets/avatars/` | 头像资源目录 |
-
-#### 3.5.9 修改文件清单
-
-| 文件路径 | 修改说明 |
-|----------|----------|
-| `frontend/src/presentation/pages/AgentPage.tsx` | 集成 CreateAgentWizard 替换 CreateAgentDialog |
-| `frontend/src/domain/entities/agent.ts` | 配置字段改为 identityMd/soulMd/agentsMd/bootstrapMd/memoryMd/toolsMd/userMd |
-| `backend/src/application/dtos/agent_dto.py` | DTO 字段替换为 OpenClaw 七文件结构 |
-| `backend/src/domain/entities/agent.py` | Agent 实体字段替换为 OpenClaw 七文件结构 |
-| `backend/src/infrastructure/database/models/agent_model.py` | AgentModel Column 替换为七文件字段 |
+- 一个 VIBE_MAP 映射表，将每个 vibe 标签（Professional/Friendly/Creative/Concise/Casual/Expert）关联到性格描述、语言风格和座右铭。
+- `generateIdentityMd` 将名称和描述拼入身份模板，附带默认边界声明和版本号。
+- `generateSoulMd` 根据所选 vibe 从映射表中取性格特征和语言风格，多个 vibe 以顿号连接，座右铭取自第一个 vibe。
+- `generateAgentsMd`、`generateBootstrapMd` 输出固定的 SOP 和系统约束模板。
+- `generateToolsMd` 输出占位模板，提示用户在后续步骤配置工具授权。
+- `generateUserMd` 输出基础用户画像模板，目标用户默认引用 Agent 名称。
+- `generateAll` 聚合上述各函数，返回包含七个文件内容的 `GeneratedContent` 对象，其中 MEMORY.md 初始为空字符串。
 
 #### 3.5.10 数据库迁移
 
-```sql
--- 移除旧的三文件结构字段
--- （如果是全新数据库，直接使用 3.2.1 的 CREATE TABLE）
--- 以下为从旧结构迁移的 SQL：
-
--- 新增七文件字段
-ALTER TABLE agents ADD COLUMN identity_md TEXT NOT NULL DEFAULT '';
-ALTER TABLE agents ADD COLUMN agents_md TEXT NOT NULL DEFAULT '';
-ALTER TABLE agents ADD COLUMN bootstrap_md TEXT NOT NULL DEFAULT '';
-ALTER TABLE agents ADD COLUMN memory_md TEXT NOT NULL DEFAULT '';
-ALTER TABLE agents ADD COLUMN tools_md TEXT NOT NULL DEFAULT '';
-ALTER TABLE agents ADD COLUMN user_md TEXT NOT NULL DEFAULT '';
-
--- 数据迁移：将旧字段内容映射到新字段
-UPDATE agents SET identity_md = agent_md;          -- agent.md → IDENTITY.md
-UPDATE agents SET agents_md = role_md;             -- role.md → AGENTS.md
-UPDATE agents SET bootstrap_md = system_prompt_template;  -- template → BOOTSTRAP.md
--- soul_md 字段名不变，无需迁移
--- memory_md 初始为空，无需迁移
-
--- 移除旧字段（SQLite 不支持 DROP COLUMN，需重建表或保留旧字段标记废弃）
--- 建议：新项目直接使用新表结构；已有数据通过重建表迁移
-```
+从旧的三文件结构迁移到 OpenClaw 七文件结构时，需新增 `identity_md`、`agents_md`、`bootstrap_md`、`memory_md`、`tools_md`、`user_md` 六个 TEXT 列（默认空字符串）。旧字段映射关系为：`agent_md` -> `identity_md`，`role_md` -> `agents_md`，`system_prompt_template` -> `bootstrap_md`。由于 SQLite 不支持 DROP COLUMN，迁移后需通过重建表移除旧字段；新项目直接使用完整七文件表结构即可。
 
 #### 3.5.11 功能测试计划
 
@@ -1128,140 +672,15 @@ UPDATE agents SET bootstrap_md = system_prompt_template;  -- template → BOOTST
 
 #### 3.5.12 单元测试计划
 
-**测试模块: Markdown 生成服务**
+单元测试应覆盖以下核心逻辑，使用标准的 Arrange-Act-Assert 模式：
 
-```python
-def test_generate_soul_md_with_single_vibe():
-    # Arrange
-    input_data = {
-        "name": "小助手",
-        "description": "测试助手",
-        "avatar_style": "Pixel Art",
-        "avatar_id": "pixel_01",
-        "vibes": ["Professional"]
-    }
-    
-    # Act
-    result = generate_soul_md(input_data)
-    
-    # Assert
-    assert "严谨、专业、可靠" in result
-    assert "专业成就卓越" in result
-    assert "人格定义" in result
+- **SOUL.md 生成**：验证单 vibe 和多 vibe 组合时性格描述、语言风格、座右铭的正确生成。
+- **IDENTITY.md 生成**：验证名称、描述、版本号的正确拼入。
+- **MEMORY.md 初始状态**：验证新建 Agent 时 MEMORY.md 为空字符串。
+- **系统提示词组装顺序**：验证 `build_full_system_prompt` 按 BOOTSTRAP -> IDENTITY -> AGENTS -> SOUL -> MEMORY -> TOOLS -> USER 顺序组装，且空配置段不出现。
+- **配置版本递增**：验证 `update_config` 更新指定文件后 `config_version` 自动加 1，未更新的文件保持不变。
 
-def test_generate_soul_md_with_multiple_vibes():
-    # Arrange
-    input_data = {
-        "name": "小助手",
-        "description": "测试助手",
-        "avatar_style": "Pixel Art",
-        "avatar_id": "pixel_01",
-        "vibes": ["Professional", "Friendly"]
-    }
-    
-    # Act
-    result = generate_soul_md(input_data)
-    
-    # Assert
-    assert "严谨、专业、可靠" in result
-    assert "温暖、亲切、耐心" in result
-    assert "、" in result  # 多个 vibe 用顿号分隔
-
-def test_generate_identity_md_basic():
-    # Arrange
-    input_data = {
-        "name": "代码助手",
-        "description": "帮助编写和调试代码",
-        "avatar_style": "Robot",
-        "avatar_id": "robot_01",
-        "vibes": ["Expert"]
-    }
-    
-    # Act
-    result = generate_identity_md(input_data)
-    
-    # Assert
-    assert "# 代码助手" in result
-    assert "帮助编写和调试代码" in result
-    assert "v1.0.0" in result
-
-def test_memory_md_initially_empty():
-    # Arrange
-    input_data = {
-        "name": "代码助手",
-        "description": "帮助编写和调试代码",
-        "avatar_style": "Robot",
-        "avatar_id": "robot_01",
-        "vibes": ["Expert"]
-    }
-    
-    # Act
-    result = generate_all(input_data)
-    
-    # Assert
-    assert result["memory_md"] == ""
-
-def test_build_full_system_prompt_assembly_order():
-    # Arrange
-    agent = Agent(
-        id="test-id",
-        name="测试",
-        bootstrap_md="Bootstrap content",
-        identity_md="Identity content",
-        agents_md="Agents content",
-        soul_md="Soul content",
-        memory_md="Memory content",
-        tools_md="Tools content",
-        user_md="User content",
-    )
-    
-    # Act
-    prompt = agent.build_full_system_prompt()
-    
-    # Assert - 验证组装顺序：BOOTSTRAP → IDENTITY → AGENTS → SOUL → MEMORY → TOOLS → USER
-    bootstrap_pos = prompt.index("Bootstrap content")
-    identity_pos = prompt.index("Identity content")
-    agents_pos = prompt.index("Agents content")
-    soul_pos = prompt.index("Soul content")
-    memory_pos = prompt.index("Memory content")
-    tools_pos = prompt.index("Tools content")
-    user_pos = prompt.index("User content")
-    assert bootstrap_pos < identity_pos < agents_pos < soul_pos < memory_pos < tools_pos < user_pos
-
-def test_build_full_system_prompt_skips_empty_memory():
-    # Arrange - MEMORY.md 为空时不应出现在组装结果中
-    agent = Agent(
-        id="test-id",
-        name="测试",
-        bootstrap_md="Bootstrap content",
-        identity_md="Identity content",
-        memory_md="",  # 初始为空
-    )
-    
-    # Act
-    prompt = agent.build_full_system_prompt()
-    
-    # Assert
-    assert "# Memory" not in prompt
-    assert "Bootstrap content" in prompt
-    assert "Identity content" in prompt
-
-def test_update_config_increments_version():
-    # Arrange
-    agent = Agent(id="test-id", name="测试", config_version=1)
-    
-    # Act
-    agent.update_config(identity_md="new identity", memory_md="new memory", tools_md="new tools")
-    
-    # Assert
-    assert agent.identity_md == "new identity"
-    assert agent.memory_md == "new memory"
-    assert agent.tools_md == "new tools"
-    assert agent.config_version == 2
-    assert agent.soul_md == ""  # 未更新的文件保持不变
-```
-
-### 3.6 错误处理
+### 3.6 安全措施
 
 1. **输入验证**：所有配置字段使用 Pydantic 进行长度和格式验证
 2. **XSS 防护**：前端使用 React 默认转义，Markdown 渲染使用安全的库

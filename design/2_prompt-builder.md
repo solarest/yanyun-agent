@@ -41,7 +41,7 @@ Prompt Builder 是一个**纯领域模块**，负责定义 Prompt 的完整结�
 
 ### 2.2 Prompt 完整分层 Schema（11 层）
 
-```
+```text
 完整 Prompt = 
   [Layer 1]   IDENTITY              静态前缀 - Agent 身份声明
   [Layer 2]   AGENTS.md             静态前缀 - 用户自定义指令
@@ -65,7 +65,7 @@ Prompt Builder 是一个**纯领域模块**，负责定义 Prompt 的完整结�
 
 ### 2.3 分层架构
 
-```
+```text
 ┌─────────────────────────────────────────────────┐
 │  agent-loop 模块（调用方）                        │
 │  - 提供 Tools 定义列表                            │
@@ -119,507 +119,82 @@ Prompt Builder 是一个**纯领域模块**，负责定义 Prompt 的完整结�
 > `get_static_suffix()` 已迁移为 `PromptAssembleService` 的私有方法。Token 计数统一使用
 > `src.domain.services.token_utils.count_tokens()`。
 
-```python
-# 实际路径: backend/src/domain/value_objects/prompt_template.py
+**类设计：** `PromptTemplate` 是一个不可变值对象（frozen dataclass），作为 Agent 7 文件静态内容的纯数据载体。字段直接对应 Agent 实体的 7 个 OpenClaw 配置文件：
 
-from __future__ import annotations
-from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Optional, TYPE_CHECKING
+- **`identity_md`** -- Layer 1 IDENTITY：身份定义与系统边界约束
+- **`agents_md`** -- Layer 2 AGENTS.md：调度规则与标准作业程序
+- **`bootstrap_md`** -- Layer 3 BOOTSTRAP.md：初始化序列与核心系统提示词
+- **`soul_md`** -- Layer 10 SOUL.md：响应语气、行为特征及输出格式
+- **`user_md`** -- Layer 11 USER.md：用户画像数据与交互限制
+- **`memory_md`** -- Layer 7 / Layer 11 MEMORY.md：记忆系统读写规则及长期记忆上下文（双用途字段）
+- **`tools_md`** -- TOOLS.md：工具授权注册表及调用参数约束（注入到 Layer 4 tool_usage 准则，不直接映射到某一层）
 
-if TYPE_CHECKING:
-    from src.domain.aggregates.agent.agent import Agent
+**工厂方法：** `from_agent(agent)` 类方法是 Agent 定义域与 Prompt 构建域的唯一桥接点，从 Agent 实体提取 7 文件内容构造 PromptTemplate 实例。
 
-
-@dataclass(frozen=True)
-class PromptTemplate:
-    """Prompt 模板领域实体
-    
-    定义 Prompt 的静态分层内容，字段直接对应 Agent 的 OpenClaw 7 文件结构。
-    工具清单（Layer 5）、技能指令（Layer 8）等动态内容由调用方在组装时提供。
-    对话历史由 PromptContextInterface 以消息数组方式管理，不在模板中定义。
-    """
-    
-    # 基本信息
-    id: str
-    name: str
-    
-    # ==================== 静态前缀层（Layer 1-3）====================
-    # 对应 Agent 的 OpenClaw 配置文件，跨请求可缓存
-    
-    identity_md: str = ""
-    """Layer 1 IDENTITY: 身份定义与系统边界约束（对应 Agent.identity_md）"""
-    
-    agents_md: str = ""
-    """Layer 2 AGENTS.md: 调度规则与标准作业程序（对应 Agent.agents_md）"""
-    
-    bootstrap_md: str = ""
-    """Layer 3 BOOTSTRAP.md: 初始化序列与核心系统提示词（对应 Agent.bootstrap_md）"""
-    
-    # ==================== 静态后缀层（Layer 10-11）====================
-    # 对应 Agent 的 OpenClaw 配置文件，跨请求可缓存
-    
-    soul_md: str = ""
-    """Layer 10 SOUL.md: 响应语气、行为特征及输出格式（对应 Agent.soul_md）"""
-    
-    user_md: str = ""
-    """Layer 11 USER.md: 用户画像数据与交互限制（对应 Agent.user_md）"""
-    
-    memory_md: str = ""
-    """Layer 11 MEMORY.md: 长期记忆与既定规则（对应 Agent.memory_md）
-    
-    特殊说明：memory_md 的内容同时用于两处：
-    - Layer 7 Memory Section: 作为记忆系统读写规则（条件注入，需 memory_enabled）
-    - Layer 11 静态后缀: 作为长期记忆上下文
-    """
-    
-    # ==================== 工具授权声明 ====================
-    
-    tools_md: str = ""
-    """TOOLS.md: 工具授权注册表及调用参数约束（对应 Agent.tools_md）
-    
-    特殊处理：
-    - tools_md 的约束内容注入到 Layer 4 Universal Behavior 的 tool_usage 准则中
-    - Layer 5 Tooling Section 完全由运行时传入的 ToolDef 列表动态生成
-    - tools_md 不直接映射到某一层，而是作为工具使用的补充约束
-    """
-    
-    # ==================== 元数据 ====================
-    
-    description: str = ""
-    
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: Optional[datetime] = None
-    
-    # ==================== 工厂方法 ====================
-    
-    @classmethod
-    def from_agent(cls, agent: Agent) -> PromptTemplate:
-        """从 Agent 实体提取 7 文件内容构造 PromptTemplate
-        
-        这是 Agent 定义域与 Prompt 构建域的唯一桥接点，
-        确保两个实体间的映射有明确的入口。
-        
-        Args:
-            agent: Agent 领域实体（包含 OpenClaw 7 文件内容）
-            
-        Returns:
-            包含 Agent 静态配置的 PromptTemplate 实例
-        """
-        return cls(
-            id=f"pt-{agent.id}",
-            name=agent.name,
-            identity_md=agent.identity_md,
-            agents_md=agent.agents_md,
-            bootstrap_md=agent.bootstrap_md,
-            soul_md=agent.soul_md,
-            user_md=agent.user_md,
-            memory_md=agent.memory_md,
-            tools_md=agent.tools_md,
-            description=agent.description,
-        )
-    
-    # ==================== 业务规则 ====================
-
-    # 实现注记: 以下方法已迁移至 PromptAssembleService:
-    # - get_static_prefix()  →  PromptAssembleService._build_static_prefix()
-    # - get_static_suffix()  →  PromptAssembleService._build_static_suffix()
-    # - estimate_static_tokens()  →  使用 count_tokens() (src.domain.services.token_utils)
-    # - _count_tokens()  →  src.domain.services.token_utils.count_tokens()
-    # PromptTemplate 实际为 frozen dataclass (值对象)，不可变数据载体。
-
-    def get_static_prefix(self) -> str:
-        """组装静态前缀层内容（Layer 1-3）-- ~~已迁移至 PromptAssembleService._build_static_prefix()~~"""
-        sections = [
-            ("Bootstrap", self.bootstrap_md),
-            ("Identity", self.identity_md),
-            ("Agents", self.agents_md),
-        ]
-        parts = []
-        for title, content in sections:
-            if content:
-                parts.append(f"# {title}\n{content}")
-        return "\n\n".join(parts)
-
-    def get_static_suffix(self) -> str:
-        """组装静态后缀层内容（Layer 10-11）-- ~~已迁移至 PromptAssembleService._build_static_suffix()~~"""
-        sections = [
-            ("Soul", self.soul_md),
-            ("User", self.user_md),
-            ("Memory", self.memory_md),
-        ]
-        parts = []
-        for title, content in sections:
-            if content:
-                parts.append(f"# {title}\n{content}")
-        return "\n\n".join(parts)
-
-    def estimate_static_tokens(self) -> int:
-        """预估静态部分 Token 数量 -- ~~已废弃，由 count_tokens() 替代~~"""
-        text = self.get_static_prefix() + self.get_static_suffix()
-        return _count_tokens(text)
-
-
-def _count_tokens(text: str) -> int:
-    """简单 Token 计数 -- ~~已废弃，由 src.domain.services.token_utils.count_tokens() 替代~~"""
-    chinese_chars = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
-    other_chars = len(text) - chinese_chars
-    return int(chinese_chars * 1.5 + other_chars * 0.25)```
+**组装逻辑迁移：** 静态前缀/后缀的拼接方法（`get_static_prefix()`、`get_static_suffix()`）已迁移至 `PromptAssembleService` 的私有方法中。Token 计数统一使用 `src.domain.services.token_utils.count_tokens()`。
 
 #### 3.1.2 ToolDef（工具定义）
 
-```python
-# 实际路径: backend/src/domain/entities/tool/definition.py
+**类设计：** `ToolDef` 是工具定义的领域实体，描述一个可被 Agent 调用的外部工具。包含以下核心元素：
 
-from dataclasses import dataclass, field
-from typing import Optional
+- **`name`** / **`description`** -- 工具名称与功能描述，用于 LLM 理解何时使用
+- **`parameters`** -- `ToolParameter` 列表，每个参数包含 name、type（string/number/boolean/object/array）、description、required 标记及可选枚举值
+- **`returns`** -- 返回值描述
+- **`category`** -- 工具分类（web_search、file、clarify、plan、mcp、custom）
 
-
-@dataclass
-class ToolParameter:
-    """工具参数定义"""
-    name: str
-    type: str  # "string", "number", "boolean", "object", "array"
-    description: str
-    required: bool = True
-    enum: Optional[list] = None
-    """枚举值（可选）"""
-
-
-@dataclass
-class ToolDef:
-    """工具定义领域实体
-    
-    描述一个可被 Agent 调用的工具，包含名称、描述、参数 Schema。
-    由 Tools Hub 模块提供具体实现，此处只定义结构。
-    """
-    
-    name: str
-    """工具名称，如 "web_search", "read_file" """
-    
-    description: str
-    """工具功能描述，用于 LLM 理解何时使用"""
-    
-    parameters: list[ToolParameter] = field(default_factory=list)
-    """参数列表"""
-    
-    returns: str = ""
-    """返回值描述"""
-    
-    # 元数据
-    category: str = "general"
-    """工具分类：web_search / file / clarify / plan / mcp / custom """
-    
-    def to_prompt_section(self) -> str:
-        """生成 System Prompt 中的工具名称标记（简短形式）
-
-        用于 Layer 5 Available Tools 部分，只输出工具名称列表。
-        工具的详细信息通过 to_llm_schema() 生成并传递给 bind_tools()。
-
-        ~~原设计: XML 格式的完整工具描述~~ 实际实现改为简短名称标记，
-        详细参数 schema 通过 OpenAI tools API 的 bind_tools() 机制传递。
-
-        Returns:
-            工具名称标记文本，如 "- web_search"
-        """
-        return f"- {self.name}"
-
-    def to_llm_schema(self) -> dict:
-        """生成 LLM API 调用时的工具 Schema（详细形式）
-
-        用于 bind_tools() 参数，包含完整的工具描述和参数定义。
-        符合 OpenAI Chat Completions API 的 tools 参数格式。
-
-        Returns:
-            工具 Schema 字典
-        """
-        properties = {}
-        required_params = []
-        for param in self.parameters:
-            prop_def = {"type": param.type, "description": param.description}
-            if param.enum:
-                prop_def["enum"] = param.enum
-            properties[param.name] = prop_def
-            if param.required:
-                required_params.append(param.name)
-        function_def = {
-            "name": self.name,
-            "description": self.description,
-            "parameters": {"type": "object", "properties": properties},
-        }
-        if required_params:
-            function_def["parameters"]["required"] = required_params
-        return {"type": "function", "function": function_def}
-```
+**LLM 接口适配：** 提供两个关键方法：
+- `to_prompt_section()` -- 生成 Layer 5 中的简短工具名称标记（如 `- web_search`），详细参数不放入 system_message
+- `to_llm_schema()` -- 生成符合 OpenAI Chat Completions API 的 `tools` 参数格式，包含完整的 function 定义和 parameters JSON Schema，通过 `bind_tools()` 机制传递给 LLM
 
 #### 3.1.3 SkillDef（技能定义）
 
-```python
-# 实际路径: backend/src/skills/skill_def.py
+**类设计：** `SkillDef` 是技能定义的领域实体，描述预定义的复杂任务执行流程。支持两种内容模式：
 
-from dataclasses import dataclass, field
-from typing import Optional
+- **结构化模式：** 通过 `steps`（`SkillStep` 列表，每个步骤含 name、description、tool_name）和 `trigger_keywords` 定义
+- **原文模式：** 通过 `content` 字段存储完整 SKILL.md 正文；若 content 非空，`to_prompt_section()` 直接返回原文，跳过结构化生成
 
+**持久化字段：** `id`（主键）、`file_path`（磁盘路径）、`enabled`（启用状态）等持久化属性支持存储管理。
 
-@dataclass
-class SkillStep:
-    """技能步骤定义"""
-    name: str
-    description: str
-    tool_name: Optional[str] = None
-    """使用的工具（如为复合步骤可为空）"""
-
-
-@dataclass
-class SkillDef:
-    """技能定义领域实体
-
-    预定义的复杂任务执行流程，由多个步骤组成。
-    由 Skills 模块提供具体实现，此处只定义结构。
-    支持两种内容模式：
-    - 结构化模式：通过 steps + trigger_keywords 定义
-    - 原文模式：通过 content 存储完整 SKILL.md 正文
-    """
-
-    name: str
-    """技能名称，如 "code_review", "debug_assistant" """
-
-    description: str
-    """技能功能描述"""
-
-    steps: list[SkillStep] = field(default_factory=list)
-    """执行步骤列表"""
-
-    trigger_keywords: list[str] = field(default_factory=list)
-    """触发关键词，用于 LLM 识别何时使用该技能"""
-
-    # 元数据
-    category: str = "general"
-    """技能分类"""
-
-    # 持久化字段（实际实现新增）
-    id: str = ""
-    """主键 ID"""
-
-    content: str = ""
-    """Skill 完整 Markdown 内容（原始 SKILL.md 正文存储）。
-    若非空，to_prompt_section() 直接返回此内容，跳过结构化生成。"""
-
-    file_path: str = ""
-    """磁盘存储路径"""
-
-    enabled: bool = True
-    """是否启用"""
-
-    created_at: datetime = field(default_factory=datetime.now)
-    updated_at: Optional[datetime] = None
-
-    def to_prompt_section(self) -> str:
-        """生成为 Prompt 中的技能描述段落
-
-        若 content 非空，直接返回完整 SKILL.md 内容；
-        否则使用结构化的 steps 生成摘要。
-        """
-        if self.content:
-            return self.content
-
-        parts = [
-            f"### {self.name}",
-            self.description,
-        ]
-
-        if self.trigger_keywords:
-            parts.append(f"\n**Triggers:** {', '.join(self.trigger_keywords)}")
-
-        if self.steps:
-            parts.append("\n**Steps:**")
-            for i, step in enumerate(self.steps, 1):
-                tool_info = f" (using `{step.tool_name}`)" if step.tool_name else ""
-                parts.append(f"{i}. **{step.name}**{tool_info}: {step.description}")
-
-        return "\n".join(parts)
-```
+**Prompt 生成：** `to_prompt_section()` 方法根据内容模式选择输出策略：原文模式直接返回 content，结构化模式生成包含触发词和步骤列表的摘要段落。
 
 #### 3.1.4 OutputSchema（输出格式）
 
-```python
-# backend/src/domain/entities/output_schema.py
+**类设计：** `OutputSchema` 定义 LLM 输出的 JSON Schema 格式。核心字段：
 
-from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Optional
-import json
+- **`json_schema`** -- JSON Schema 字典，定义输出结构约束
+- **`validate_schema()`** -- 校验 Schema 格式合法性（检查 type 或 $schema 字段）
+- **`to_json_string()`** -- 序列化为 JSON 字符串，在 Prompt Assembly 时注入到 Output Format 层
 
-
-@dataclass
-class OutputSchema:
-    """输出 Schema 领域实体
-    
-    定义 LLM 输出的 JSON Schema 格式，与领域层 DTO 对齐。
-    """
-    
-    id: str
-    name: str
-    json_schema: dict
-    description: str = ""
-    
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: Optional[datetime] = None
-    
-    def validate_schema(self) -> bool:
-        """验证 JSON Schema 格式"""
-        if not isinstance(self.json_schema, dict):
-            return False
-        return "type" in self.json_schema or "$schema" in self.json_schema
-    
-    def to_json_string(self) -> str:
-        """序列化 Schema 为 JSON 字符串"""
-        return json.dumps(self.json_schema, indent=2, ensure_ascii=False)
-    
-    def estimate_tokens(self) -> int:
-        """预估 Schema 的 Token 数量 -- ~~_count_tokens 已废弃~~ 实际使用 src.domain.services.token_utils.count_tokens()"""
-        from .prompt_template import _count_tokens  # ~~废弃~~
-        return _count_tokens(self.to_json_string())  # ~~废弃~~
-```
+当提供 OutputSchema 时，PromptAssembleService 在输出格式层追加 JSON Schema 描述，指导 LLM 生成符合期望结构的响应。
 
 #### 3.1.5 ConversationMessage（对话消息）
 
-```python
-# backend/src/domain/entities/conversation.py
+**类设计：** `ConversationMessage` 表示对话历史中的一条消息，支持多种 LLM API 角色。核心字段：
 
-from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Optional, Literal
-import json
+- **`role`** -- 消息角色（system、user、assistant、tool）
+- **`content`** -- 消息文本内容
+- **`tool_calls`** -- `ToolCall` 列表（仅 assistant 角色使用），每个 ToolCall 含 id、name、arguments、result、status
+- **`tool_call_id`** -- 关联的工具调用 ID（仅 tool 角色使用）
 
+**API 适配：** `to_api_message()` 方法根据角色类型将领域实体转换为 LLM API 兼容的消息字典。assistant 角色的 tool_calls 字段转换为 OpenAI 格式的 `{"type": "function", "function": {...}}` 结构。这确保消息可直接用于 LLM API 调用。
 
-@dataclass
-class ToolCall:
-    """工具调用记录"""
-    id: str
-    name: str
-    arguments: dict
-    """调用参数"""
-    
-    result: Optional[str] = None
-    """调用结果"""
-    
-    status: str = "pending"
-    """状态：pending / success / error"""
-    
-    error: Optional[str] = None
-    """错误信息（如有）"""
-
-
-@dataclass
-class ConversationMessage:
-    """对话消息领域实体
-    
-    表示对话历史中的一条消息，支持多种角色类型。
-    通过 to_api_message() 转换为 LLM API 兼容的消息格式。
-    """
-    
-    role: Literal["system", "user", "assistant", "tool"]
-    """消息角色"""
-    
-    content: str
-    """消息内容"""
-    
-    tool_calls: list[ToolCall] = field(default_factory=list)
-    """工具调用列表（仅 assistant 角色使用）"""
-    
-    tool_call_id: Optional[str] = None
-    """关联的工具调用 ID（仅 tool 角色使用）"""
-    
-    timestamp: datetime = field(default_factory=datetime.utcnow)
-    
-    def to_api_message(self) -> dict:
-        """转换为 LLM API 兼容的消息格式
-        
-        生成符合 OpenAI / LangChain 消息协议的 dict，可直接用于 LLM API 调用。
-        
-        Returns:
-            LLM API 兼容的消息字典
-        """
-        if self.role == "user":
-            return {"role": "user", "content": self.content}
-        
-        elif self.role == "assistant":
-            msg: dict = {"role": "assistant", "content": self.content}
-            if self.tool_calls:
-                msg["tool_calls"] = [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.name,
-                            "arguments": json.dumps(tc.arguments, ensure_ascii=False)
-                        }
-                    }
-                    for tc in self.tool_calls
-                ]
-            return msg
-        
-        elif self.role == "tool":
-            return {
-                "role": "tool",
-                "tool_call_id": self.tool_call_id,
-                "content": self.content
-            }
-        
-        else:  # system
-            return {"role": "system", "content": self.content}
-    
-    def estimate_tokens(self) -> int:
-        """预估消息的 Token 数量 -- 实际实现使用 src.domain.services.token_utils.count_tokens()"""
-        from .prompt_template import _count_tokens  # ~~废弃~~
-        text = self.content
-        if self.tool_calls:
-            text += json.dumps(
-                [{"name": tc.name, "arguments": tc.arguments} for tc in self.tool_calls],
-                ensure_ascii=False
-            )
-        return _count_tokens(text)  # ~~废弃~~
-```
+**辅助实体 `ToolCall`：** 记录单次工具调用的完整生命周期，包含调用参数、返回结果、执行状态（pending/success/error）和错误信息。
 
 #### 3.1.6 MessageGroup（消息组）
 
-```python
-# backend/src/domain/entities/conversation.py（续）
+**类设计：** `MessageGroup` 是上下文裁剪的原子单位，将对话历史消息分组为逻辑单元以确保裁剪时不会拆散完整的工具调用轮次。
 
-@dataclass
-class MessageGroup:
-    """消息组 — 上下文裁剪时的原子单位
-    
-    将对话历史中的消息分组为逻辑单元，裁剪时以组为单位操作，
-    确保不会拆散一个完整的工具调用轮次。
-    
-    分组类型：
-    - dialogue: 一轮普通对话 [user, assistant]
-    - tool_call_round: 一个完整的工具调用轮次
-      [assistant(tool_calls), tool(result) × N]
-    """
-    
-    type: Literal["dialogue", "tool_call_round"]
-    """消息组类型"""
-    
-    messages: list[ConversationMessage] = field(default_factory=list)
-    """组内的消息列表"""
-    
-    token_count: int = 0
-    """组内所有消息的 Token 总数"""
-    
-    def compute_token_count(self) -> int:
-        """计算组内 Token 总数"""
-        self.token_count = sum(m.estimate_tokens() for m in self.messages)
-        return self.token_count
-```
+- **`type`** -- 分组类型：`dialogue`（一轮普通对话 [user, assistant]）或 `tool_call_round`（一个完整的工具调用轮次 [assistant(tool_calls), tool(result) x N]）
+- **`messages`** -- 组内消息列表
+- **`token_count`** -- 组内所有消息的 Token 总数，通过 `compute_token_count()` 计算
+
+**设计约束：** 裁剪时若需移除某个 `assistant(tool_calls)` 消息，必须同时移除其关联的所有 `tool` 结果消息，否则 LLM API 因消息配对不完整而报错。
 
 **工具调用轮次的消息结构**：
 
 一个完整的工具调用轮次（`tool_call_round`）包含以下消息序列：
 
-```
+```text
 ┌─────────────────────────────────────────────┐
 │ ToolCallRound（原子单位，裁剪时不可拆散）     │
 ├─────────────────────────────────────────────┤
@@ -634,199 +209,35 @@ class MessageGroup:
 
 #### 3.2.1 PromptAssemblyResult（组装结果值对象）
 
-```python
-# backend/src/domain/value_objects/prompt_assembly_result.py
+**类设计：** `PromptAssemblyResult` 是 `PromptAssembleService.assemble()` 的返回值（值对象），包含：
 
-from dataclasses import dataclass, field
-
-
-@dataclass
-class PromptAssemblyResult:
-    """Prompt 组装结果值对象
-    
-    PromptAssembleService.assemble() 的返回值。
-    system_message 作为 LLM API 的 system role content，
-    对话历史由 PromptContextInterface 独立管理。
-    """
-    
-    system_message: str
-    """11 层拼接后的系统消息内容，直接用于 {"role": "system", "content": ...}"""
-    
-    static_prefix_tokens: int = 0
-    """Layer 1-3 的 token 数（用于 Prompt Cache 命中标记）"""
-    
-    total_token_estimate: int = 0
-    """系统消息的总 token 预估（不含对话历史）"""
-    
-    layers: dict = field(default_factory=dict)
-    """各层元信息，用于调试和可观测性"""
-```
+- **`system_message`** -- 11 层拼接后的系统消息文本，直接用于 `{"role": "system", "content": ...}`
+- **`static_prefix_tokens`** -- Layer 1-3 的 Token 数（用于 Prompt Cache 命中标记）
+- **`total_token_estimate`** -- 系统消息的总 Token 预估（不含对话历史）
+- **`layers`** -- 各层元信息字典，用于调试和可观测性（如 tools_count、skills_count、memory_enabled 等）
 
 #### 3.2.2 PromptAssembleService（组装服务）
 
-```python
-# backend/src/domain/services/prompt_assemble_service.py
+**服务设计：** `PromptAssembleService` 是 Prompt 组装的领域服务，负责将 11 层 Prompt 组件组装为 `system_message` 字符串。纯领域逻辑，不涉及存储或外部依赖。
 
-from typing import Optional
-from src.domain.value_objects.prompt_template import PromptTemplate
-from src.domain.value_objects.prompt_assembly_result import PromptAssemblyResult
-from src.domain.entities.tool import ToolDef  # 实际: src/domain/entities/tool/definition.py
-from src.skills.skill_def import SkillDef  # SkillDef 位于 skills 有界上下文
-from src.domain.entities.output_schema import OutputSchema
-from src.domain.services.token_utils import count_tokens
+**核心方法 `assemble()`：** 接收 `PromptTemplate`（从 Agent 7 文件构造）、ToolDef 列表、SkillDef 列表、workspace 路径、environment 字典等参数，按 11 层结构顺序拼接：
 
+1. **静态前缀（Layer 1-3）：** 从 template 提取 BOOTSTRAP -> IDENTITY -> AGENTS，调用 `count_tokens()` 记录前缀 Token 数
+2. **Cache Boundary 标记**
+3. **Layer 4 Universal Behavior：** 委托 `_build_universal_behavior()` 按条件注入 8 大行为准则
+4. **Layer 5 Available Tools：** 遍历 ToolDef 列表，调用 `to_prompt_section()` 生成简短名称列表
+5. **Layer 6 Workspace：** 注入工作目录路径
+6. **Layer 7 Memory System：** 条件注入（仅 memory_enabled 为 True 时）
+7. **Layer 8 Skill Instructions：** 委托 `_build_skill_instructions()` 生成 `<active_skills>` 标签包裹的技能指令
+8. **Layer 9 Environment：** 注入平台、日期、时区等环境上下文
+9. **Static Suffix 标记**
+10. **静态后缀（Layer 10-11）：** 从 template 提取 SOUL -> USER -> MEMORY
+11. **可选附加层：** output_schema（输出格式约束）、task（当前任务描述）
 
-class PromptAssembleService:
-    """Prompt 组装领域服务
-    
-    负责将 11 层 Prompt 组件组装为 system_message 字符串。
-    纯领域逻辑，不涉及存储或外部依赖。
-    
-    职责边界：
-    - 负责：构建 system_message（11 层拼接）
-    - 不负责：对话历史管理（由 PromptContextInterface 处理）
-    - 不负责：最终 messages 数组构建（由 agent-loop 通过 PromptContextInterface 完成）
-    """
-    
-    def assemble(
-        self,
-        template: PromptTemplate,
-        tools: Optional[list[ToolDef]] = None,
-        skills: Optional[list[SkillDef]] = None,
-        output_schema: Optional[OutputSchema] = None,
-        task: Optional[str] = None,
-        memory_enabled: bool = False,
-        workspace: str = "",
-        environment: Optional[dict] = None,
-    ) -> PromptAssemblyResult:
-        """组装 system_message（11 层结构）
-        
-        按 Agent 7 文件定义的层级顺序组装，输出作为 LLM API 中
-        {"role": "system", "content": system_message} 的内容。
-        
-        Args:
-            template: Prompt 模板（从 Agent 7 文件构造）
-            tools: 工具定义列表（由 Tools Hub 提供，用于 Layer 5）
-            skills: 技能定义列表（由 Skills 模块提供，用于 Layer 8）
-            output_schema: 输出 Schema（可选）
-            task: 当前任务描述（可选）
-            memory_enabled: 是否启用记忆系统（控制 Layer 7 注入）
-            workspace: 工作目录路径（Layer 6）
-            environment: 环境上下文，如 {"platform": "...", "date": "...", "timezone": "..."}（Layer 9）
-            
-        Returns:
-            PromptAssemblyResult，包含 system_message 和元信息
-        """
-        parts = []
-        layer_info = {}
-        tools = tools or []
-        skills = skills or []
-        
-        # ==================== 静态前缀（Layer 1-3）====================
-        # 顺序：BOOTSTRAP → IDENTITY → AGENTS
-        # 与 Agent.build_full_system_prompt() 对齐
-        
-        static_prefix = template.get_static_prefix()
-        if static_prefix:
-            parts.append(static_prefix)
-            layer_info["static_prefix"] = True
-        
-        static_prefix_tokens = count_tokens(static_prefix)  # from src.domain.services.token_utils
-        
-        # ==================== CACHE BOUNDARY ====================
-        parts.append("── CACHE BOUNDARY ─────────────────────────────────────")
-        
-        # ==================== 动态中间层（Layer 4-9）====================
-        
-        # Layer 4: Universal Behavior（8 大行为准则，条件注入）
-        universal_behavior = self._build_universal_behavior(
-            tools=tools,
-            skills=skills,
-            memory_enabled=memory_enabled,
-            tools_md=template.tools_md,
-        )
-        if universal_behavior:
-            parts.append("# Universal Behavior\n\n" + universal_behavior)
-            layer_info["universal_behavior"] = True
-        
-        # Layer 5: 工具名称列表（详细信息通过 bind_tools() 传递）
-        # ~~原设计: <tools> XML 标签包裹~~ 实际实现为简短名称列表
-        if tools:
-            tools_section = "# Available Tools\n\n" + "\n".join(
-                t.to_prompt_section() for t in tools
-            )
-            parts.append(tools_section)
-            layer_info["tools_count"] = len(tools)
-        
-        # Layer 6: 工作目录
-        if workspace:
-            parts.append(f"# Workspace\n\nCurrent working directory: {workspace}")
-            layer_info["workspace"] = workspace
-        
-        # Layer 7: 记忆系统（条件注入：memory_enabled 为 True 时）
-        if memory_enabled and template.memory_md:
-            parts.append("# Memory System\n\n" + template.memory_md)
-            layer_info["memory_enabled"] = True
-        
-        # Layer 8: Skill Instructions
-        if skills:
-            skills_section = self._build_skill_instructions(skills)
-            parts.append(skills_section)
-            layer_info["skills_count"] = len(skills)
-        
-        # Layer 9: 环境上下文
-        if environment:
-            env_parts = []
-            if "platform" in environment:
-                env_parts.append(f"Platform: {environment['platform']}")
-            if "date" in environment:
-                env_parts.append(f"Date: {environment['date']}")
-            if "timezone" in environment:
-                env_parts.append(f"Timezone: {environment['timezone']}")
-            if env_parts:
-                parts.append("# Environment\n\n" + "\n".join(env_parts))
-                layer_info["environment"] = True
-        
-        # ==================== STATIC SUFFIX ====================
-        parts.append("── STATIC SUFFIX ──────────────────────────────────────")
-        
-        # ==================== 静态后缀（Layer 10-11）====================
-        # 顺序：SOUL → USER → MEMORY
-        
-        static_suffix = template.get_static_suffix()
-        if static_suffix:
-            parts.append(static_suffix)
-            layer_info["static_suffix"] = True
-        
-        # ==================== 可选附加层 ====================
-        
-        # 输出格式层
-        if output_schema:
-            schema_section = (
-                "# Output Format\n\n"
-                "Respond with a valid JSON object matching this schema:\n\n"
-                + output_schema.to_json_string()
-            )
-            parts.append(schema_section)
-            layer_info["has_schema"] = True
-        
-        # 任务说明层
-        if task:
-            parts.append("# Current Task\n" + task)
-            layer_info["task"] = True
-        
-        # ==================== 组装结果 ====================
-        
-        system_message = "\n\n".join(parts)
-        total_tokens = count_tokens(system_message)  # from src.domain.services.token_utils
-        
-        return PromptAssemblyResult(
-            system_message=system_message,
-            static_prefix_tokens=static_prefix_tokens,
-            total_token_estimate=total_tokens,
-            layers=layer_info,
-        )
-```
+**关键设计原则：**
+- `tools_md` 的授权约束仅注入到 Layer 4 tool_usage 准则末尾，Layer 5 完全由运行时 ToolDef 列表动态生成
+- system_message 不包含对话历史；历史由 `PromptContextInterface` 独立管理
+- 直接字符串拼接，不使用模板占位符替换机制
 
 ### 3.3 上下文组装接口 — 消息数组模式
 
@@ -834,204 +245,44 @@ class PromptAssembleService:
 > system_message 由 PromptAssembleService 构建，对话历史由本接口管理，
 > 最终合并为 `[{"role": "system", ...}, {"role": "user", ...}, ...]` 的消息数组。
 
-```python
-# backend/src/domain/interfaces/prompt_context_interface.py
+**接口设计：** `PromptContextInterface` 是抽象基类（ABC），定义对话历史管理的 SPI 契约。负责将 system_message 和对话历史合并为 LLM API 的 messages 数组。由 agent-loop 模块实现。
 
-from abc import ABC, abstractmethod
-from src.domain.entities.conversation import ConversationMessage, MessageGroup
+**三个抽象方法：**
 
+1. **`build_messages(system_message, history, max_tokens)`** -- 构建最终 LLM API messages 数组
+   - 将 system_message 包装为 `{"role": "system", "content": ...}`
+   - 计算可用 Token 预算（= max_tokens - system_message_tokens）
+   - 调用 `truncate_history()` 裁剪历史
+   - 将保留的 ConversationMessage 列表转换为 API 兼容的消息字典格式
 
-class PromptContextInterface(ABC):
-    """Prompt 上下文组装接口 — 消息数组模式
-    
-    本接口定义了运行域对话历史管理的契约。由 agent-loop 模块实现，负责：
-    - 将 system_message 和对话历史合并为 LLM API 的 messages 数组
-    - 对话历史的分组和裁剪（以 MessageGroup 为原子单位）
-    - 确保工具调用轮次的消息完整性（不拆散 ToolCallRound）
-    """
-    
-    @abstractmethod
-    async def build_messages(
-        self,
-        system_message: str,
-        history: list[ConversationMessage],
-        max_tokens: int
-    ) -> list[dict]:
-        """构建最终 LLM API messages 数组
-        
-        这是 agent-loop 调用 LLM 前的最后一步，将系统消息和对话历史
-        合并为符合 LLM API 协议的 messages 数组。
-        
-        处理流程：
-        1. 将 system_message 包装为 {"role": "system", "content": ...}
-        2. 计算 system_message 的 token 数，得到对话历史的可用预算
-        3. 调用 truncate_history() 裁剪历史到预算内
-        4. 将裁剪后的 ConversationMessage 列表通过 to_api_message() 转为 dict
-        5. 返回 [system_msg, ...history_msgs] 的完整数组
-        
-        Args:
-            system_message: PromptAssembleService 输出的 11 层系统消息
-            history: 对话历史消息列表
-            max_tokens: 整个 messages 数组的最大 Token 预算
-            
-        Returns:
-            LLM API 兼容的 messages 数组，格式：
-            [
-                {"role": "system", "content": "..."},
-                {"role": "user", "content": "..."},
-                {"role": "assistant", "content": "...", "tool_calls": [...]},
-                {"role": "tool", "tool_call_id": "...", "content": "..."},
-                ...
-            ]
-        """
-        pass
-    
-    @abstractmethod
-    async def truncate_history(
-        self,
-        history: list[ConversationMessage],
-        available_tokens: int
-    ) -> list[ConversationMessage]:
-        """裁剪对话历史到 Token 预算内
-        
-        以 MessageGroup 为原子单位进行裁剪，确保不拆散工具调用轮次。
-        
-        裁剪策略（保护优先级从高到低）：
-        1. system_message — 永不裁剪（不在本方法范围内，已从预算中扣除）
-        2. 最近一轮对话 — 保留当前交互上下文
-        3. 最近的工具调用轮次 — 保留近期工具结果
-        4. 较早的对话/工具轮次 — 可裁剪
-        
-        裁剪算法：
-        1. 调用 group_messages() 将 history 分组
-        2. 从末尾向前扫描 MessageGroup，累计 token
-        3. 当累计 token 接近 available_tokens 时停止
-        4. 返回保留的消息列表（保持原始顺序）
-        
-        Args:
-            history: 完整的对话历史消息列表
-            available_tokens: 对话历史的可用 Token 预算
-                （= max_tokens - system_message_tokens）
-            
-        Returns:
-            裁剪后的消息列表
-        """
-        pass
-    
-    @abstractmethod
-    def group_messages(
-        self,
-        messages: list[ConversationMessage]
-    ) -> list[MessageGroup]:
-        """将消息列表分组为逻辑单元
-        
-        分组规则：
-        - dialogue 组：连续的 [user, assistant]（assistant 无 tool_calls）
-        - tool_call_round 组：[assistant(有 tool_calls), tool(result) × N]
-        - 单独的 user/assistant 消息形成独立的 dialogue 组
-        
-        分组示例：
-        输入消息序列：[user, assistant, user, assistant(tc), tool, tool, assistant]
-        分组结果：
-          - dialogue: [user, assistant]
-          - tool_call_round: [assistant(tc), tool, tool]
-          - dialogue: [assistant]  （工具调用后的继续回复，归入下一组或独立）
-        
-        Args:
-            messages: 对话历史消息列表
-            
-        Returns:
-            MessageGroup 列表，每个 group 是裁剪时的原子单位
-        """
-        pass
-```
+2. **`truncate_history(history, available_tokens)`** -- 裁剪对话历史
+   - 以 MessageGroup 为原子单位，确保不拆散工具调用轮次
+   - 裁剪策略：保护最近一轮对话和最近的工具调用轮次，从较早的消息开始裁剪
+   - 算法：先分组，从末尾向前累计 Token，接近预算时停止
+
+3. **`group_messages(messages)`** -- 将消息列表分组为 MessageGroup 列表
+   - dialogue 组：连续的 [user, assistant]（assistant 无 tool_calls）
+   - tool_call_round 组：[assistant(有 tool_calls), tool(result) x N]
+   - 单独消息形成独立组
 
 **最终 LLM API 调用格式示例**：
 
-```python
-# 初始请求（第一轮）
-messages = [
-    {"role": "system", "content": "<11 层 system_message>"},
-    {"role": "user", "content": "请帮我分析这个函数的安全性"},
-]
-
-# 多轮工具调用（后续轮次）
-messages = [
-    {"role": "system", "content": "<11 层 system_message>"},
-    {"role": "user", "content": "请帮我分析这个函数的安全性"},
-    {"role": "assistant", "content": "", "tool_calls": [
-        {"id": "tc_001", "type": "function", "function": {"name": "read_file", "arguments": "{\"path\": \"main.py\"}"}},
-    ]},
-    {"role": "tool", "tool_call_id": "tc_001", "content": "def get_user(id):\n    query = f'SELECT * FROM users WHERE id={id}'..."},
-    {"role": "assistant", "content": "这个函数存在 SQL 注入漏洞..."},
-    {"role": "user", "content": "如何修复？"},
-    {"role": "assistant", "content": "建议使用参数化查询..."},
-]
-```
 
 ### 3.4 集成示例
 
-```python
-# agent-loop 模块调用示例（伪代码）
+**集成流程设计：** agent-loop 模块调用 Prompt Builder 的完整流程分为三步：
 
-from src.domain.entities.agent import Agent
-from src.domain.entities.prompt_template import PromptTemplate
-from src.domain.entities.tool_def import ToolDef
-from src.domain.entities.skill_def import SkillDef
-from src.domain.entities.output_schema import OutputSchema
-from src.domain.entities.conversation import ConversationMessage
-from src.domain.services.prompt_assemble_service import PromptAssembleService
-from src.domain.interfaces.prompt_context_interface import PromptContextInterface
+1. **Agent -> PromptTemplate：** 通过 `PromptTemplate.from_agent(agent)` 从 Agent 实体桥接到 Prompt 构建域，复制 7 文件内容
+2. **PromptTemplate -> system_message：** 通过 `PromptAssembleService.assemble(template, tools, skills, workspace, environment, ...)` 组装 11 层系统消息
+3. **system_message + history -> messages：** 通过 `PromptContextInterface.build_messages(system_message, history, max_tokens)` 合并为 LLM API 兼容的消息数组
 
-
-async def build_llm_request(
-    agent: Agent,
-    tools: list[ToolDef],
-    skills: list[SkillDef],
-    workspace: str,
-    history: list[ConversationMessage],
-    context_manager: PromptContextInterface,
-    max_tokens: int = 8000,
-    output_schema: Optional[OutputSchema] = None,
-    task: Optional[str] = None,
-) -> list[dict]:
-    """构建完整 LLM API 请求的 messages 数组（供 agent-loop 使用）
-    
-    完整流程：Agent → PromptTemplate → assemble → system_message → build_messages → LLM API
-    """
-    
-    # 1. 从 Agent 实体创建 PromptTemplate（定义域 → 构建域的桥接）
-    template = PromptTemplate.from_agent(agent)
-    
-    # 2. 组装 system_message（11 层拼接）
-    assemble_service = PromptAssembleService()
-    result = assemble_service.assemble(
-        template=template,
-        tools=tools,
-        skills=skills,
-        output_schema=output_schema,
-        task=task,
-        workspace=workspace,
-        environment={"platform": "darwin", "date": "2026-04-26", "timezone": "Asia/Shanghai"},
-        memory_enabled=bool(template.memory_md),
-    )
-    
-    # 3. 构建最终 messages 数组（system_message + 裁剪后的对话历史）
-    messages = await context_manager.build_messages(
-        system_message=result.system_message,
-        history=history,
-        max_tokens=max_tokens,
-    )
-    
-    return messages
-    # → 传给 LLM: llm.astream(messages)
-```
+最终 messages 数组包含一个 system 角色消息（11 层内容）后跟裁剪后的对话历史，可直接传递给 LLM API（如 `llm.astream(messages)`）。
 
 ### 3.5 Prompt 分层 Schema 示例（11 层结构）
 
 以下是基于完整 Prompt Schema 的分层示例，展示各层的结构和注入时机：
 
-```
+```text
 ┌─────────────────────────────────────────────────────────┐
 │ [Layer 1]  IDENTITY           静态前缀 - Agent 身份声明     │
 │ [Layer 2]  AGENTS.md          静态前缀 - 用户自定义指令     │
@@ -1064,7 +315,7 @@ async def build_llm_request(
 > PromptTemplate 通过 `from_agent()` 复制这些文件内容，
 > PromptAssembleService 将其映射到 11 层 Schema 进行组装。
 
-```
+```text
 Agent 7 文件             →  PromptTemplate 字段     →  11 层 Schema          →  注入类型
 ═════════════════════════════════════════════════════════════════════════════════════
 identity_md  (IDENTITY)  →  identity_md             →  Layer 1 IDENTITY      →  静态前缀
@@ -1122,7 +373,7 @@ Layer 4 Universal Behavior（8 大行为准则）采用条件注入机制，根�
 
 8 大行为准则采用类似项目规则的分层结构设计，分为两种类型：
 
-```
+```text
 ┌─────────────────────────────────────────────────┐
 │           Universal Behavior                     │
 ├─────────────────────────────────────────────────┤
@@ -1157,7 +408,7 @@ Layer 4 Universal Behavior（8 大行为准则）采用条件注入机制，根�
 
 ### 条件注入决策流程
 
-```
+```text
 开始组装 Layer 4
     │
     ├─→ [始终注入] tone_and_style
@@ -1210,7 +461,7 @@ Layer 4 Universal Behavior（8 大行为准则）采用条件注入机制，根�
 - 专业简洁：保持专业、友好语气，避免过度技术化
 
 **提示词示例**：
-```
+```text
 ## Communication Style
 
 - Respond in the same language as the user's input
@@ -1233,7 +484,7 @@ Layer 4 Universal Behavior（8 大行为准则）采用条件注入机制，根�
 - 避免绝对化：使用"建议"而非"必须"
 
 **提示词示例**：
-```
+```text
 ## Professional Objectivity
 
 - Present balanced views with pros and cons of approaches
@@ -1256,7 +507,7 @@ Layer 4 Universal Behavior（8 大行为准则）采用条件注入机制，根�
 - 边界控制：不过度推测，重大决策前确认
 
 **提示词示例**：
-```
+```text
 ## Proactiveness
 
 - Identify implicit but relevant needs and offer suggestions
@@ -1285,7 +536,7 @@ Layer 4 Universal Behavior（8 大行为准则）采用条件注入机制，根�
 - 依赖管理：建立正确的任务依赖关系
 
 **提示词示例**：
-```
+```text
 ## Task Management
 
 You have access to task management tools. Follow these rules:
@@ -1315,7 +566,7 @@ You have access to task management tools. Follow these rules:
 - 简单直执行：简单任务直接执行，不委派
 
 **提示词示例**：
-```
+```text
 ## Delegation Strategy
 
 You have access to session delegation tools. Follow these rules:
@@ -1345,7 +596,7 @@ You have access to session delegation tools. Follow these rules:
 - 专用优先：优先使用专用工具而非通用工具
 
 **提示词示例**：
-```
+```text
 ## Tool Usage Guidelines
 
 You have access to external tools. Follow these rules:
@@ -1375,7 +626,7 @@ You have access to external tools. Follow these rules:
 - 隐私保护：不记录敏感信息
 
 **提示词示例**：
-```
+```text
 ## Memory System Usage
 
 You have access to a memory system. Follow these rules:
@@ -1405,7 +656,7 @@ You have access to a memory system. Follow these rules:
 - 禁止修改：不自行修改 Skill 步骤或参数
 
 **提示词示例**：
-```
+```text
 ## Skill Usage Guidelines
 
 You have access to specialized skills. Follow these rules:
@@ -1421,34 +672,20 @@ You have access to specialized skills. Follow these rules:
 
 ### 实现要点
 
-```python
-# 伪代码：条件注入逻辑
-def build_universal_behavior(context: AssemblyContext) -> str:
-    parts = []
-    
-    # Always-On Rules（始终注入）
-    parts.append(RULES[tone_and_style])
-    parts.append(RULES[professional_objectivity])
-    parts.append(RULES[proactiveness])
-    
-    # Conditional Rules（条件注入）
-    if context.has_tools_with_prefix("task_"):
-        parts.append(RULES[task_management])
-    
-    if context.has_tools_with_prefix("sessions_"):
-        parts.append(RULES[delegation_strategy])
-    
-    if context.has_tools():
-        parts.append(RULES[tool_usage])
-    
-    if context.memory_enabled:
-        parts.append(RULES[memory_usage])
-    
-    if context.has_skills():
-        parts.append(RULES[skill_usage])
-    
-    return join(parts)
-```
+**条件注入算法设计：** `build_universal_behavior()` 的实现逻辑为：
+
+1. 始终注入 3 条 always-on 准则（tone_and_style、professional_objectivity、proactiveness）
+2. 遍历条件检查：
+   - 存在 `task_*` 前缀工具 -> 注入 task_management
+   - 存在 `sessions_*` 前缀工具 -> 注入 delegation_strategy
+   - 存在任何可用工具 -> 注入 tool_usage（如 tools_md 非空则附加授权约束）
+   - memory_enabled 为 True -> 注入 memory_usage
+   - skills 列表非空 -> 注入 skill_usage
+3. 各准则以 `
+
+` 拼接为最终文本
+
+8 大行为准则的文本内容预定义为类常量，避免运行时生成。
 
 **实现要点**：
 1. Always-On Rules 无条件加入
@@ -1500,10 +737,7 @@ You have access to task management tools. Follow these rules:
 ```
 
 **注入判断逻辑**：
-```python
-def should_inject_task_management(tools: list[ToolDef]) -> bool:
-    return any(t.name.startswith("task_") for t in tools)
-```
+**注入条件：** 检查工具列表中是否存在名称以 `task_` 为前缀的工具。
 
 ---
 
@@ -1532,10 +766,7 @@ You have access to session delegation tools. Follow these rules:
 ```
 
 **注入判断逻辑**：
-```python
-def should_inject_delegation_strategy(tools: list[ToolDef]) -> bool:
-    return any(t.name.startswith("sessions_") for t in tools)
-```
+**注入条件：** 检查工具列表中是否存在名称以 `sessions_` 为前缀的工具。
 
 ---
 
@@ -1564,10 +795,7 @@ You have access to external tools. Follow these rules:
 ```
 
 **注入判断逻辑**：
-```python
-def should_inject_tool_usage(tools: list[ToolDef]) -> bool:
-    return len(tools) > 0
-```
+**注入条件：** 检查工具列表是否非空（存在至少一个可用工具）。
 
 ---
 
@@ -1596,10 +824,7 @@ You have access to a memory system. Follow these rules:
 ```
 
 **注入判断逻辑**：
-```python
-def should_inject_memory_usage(memory_enabled: bool) -> bool:
-    return memory_enabled
-```
+**注入条件：** 检查 memory_enabled 布尔标志是否为 True。
 
 ---
 
@@ -1628,10 +853,7 @@ You have access to specialized skills. Follow these rules:
 ```
 
 **注入判断逻辑**：
-```python
-def should_inject_skill_usage(skills: list[SkillDef]) -> bool:
-    return len(skills) > 0
-```
+**注入条件：** 检查已加载的 Skill 列表是否非空。
 
 ---
 
@@ -1649,169 +871,15 @@ def should_inject_skill_usage(skills: list[SkillDef]) -> bool:
 
 ### 条件注入实现示例
 
-```python
-# backend/src/domain/services/prompt_assemble_service.py
+**`_build_universal_behavior()` 方法设计：** 接收 tools 列表、skills 列表、memory_enabled 标志和 tools_md 授权约束，按以下顺序组装 8 大行为准则：
 
-from typing import Optional
-from src.domain.value_objects.prompt_template import PromptTemplate
-from src.domain.entities.tool import ToolDef
-from src.skills.skill_def import SkillDef
-from src.domain.entities.output_schema import OutputSchema
-from src.domain.services.token_utils import count_tokens
+1. 始终追加 `_TONE_AND_STYLE`、`_PROFESSIONAL_OBJECTIVITY`、`_PROACTIVENESS` 常量
+2. 条件注入 5 条 conditional 准则（见上述算法设计）
+3. `tools_md` 非空时，在 tool_usage 准则末尾追加 "Tool Authorization Constraints" 子节
 
+**`_build_skill_instructions()` 方法设计：** 将已加载的 Skill 列表包装在 `<active_skills>` XML 标签中，每个 Skill 以 `## {name}` 标题后跟 `to_prompt_section()` 内容。
 
-class PromptAssembleService:
-    """Prompt 组装领域服务 — 条件注入实现细节
-    
-    完整的 assemble() 方法签名和实现见 3.2.2 节。
-    本节聚焦 _build_universal_behavior() 的条件注入逻辑和 8 大行为准则常量。
-    """
-    
-    def _build_universal_behavior(
-        self,
-        tools: list[ToolDef],
-        skills: list[SkillDef],
-        memory_enabled: bool,
-        tools_md: str = "",
-    ) -> str:
-        """构建 Universal Behavior 层（8 大行为准则，条件注入）
-        
-        Args:
-            tools: 可用工具列表
-            skills: 已加载 Skill 列表
-            memory_enabled: 是否启用记忆系统
-            tools_md: Agent TOOLS.md 中的工具授权约束
-                （补充到 tool_usage 准则末尾，见 tools_md 特殊处理说明）
-            
-        Returns:
-            条件注入后的行为准则文本
-        """
-        parts = []
-        
-        # 总是注入的准则
-        parts.append(self._TONE_AND_STYLE)
-        parts.append(self._PROFESSIONAL_OBJECTIVITY)
-        parts.append(self._PROACTIVENESS)
-        
-        # 条件注入：任务管理（有 task_* 工具时）
-        if any(t.name.startswith("task_") for t in tools):
-            parts.append(self._TASK_MANAGEMENT)
-        
-        # 条件注入：委派策略（有 sessions_* 工具时）
-        if any(t.name.startswith("sessions_") for t in tools):
-            parts.append(self._DELEGATION_STRATEGY)
-        
-        # 条件注入：工具使用规范（有可用工具时）
-        # 若 tools_md 非空，将 TOOLS.md 中的静态授权约束附加到 tool_usage 末尾
-        if tools:
-            tool_usage = self._TOOL_USAGE
-            if tools_md:
-                tool_usage += "\n\n### Tool Authorization Constraints\n\n" + tools_md
-            parts.append(tool_usage)
-        
-        # 条件注入：记忆使用规范（启用 Memory 时）
-        if memory_enabled:
-            parts.append(self._MEMORY_USAGE)
-        
-        # 条件注入：Skill 使用规范（有已加载 Skill 时）
-        if skills:
-            parts.append(self._SKILL_USAGE)
-        
-        return "\n\n".join(parts)
-    
-    def _build_skill_instructions(self, skills: list[SkillDef]) -> str:
-        """构建 Layer 8 Skill Instructions
-        
-        Args:
-            skills: 已加载的 Skill 列表
-            
-        Returns:
-            `<active_skills>` 标签包裹的 Skill 指令文本
-        """
-        parts = ["<active_skills>"]
-        for skill in skills:
-            parts.append(f"## {skill.name}")
-            parts.append(skill.to_prompt_section())
-        parts.append("</active_skills>")
-        
-        return "\n\n".join(parts)
-    
-    # ==================== 8 大行为准则模板 ====================
-    
-    _TONE_AND_STYLE = """## Communication Style
-
-- Respond in the same language as the user's input
-- Maintain a professional, concise, and friendly tone
-- Lead with conclusions, then provide detailed explanations
-- Avoid overly technical jargon unless the user demonstrates expertise
-- Use structured formatting (lists, tables, code blocks) for readability"""
-    
-    _PROFESSIONAL_OBJECTIVITY = """## Professional Objectivity
-
-- Present balanced views with pros and cons of approaches
-- Explicitly acknowledge uncertainty rather than guessing
-- Distinguish between factual statements and recommendations
-- Present multiple mainstream perspectives on contentious topics
-- Avoid absolutist language ("must", "always"); use "recommend", "typically\""""
-    
-    _PROACTIVENESS = """## Proactiveness
-
-- Identify implicit but relevant needs and offer suggestions
-- Proactively warn about potential issues (security risks, performance concerns)
-- Suggest next steps without imposing them
-- After task completion, ask if further assistance is needed
-- Boundary: Don't over-speculate; confirm before major decisions"""
-    
-    _TASK_MANAGEMENT = """## Task Management
-
-You have access to task management tools. Follow these rules:
-
-- Create tasks before executing multi-step workflows
-- Create separate task records for each independent subtask
-- Update task status promptly upon completion
-- Establish correct dependencies between related tasks
-- When users request progress updates, use task list tools to provide status reports"""
-    
-    _DELEGATION_STRATEGY = """## Delegation Strategy
-
-You have access to session delegation tools. Follow these rules:
-
-- Delegate independent, parallelizable subtasks to sub-sessions
-- Provide clear task descriptions and expected outputs when delegating
-- Monitor delegated task progress and intervene when necessary
-- Never delegate within sub-sessions (avoid infinite recursion)
-- Don't delegate simple tasks (single-step, no dependencies); execute directly"""
-    
-    _TOOL_USAGE = """## Tool Usage Guidelines
-
-You have access to external tools. Follow these rules:
-
-- Verify parameters are correct and complete before calling tools
-- When tool calls fail, analyze errors and attempt fixes or retries
-- Don't call the same tool more than 3 times consecutively without changing parameters
-- Confirm with users before dangerous operations (delete, overwrite, send)
-- Prefer specialized tools over generic ones (e.g., `read_file` over `execute_command`)"""
-    
-    _MEMORY_USAGE = """## Memory System Usage
-
-You have access to a memory system. Follow these rules:
-
-- Read relevant memories at conversation start to understand user preferences and context
-- Write important information (preferences, key decisions, action items) to memory promptly
-- Don't store temporary or one-time information
-- When memory conflicts with current context, prioritize current information and update memory
-- Respect user privacy; never record sensitive information (passwords, keys, personal data)"""
-    
-    _SKILL_USAGE = """## Skill Usage Guidelines
-
-You have access to specialized skills. Follow these rules:
-
-- When user requests match skill triggers, use the corresponding skill instead of handling manually
-- Follow skill-defined steps strictly; don't skip critical steps
-- Handle errors during skill execution according to the skill's error handling flow
-- If multiple skills match, choose the most specific one
-- Don't modify skill-defined steps or parameters on your own"""
-```
+**8 大行为准则常量：** 每条准则以 `_RULENAME` 格式定义为类级字符串常量，内容为 Markdown 格式的行为规范文本（在各准则设计说明中已展示）。
 
 **实现注记**: 以下占位符模板示例为设计阶段的概念模型。
 实际实现中，PromptAssembleService 采用直接字符串拼接方式构建 system_message，
@@ -1908,7 +976,7 @@ Timezone: {{timezone}}
 
 #### 3.6.1 system_message 内容（11 层拼接结果）
 
-```
+```text
 # IDENTITY
 
 You are CodeReview Assistant, a professional AI code review agent.
@@ -2020,58 +1088,14 @@ Timezone: Asia/Shanghai
 
 #### 3.6.2 最终 messages 数组（LLM API 请求格式）
 
-```python
-# PromptContextInterface.build_messages() 的输出示例
+**LLM API 调用格式说明：** `PromptContextInterface.build_messages()` 的输出是一个消息数组，格式为：
 
-messages = [
-    # system_message（上述 11 层拼接结果）
-    {
-        "role": "system",
-        "content": "<上述 system_message 全文>"
-    },
-    
-    # 第一轮对话
-    {
-        "role": "user",
-        "content": "请帮我 review 这个函数：\n\ndef get_user_data(user_id):\n    query = f\"SELECT * FROM users WHERE id = {user_id}\"\n    ..."
-    },
-    
-    # assistant 调用工具（ToolCallRound 开始）
-    {
-        "role": "assistant",
-        "content": "",
-        "tool_calls": [
-            {
-                "id": "tc_001",
-                "type": "function",
-                "function": {
-                    "name": "web_search",
-                    "arguments": "{\"query\": \"SQL injection prevention Python\"}"
-                }
-            }
-        ]
-    },
-    
-    # tool 返回结果（ToolCallRound 结束）
-    {
-        "role": "tool",
-        "tool_call_id": "tc_001",
-        "content": "[{\"title\": \"SQL Injection Prevention Cheat Sheet\", ...}]"
-    },
-    
-    # assistant 基于工具结果回复
-    {
-        "role": "assistant",
-        "content": "这个函数存在严重的 SQL 注入漏洞..."
-    },
-    
-    # 后续对话
-    {
-        "role": "user",
-        "content": "如何修复？"
-    },
-]
-```
+- 第一条为 `{"role": "system", "content": "<11 层 system_message 全文>"}`
+- 后续为对话历史消息，按时间顺序排列
+- assistant 消息的 tool_calls 字段为 `[{"id": "tc_001", "type": "function", "function": {"name": "...", "arguments": "..."}}]` 格式
+- tool 消息通过 `tool_call_id` 与对应的 assistant 消息配对
+
+工具调用轮次（`assistant(tool_calls)` + `tool(result) x N`）作为 MessageGroup 原子单位，裁剪时不可拆散。
 
 **说明：**
 - `system_message` 由 `PromptAssembleService.assemble()` 输出，作为 `{"role": "system"}` 的 content
@@ -2162,334 +1186,45 @@ messages = [
 
 #### 测试模块: PromptTemplate Entity
 
-```python
-def test_from_agent_copies_all_fields():
-    # Arrange
-    agent = Agent(
-        id="a1", name="TestAgent",
-        identity_md="# Identity\nI am a test agent",
-        agents_md="# Custom Instructions\nFollow PEP 8",
-        bootstrap_md="# Bootstrap\nYou are a helpful assistant",
-        soul_md="# Soul\nBe concise",
-        user_md="# User\nPrefers Chinese",
-        memory_md="# Memory\nStore user preferences",
-        tools_md="Only use read-only tools",
-    )
-    
-    # Act
-    template = PromptTemplate.from_agent(agent)
-    
-    # Assert
-    assert template.identity_md == agent.identity_md
-    assert template.agents_md == agent.agents_md
-    assert template.bootstrap_md == agent.bootstrap_md
-    assert template.soul_md == agent.soul_md
-    assert template.user_md == agent.user_md
-    assert template.memory_md == agent.memory_md
-    assert template.tools_md == agent.tools_md
+**PromptTemplate 测试策略：**
 
-
-def test_get_static_prefix_order():
-    # Arrange - 顺序应为 BOOTSTRAP → IDENTITY → AGENTS
-    template = PromptTemplate(
-        id="t1", name="Test",
-        identity_md="IDENTITY_CONTENT",
-        agents_md="AGENTS_CONTENT",
-        bootstrap_md="BOOTSTRAP_CONTENT",
-    )
-    
-    # Act
-    prefix = template.get_static_prefix()
-    
-    # Assert
-    assert "BOOTSTRAP_CONTENT" in prefix
-    assert "IDENTITY_CONTENT" in prefix
-    assert "AGENTS_CONTENT" in prefix
-    # 验证顺序：BOOTSTRAP 在 IDENTITY 之前
-    assert prefix.index("BOOTSTRAP_CONTENT") < prefix.index("IDENTITY_CONTENT")
-
-
-def test_get_static_suffix_order():
-    # Arrange - 顺序应为 SOUL → USER → MEMORY
-    template = PromptTemplate(
-        id="t2", name="Test",
-        soul_md="SOUL_CONTENT",
-        user_md="USER_CONTENT",
-        memory_md="MEMORY_CONTENT",
-    )
-    
-    # Act
-    suffix = template.get_static_suffix()
-    
-    # Assert
-    assert "SOUL_CONTENT" in suffix
-    assert "USER_CONTENT" in suffix
-    assert "MEMORY_CONTENT" in suffix
-
-
-def test_get_static_prefix_partial_fields():
-    # Arrange - 仅设置 identity_md
-    template = PromptTemplate(
-        id="t3", name="Test",
-        identity_md="# Identity\nTest agent",
-    )
-    
-    # Act
-    prefix = template.get_static_prefix()
-    
-    # Assert
-    assert "# Identity" in prefix
-    # 空字段不应产生多余标题
-    assert "AGENTS" not in prefix or prefix.count("AGENTS") == 0
-
-
-def test_estimate_static_tokens():
-    # Arrange
-    template = PromptTemplate(
-        id="t4", name="Test",
-        identity_md="A" * 100,
-        bootstrap_md="B" * 200,
-        soul_md="C" * 150,
-    )
-    
-    # Act
-    tokens = template.estimate_static_tokens()
-    
-    # Assert
-    assert tokens > 0
-```
+- **字段复制完整性：** 验证 `from_agent()` 工厂方法将 Agent 7 文件的全部字段正确复制到 PromptTemplate
+- **静态前缀排序：** 验证 BOOTSTRAP -> IDENTITY -> AGENTS 的顺序正确
+- **静态后缀排序：** 验证 SOUL -> USER -> MEMORY 的顺序正确
+- **部分字段边界条件：** 验证仅设置部分字段时，空字段不产生多余内容或分隔符
+- **Token 预估：** 验证非空内容的 Token 预估值大于 0
 
 #### 测试模块: ConversationMessage Entity
 
-```python
-def test_to_api_message_user_role():
-    # Arrange
-    msg = ConversationMessage(role="user", content="Hello")
-    
-    # Act
-    api_msg = msg.to_api_message()
-    
-    # Assert
-    assert api_msg == {"role": "user", "content": "Hello"}
+**ConversationMessage 测试策略：**
 
-
-def test_to_api_message_assistant_with_tool_calls():
-    # Arrange
-    msg = ConversationMessage(
-        role="assistant",
-        content="",
-        tool_calls=[
-            ToolCall(id="tc_001", name="read_file", arguments={"path": "main.py"})
-        ]
-    )
-    
-    # Act
-    api_msg = msg.to_api_message()
-    
-    # Assert
-    assert api_msg["role"] == "assistant"
-    assert len(api_msg["tool_calls"]) == 1
-    assert api_msg["tool_calls"][0]["id"] == "tc_001"
-    assert api_msg["tool_calls"][0]["type"] == "function"
-    assert api_msg["tool_calls"][0]["function"]["name"] == "read_file"
-
-
-def test_to_api_message_tool_role():
-    # Arrange
-    msg = ConversationMessage(
-        role="tool",
-        content="file content here",
-        tool_call_id="tc_001"
-    )
-    
-    # Act
-    api_msg = msg.to_api_message()
-    
-    # Assert
-    assert api_msg == {
-        "role": "tool",
-        "tool_call_id": "tc_001",
-        "content": "file content here"
-    }
-
-
-def test_estimate_tokens_with_tool_calls():
-    # Arrange
-    msg = ConversationMessage(
-        role="assistant",
-        content="Let me check",
-        tool_calls=[
-            ToolCall(id="tc_001", name="search", arguments={"query": "test"})
-        ]
-    )
-    
-    # Act
-    tokens = msg.estimate_tokens()
-    
-    # Assert
-    assert tokens > 0
-```
+- **角色映射：** 验证 user/assistant/tool 各角色的 `to_api_message()` 输出符合 LLM API 协议
+- **工具调用转换：** 验证 assistant 消息的 tool_calls 正确转换为 OpenAI 格式的 `{"type": "function", "function": {...}}` 结构
+- **tool_call_id 配对：** 验证 tool 角色消息正确携带 `tool_call_id` 字段
 
 #### 测试模块: MessageGroup Entity
 
-```python
-def test_message_group_dialogue():
-    # Arrange
-    group = MessageGroup(
-        type="dialogue",
-        messages=[
-            ConversationMessage(role="user", content="Hello"),
-            ConversationMessage(role="assistant", content="Hi there"),
-        ]
-    )
-    
-    # Act
-    token_count = group.compute_token_count()
-    
-    # Assert
-    assert token_count > 0
-    assert group.token_count == token_count
+**MessageGroup 测试策略：**
 
-
-def test_message_group_tool_call_round():
-    # Arrange - ToolCallRound 原子单位
-    group = MessageGroup(
-        type="tool_call_round",
-        messages=[
-            ConversationMessage(
-                role="assistant", content="",
-                tool_calls=[ToolCall(id="tc_001", name="read_file", arguments={"path": "a.py"})]
-            ),
-            ConversationMessage(role="tool", content="file content", tool_call_id="tc_001"),
-        ]
-    )
-    
-    # Act
-    token_count = group.compute_token_count()
-    
-    # Assert
-    assert token_count > 0
-    assert len(group.messages) == 2
-```
+- **dialogue 组：** 验证普通对话组（user + assistant）的 Token 计数和消息数量
+- **tool_call_round 组：** 验证工具调用轮次组的原子性（assistant(tool_calls) + tool(result) 不可拆分）
 
 #### 测试模块: PromptAssembleService
 
-```python
-def test_assemble_returns_prompt_assembly_result():
-    # Arrange
-    template = PromptTemplate(
-        id="t1", name="Test",
-        identity_md="I am a test agent.",
-        bootstrap_md="You are helpful.",
-        agents_md="Follow coding standards.",
-    )
-    tools = [ToolDef(name="search", description="Search web")]
-    skills = [SkillDef(name="review", description="Review code")]
-    
-    service = PromptAssembleService()
-    
-    # Act
-    result = service.assemble(
-        template=template,
-        tools=tools,
-        skills=skills,
-        workspace="/tmp/project",
-        environment={"platform": "darwin", "date": "2026-04-26"},
-        task="Help me debug this issue",
-    )
-    
-    # Assert - 返回类型为 PromptAssemblyResult
-    assert isinstance(result, PromptAssemblyResult)
-    assert isinstance(result.system_message, str)
-    assert result.total_token_estimate > 0
-    assert result.static_prefix_tokens > 0
-    
-    # Assert - system_message 内容包含正确的层
-    assert "I am a test agent." in result.system_message      # Layer 1 IDENTITY
-    assert "Follow coding standards." in result.system_message  # Layer 2 AGENTS
-    assert "You are helpful." in result.system_message          # Layer 3 Bootstrap
-    assert "CACHE BOUNDARY" in result.system_message
-    assert "<tools>" in result.system_message                   # Layer 5
-    assert "/tmp/project" in result.system_message              # Layer 6 Workspace
-    assert "darwin" in result.system_message                    # Layer 9 Environment
-    assert "STATIC SUFFIX" in result.system_message
-    
-    # Assert - 不包含旧版占位符
-    assert "Conversation History" not in result.system_message
-    assert "[History will be injected" not in result.system_message
-    
-    # Assert - layers 元信息
-    assert result.layers["tools_count"] == 1
-    assert result.layers["skills_count"] == 1
+**PromptAssembleService 测试策略：**
 
-
-def test_assemble_tools_md_supplements_tool_usage():
-    # Arrange
-    template = PromptTemplate(
-        id="t2", name="Test",
-        identity_md="Test agent",
-        tools_md="Only use read-only file operations.",
-    )
-    tools = [ToolDef(name="read_file", description="Read file")]
-    
-    service = PromptAssembleService()
-    
-    # Act
-    result = service.assemble(template=template, tools=tools)
-    
-    # Assert - tools_md 应注入到 Layer 4 tool_usage 中
-    assert "Tool Authorization Constraints" in result.system_message
-    assert "Only use read-only file operations." in result.system_message
-
-
-def test_assemble_memory_conditional():
-    # Arrange
-    template = PromptTemplate(
-        id="t3", name="Test",
-        identity_md="Test agent",
-        memory_md="Store user preferences in memory.",
-    )
-    
-    service = PromptAssembleService()
-    
-    # Act - memory_enabled=False
-    result_off = service.assemble(template=template, memory_enabled=False)
-    
-    # Act - memory_enabled=True
-    result_on = service.assemble(template=template, memory_enabled=True)
-    
-    # Assert
-    assert "Store user preferences" not in result_off.system_message
-    assert "Store user preferences" in result_on.system_message
-```
+- **完整组装流程：** 验证 `assemble()` 返回 `PromptAssemblyResult`，system_message 包含所有 11 层内容和缓存边界标记
+- **tools_md 注入：** 验证 tools_md 内容注入到 Layer 4 tool_usage 的 "Tool Authorization Constraints" 子节
+- **条件注入：** 验证 memory_enabled 参数正确控制 Layer 7 Memory Section 的注入（True 时包含，False 时不包含）
+- **元信息：** 验证 layers 字典包含 tools_count、skills_count 等调试信息
+- **不包含历史占位符：** 验证 system_message 不含对话历史相关内容
 
 #### 测试模块: ToolDef Entity
 
-```python
-def test_tool_def_to_prompt_section():
-    # Arrange
-    tool = ToolDef(
-        name="web_search",
-        description="Search the web for information",
-        parameters=[
-            ToolParameter(name="query", type="string", description="Search query", required=True),
-            ToolParameter(name="limit", type="number", description="Max results", required=False),
-        ],
-        returns="Search results as JSON"
-    )
+**ToolDef 测试策略：**
 
-    # Act
-    result = tool.to_prompt_section()
-
-    # Assert -- 实际实现返回简短名称标记（详细 schema 通过 to_llm_schema() + bind_tools() 传递）
-    assert result == "- web_search"
-
-    # to_llm_schema() 测试
-    schema = tool.to_llm_schema()
-    assert schema["type"] == "function"
-    assert schema["function"]["name"] == "web_search"
-    assert "query" in schema["function"]["parameters"]["properties"]
-```
+- **to_prompt_section()：** 验证输出为 `- {name}` 格式的简短名称标记
+- **to_llm_schema()：** 验证生成的 Schema 包含 `type: "function"`、function name、parameters properties 等完整字段
 
 ### 4.3 回归测试计划
 
@@ -2506,12 +1241,7 @@ def test_tool_def_to_prompt_section():
 - **用例 3**: 缓存边界正确性 — 确保 static_prefix_tokens 仅包含 Layer 1-3
 
 #### 自动化验证
-```bash
-uv run pytest tests/ -k "prompt_builder" -v
-uv run pytest tests/ -k "prompt_assemble" -v
-uv run pytest tests/ -k "conversation_message" -v
-uv run pytest tests/ -k "message_group" -v
-```
+**自动化验证命令：** 使用 pytest 的 `-k` 过滤功能按模块名称筛选运行相关测试用例。
 
 ## 5. 验收标准
 

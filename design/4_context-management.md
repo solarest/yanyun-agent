@@ -64,38 +64,7 @@ flowchart TD
 
 ### 2.2 节点注册与边定义
 
-核心代码（`workflow_builder.py`）：
-
-```python
-workflow = StateGraph(AgentState)
-
-workflow.add_node("llm_call", llm_call_node)
-workflow.add_node("tool_execute", tool_execute_node)
-workflow.add_node("loop_detect", loop_detect_node)
-workflow.add_node("context_compact", context_compact_node)
-
-# 入口改为 context_compact，每轮 LLM 调用前都经过上下文守门
-workflow.set_entry_point("context_compact")
-
-# context_compact → llm_call 固定边
-workflow.add_edge("context_compact", "llm_call")
-
-# 其他节点的条件路由最终都回到 context_compact
-workflow.add_conditional_edges("llm_call", route_after_llm, {
-    "loop_detect": "loop_detect",
-    "context_compact": "context_compact",
-    END: END,
-})
-workflow.add_conditional_edges("loop_detect", route_after_loop_detect, {
-    "tool_execute": "tool_execute",
-    "context_compact": "context_compact",
-    END: END,
-})
-workflow.add_conditional_edges("tool_execute", route_after_tool_execute, {
-    "context_compact": "context_compact",
-    END: END,
-})
-```
+StateGraph 注册四个节点：`llm_call`、`tool_execute`、`loop_detect`、`context_compact`。入口设为 `context_compact`，通过固定边连接到 `llm_call`。其他三个节点通过条件路由最终都回到 `context_compact`，形成"每次 LLM 调用前必经过守门节点"的拓扑结构。
 
 ### 2.3 流转路径
 
@@ -111,18 +80,11 @@ workflow.add_conditional_edges("tool_execute", route_after_tool_execute, {
 
 ## 3. Token 估算系统
 
-Token 估算系统位于 `domain/agent_loop/token_utils.py`（通过 `domain/services/token_utils.py` shim re-export），提供纯函数用于 Token 计数、消息渲染、上下文窗口解析和超限识别。
+Token 估算系统提供纯函数用于 Token 计数、消息渲染、上下文窗口解析和超限识别。
 
 ### 3.1 `count_tokens()` -- 字符级 Token 估算
 
 采用混合加权策略，对中文字符和其他字符使用不同权重：
-
-```python
-def count_tokens(text: str) -> int:
-    chinese_chars = sum(1 for c in text if '一' <= c <= '鿿')
-    other_chars = len(text) - chinese_chars
-    return int(chinese_chars * 1.5 + other_chars * 0.25)
-```
 
 | 字符类型 | 权重 | 说明 |
 |---------|------|------|
@@ -131,54 +93,16 @@ def count_tokens(text: str) -> int:
 
 ### 3.2 `render_message()` -- 消息规范文本化
 
-将 LangChain 消息对象或 dict 渲染为统一的文本表示，便于 Token 估算：
-
-```python
-def render_message(message: Any) -> str:
-    # 提取 role、content、name、tool_call_id、tool_calls
-    parts = []
-    parts.append(f"[{role_label}]")          # [HUMAN] / [AI] / [TOOL] / [SYSTEM]
-    if name:
-        parts.append(f"[tool:{name}]")       # [tool:read_file]
-    if tool_call_id:
-        parts.append(f"[call_id:{tool_call_id}]")
-    if tool_calls:
-        parts.append(f"[tool_calls:{','.join(tc_names)}]")
-    if content:
-        parts.append(content)
-    return " ".join(parts)
-```
-
-渲染格式包含 role、tool name、call_id、tool_calls 等元信息，帮助 Token 估算覆盖消息的完整开销。
+将 LangChain 消息对象渲染为统一的文本表示，便于 Token 估算。渲染格式包含 `[role_label]`、`[tool:name]`、`[call_id:id]`、`[tool_calls:names]` 等元信息标签，后跟消息正文内容，帮助 Token 估算覆盖消息的完整开销。
 
 ### 3.3 `estimate_context_tokens()` -- Baseline 感知的增量估算
 
 支持两种估算模式，根据是否持有有效的 LLM usage baseline 自动切换：
 
-```python
-def estimate_context_tokens(
-    messages: list,
-    baseline: int | None = None,
-    baseline_message_count: int = 0,
-) -> int:
-    current_count = len(messages)
-
-    if baseline is not None and baseline_message_count > 0 and current_count >= baseline_message_count:
-        # 增量估算：baseline + 新增消息
-        new_messages = messages[baseline_message_count:]
-        new_tokens = sum(count_tokens(render_message(msg)) for msg in new_messages)
-        return baseline + new_tokens
-
-    # 全量估算
-    return sum(count_tokens(render_message(msg)) for msg in messages)
-```
-
-**两种模式对比**：
-
 | 模式 | 触发条件 | 计算方式 | 精度 |
 |------|---------|---------|------|
-| **增量估算** | baseline 有效 且 消息数>=baseline_message_count（无 RemoveMessage） | `baseline + sum(count_tokens(render_message(new_msg)))` | 高（baseline 来自 LLM 真实 usage） |
-| **全量估算** | baseline 为 None，或消息数<baseline_message_count（发生 RemoveMessage/裁剪） | `sum(count_tokens(render_message(msg)))` | 低（纯 char/4 估算） |
+| **增量估算** | baseline 有效 且 消息数>=baseline_message_count（无 RemoveMessage） | `baseline + 新增消息的估算 Token` | 高（baseline 来自 LLM 真实 usage） |
+| **全量估算** | baseline 为 None，或消息数<baseline_message_count（发生 RemoveMessage/裁剪） | 对所有消息执行 `count_tokens(render_message(msg))` 求和 | 低（纯 char/4 估算） |
 
 **Baseline 失效规则**：
 
@@ -191,23 +115,9 @@ def estimate_context_tokens(
 
 ### 3.4 `resolve_max_context_tokens()` -- 模型上下文窗口解析
 
-根据模型名称子串匹配解析最大上下文窗口 Token 数：
+根据模型名称子串匹配解析最大上下文窗口 Token 数，未匹配时回退到默认值 128,000：
 
-```python
-_MODEL_CONTEXT_WINDOWS: list[tuple[str, int]] = [
-    ("gemini-3-pro", 2_000_000),
-    ("gpt-5.5", 1_000_000),
-    ("gpt-5.4", 1_000_000),
-    ("claude-opus-4.7", 1_000_000),
-    ("claude-opus-4.6", 1_000_000),
-    ("qwen3", 1_000_000),
-    ("deepseek-v4", 1_000_000),
-]
-
-_DEFAULT_CONTEXT_WINDOW = 128_000
-```
-
-| 模型族 | 默认上下文窗口 | 说明 |
+| 模型族 | 上下文窗口 | 说明 |
 |--------|-------------|------|
 | `gemini-3-pro` | 2,000,000 | Gemini 3 Pro |
 | `gpt-5.5` / `gpt-5.4` | 1,000,000 | GPT 5 系列 |
@@ -220,55 +130,20 @@ _DEFAULT_CONTEXT_WINDOW = 128_000
 
 ### 3.5 Baseline 校准流程
 
-每次 LLM 调用成功后，`llm_call_node` 从 `AIMessageChunk` 的 usage metadata 中提取真实 `prompt_tokens`，写回 AgentState：
+每次 LLM 调用成功后，`llm_call_node` 从 `AIMessageChunk` 的 usage metadata 中提取真实 `prompt_tokens`：
 
-```python
-def _extract_prompt_tokens(accumulated) -> int | None:
-    # LangChain 0.3+: usage_metadata on AIMessageChunk
-    if hasattr(accumulated, "usage_metadata") and accumulated.usage_metadata:
-        usage = accumulated.usage_metadata
-        if isinstance(usage, dict):
-            return usage.get("input_tokens")
-
-    # 旧版 LangChain: response_metadata.token_usage
-    if hasattr(accumulated, "response_metadata") and accumulated.response_metadata:
-        token_usage = accumulated.response_metadata.get("token_usage", {})
-        if isinstance(token_usage, dict):
-            return token_usage.get("prompt_tokens")
-
-    return None  # 提取失败，降级为全量 char/4 估算
-```
+- **LangChain 0.3+**：从 `usage_metadata` 中取 `input_tokens`
+- **旧版 LangChain**：从 `response_metadata.token_usage` 中取 `prompt_tokens`
+- **提取失败**：降级为全量 char/4 估算
 
 写回 AgentState 的字段：
 
-```python
-# llm_call_node 正常返回时
-{
-    "context_token_baseline": prompt_tokens,
-    "context_token_baseline_message_count": message_count,
-    "context_token_estimate": prompt_tokens,
-}
-# 无法提取 prompt_tokens 时降级：
-{
-    "context_token_estimate": sum(count_tokens(render_message(m)) for m in messages),
-}
-```
+- 成功时：写入 `context_token_baseline`（LLM 真实 prompt_tokens）、`context_token_baseline_message_count`（发送消息数）、`context_token_estimate`（同步为 prompt_tokens）
+- 提取失败时：仅写入 `context_token_estimate`（全量估算值）
 
 ### 3.6 `is_context_limit_error()` -- 上下文超限识别
 
-通过异常文本中的关键字判断是否为上下文超限错误：
-
-```python
-_CONTEXT_LIMIT_MARKERS = [
-    "context_length_exceeded",
-    "maximum context length",
-    "context window",
-    "input too long",
-    "prompt is too long",
-    "token limit",
-    "request too large",
-]
-```
+通过异常文本中的关键字判断是否为上下文超限错误，匹配关键字包括：`context_length_exceeded`、`maximum context length`、`context window`、`input too long`、`prompt is too long`、`token limit`、`request too large`。
 
 ---
 
@@ -320,52 +195,17 @@ flowchart TD
 
 ### 4.3 P4: Skip (< 40%)
 
-**触发条件**：
+**触发条件**：`current_tokens <= max_context_tokens * 0.4`
 
-```python
-current_tokens <= int(max_context_tokens * 0.4)
-```
+**处理逻辑**：不做任何消息修改，记录 WATERMARK 日志，发射 `context:compacting` 事件（strategy = `skip`），写入 `last_context_strategy = "skip"`。
 
-**处理逻辑**：
+**事件 Payload 结构**：包含 strategy、beforeTokens、afterTokens、maxContextTokens、消息数量、removedCount(=0)、reason（= "below_watermark"）。
 
-- 不做任何消息修改
-- 记录 WATERMARK 日志
-- 发射 `context:compacting` 事件，strategy = `skip`
-- 写入 `last_context_strategy = "skip"`
-
-**事件 Payload**：
-
-```python
-{
-    "strategy": "skip",
-    "beforeTokens": current_tokens,
-    "afterTokens": current_tokens,
-    "maxContextTokens": max_tokens,
-    "beforeCount": len(messages),
-    "afterCount": len(messages),
-    "removedCount": 0,
-    "reason": "below_watermark",
-}
-```
-
-**AgentState 写入**：
-
-```python
-{
-    "phase": "context_compacting",
-    "context_token_estimate": current_tokens,
-    "last_context_strategy": "skip",
-}
-```
+**AgentState 写入**：`phase = context_compacting`，`context_token_estimate`，`last_context_strategy = "skip"`。
 
 ### 4.4 P3: Soft-Pruning (40%-60%)
 
-**触发条件**：
-
-```python
-current_tokens > int(max_context_tokens * 0.4)
-# 且 current_tokens <= int(max_context_tokens * 0.6)
-```
+**触发条件**：`current_tokens > max_context_tokens * 0.4` 且 `<= max_context_tokens * 0.6`
 
 **处理逻辑**：
 
@@ -373,21 +213,8 @@ current_tokens > int(max_context_tokens * 0.4)
 2. 单条 tool result 内容长度 <= 20000 字符时跳过。
 3. 对超长 ToolMessage 裁剪：保留前 4000 字符和后 4000 字符，中间替换为省略标记。
 4. 从旧到新顺序处理，每裁剪一条后重新估算 Token。
-5. 当 `new_estimate <= int(max_context_tokens * 0.25)`（目标 25% 水线）时停止。
+5. 当估算值 <= `max_context_tokens * 0.25`（目标 25% 水线）时停止。
 6. 遍历完所有消息仍不达标也停止（避免误删语义内容）。
-
-**裁剪规则**：
-
-```python
-head = content[:4000]
-tail = content[-4000:]
-pruned_content = (
-    f"{head}\n\n"
-    f"[... tool result soft-pruned; middle omitted ...]\n\n"
-    f"{tail}"
-)
-# 使用相同 msg_id 构造 ToolMessage，LangGraph add_messages reducer 自动替换
-```
 
 **关键设计**：
 
@@ -395,51 +222,23 @@ pruned_content = (
 - 同 id 的 ToolMessage 替换，`tool_results`（持久层）不受影响
 - 基线被修改后 `context_token_baseline` 设为 `None`，后续走全量估算
 
-**事件 Payload**：
+**事件 Payload 结构**：包含 strategy、beforeTokens、afterTokens、maxContextTokens、消息数量、removedCount(=0)、prunedToolResults（裁剪条数）、reason（= "watermark_40"）。
 
-```python
-{
-    "strategy": "soft_prune",
-    "beforeTokens": current_tokens,
-    "afterTokens": after_tokens,
-    "maxContextTokens": max_tokens,
-    "beforeCount": len(messages),
-    "afterCount": len(modified_messages),
-    "removedCount": 0,
-    "prunedToolResults": pruned_count,
-    "reason": "watermark_40",
-}
-```
-
-**AgentState 写入**：
-
-```python
-{
-    "messages": modified_messages,              # 裁剪后的消息列表
-    "phase": "context_compacting",
-    "context_token_estimate": after_tokens,
-    "last_context_strategy": "soft_prune",
-    "context_token_baseline": None,             # 仅当发生裁剪时
-}
-```
+**AgentState 写入**：`messages`（裁剪后的消息列表）、`phase = context_compacting`、`context_token_estimate`、`last_context_strategy = "soft_prune"`；发生裁剪时 `context_token_baseline = None`。
 
 ### 4.5 P2: Micro-Compact (> 60%)
 
-**触发条件**：
-
-```python
-current_tokens > int(max_context_tokens * 0.6)
-```
+**触发条件**：`current_tokens > max_context_tokens * 0.6`
 
 **处理逻辑**：
 
 1. 识别 SystemMessage（如果消息列表第一条为 SystemMessage，索引记为 0；否则为 -1）。
-2. 消息数不足 `preserve_start + keep_recent + 1` 时跳过压缩。
+2. 消息数不足保留窗口 + 1 时跳过压缩。
 3. 保留：SystemMessage + 最近 10 条消息。
 4. 中间消息取最近 90 条做 LLM 摘要（优先保留时间局部性）。
 5. 中间消息超过 90 条时，更老的消息只做 `RemoveMessage`，不加入摘要输入。
 6. 摘要注入为 `HumanMessage(content="[Context Summary]\n...", id=first_compacted_id)`。
-7. 对被压缩消息执行 `RemoveMessage(id=msg_id)`。
+7. 对被压缩消息执行 `RemoveMessage`。
 
 **压缩范围示意**：
 
@@ -448,28 +247,7 @@ current_tokens > int(max_context_tokens * 0.6)
                      ^--- Remove 和/或 摘要 ---^        ^--- 保留 ---^
 ```
 
-**AgentState 写入**：
-
-```python
-{
-    "messages": [
-        RemoveMessage(id=very_old_msg_id),      # 超 90 条的旧消息仅删除
-        ...,
-        HumanMessage(                            # 摘要注入
-            content="[Context Summary]\n{summary_text}",
-            id=first_compacted_id
-        ),
-        RemoveMessage(id=compacted_msg_id),      # 被摘要的消息删除
-        ...,
-        # SystemMessage + 最近 10 条
-    ],
-    "phase": "context_compacting",
-    "context_token_estimate": after_tokens,
-    "context_token_baseline": None,
-    "context_token_baseline_message_count": 0,
-    "last_context_strategy": "micro_compact",
-}
-```
+**AgentState 写入**：`messages`（包含 RemoveMessage、摘要 HumanMessage、保留的 SystemMessage + 最近 10 条）、`phase = context_compacting`、`context_token_estimate`、`context_token_baseline = None`、`context_token_baseline_message_count = 0`、`last_context_strategy = "micro_compact"`。
 
 ### 4.6 P1: Emergency-Compact (上下文超限)
 
@@ -492,27 +270,12 @@ llm_call → LLM 返回 context window exceeded
 2. **计数追踪**：`context_compaction_attempts += 1`，防止无限紧急压缩。
 3. **标志清零**：执行后设置 `emergency_compact_requested = False`，`compression_strategy = None`，避免循环触发。
 
-**失败处理**（两次超限规则）：
+**失败处理（两次超限规则）**：
 
 - 第一次上下文超限（`context_compaction_attempts == 0`）：执行 emergency-compact，再次尝试 llm_call。
 - 第二次上下文超限（`context_compaction_attempts >= 1`）：`ContextLimitErrorHandler` 直接设置 `should_end=True`，终止任务。
 
-**AgentState 写入**：
-
-```python
-{
-    "messages": [RemoveMessage(...), HumanMessage(...), ...],
-    "phase": "context_compacting",
-    "context_token_estimate": after_tokens,
-    "context_token_baseline": None,
-    "context_token_baseline_message_count": 0,
-    "last_context_strategy": "emergency_compact",
-    # 额外写入：
-    "context_compaction_attempts": attempts + 1,
-    "emergency_compact_requested": False,
-    "compression_strategy": None,
-}
-```
+**AgentState 写入**：与 micro_compact 相同的基础字段，额外写入 `context_compaction_attempts += 1`、`emergency_compact_requested = False`、`compression_strategy = None`。
 
 ### 4.7 关键信息保留规则
 
@@ -530,18 +293,18 @@ llm_call → LLM 返回 context window exceeded
 
 ### 4.8 配置常量
 
-```python
-SOFT_PRUNE_WATERMARK = 0.4         # 轻量裁剪水线
-MICRO_COMPACT_WATERMARK = 0.6      # 摘要压缩水线
-SOFT_PRUNE_TARGET = 0.25           # 裁剪目标水线
-SOFT_PRUNE_MIN_CONTENT_LENGTH = 20000  # 最小裁剪阈值 (字符)
-SOFT_PRUNE_HEAD_TAIL = 4000        # 保留头尾长度 (字符)
-MICRO_COMPACT_KEEP_RECENT = 10     # 微压缩保留最近消息数
-EMERGENCY_COMPACT_KEEP_RECENT = 3  # 紧急压缩保留最近消息数
-MICRO_COMPACT_SUMMARY_MAX_MSGS = 90  # 摘要最大处理消息数
-SUMMARY_MAX_INPUT_CHARS = 32000    # 摘要输入字符上限
-SUMMARY_MAX_TOKEN_FRACTION = 0.05  # 摘要输入占上下文窗口比例上限
-```
+| 常量 | 值 | 说明 |
+| ------ | ----- | ------ |
+| `SOFT_PRUNE_WATERMARK` | 0.4 | 轻量裁剪触发水线（占上下文窗口比例） |
+| `MICRO_COMPACT_WATERMARK` | 0.6 | 摘要压缩触发水线（占上下文窗口比例） |
+| `SOFT_PRUNE_TARGET` | 0.25 | 裁剪目标水线（占上下文窗口比例） |
+| `SOFT_PRUNE_MIN_CONTENT_LENGTH` | 20000 | 最小裁剪阈值（字符数） |
+| `SOFT_PRUNE_HEAD_TAIL` | 4000 | 保留头尾长度（字符数） |
+| `MICRO_COMPACT_KEEP_RECENT` | 10 | 微压缩保留最近消息数 |
+| `EMERGENCY_COMPACT_KEEP_RECENT` | 3 | 紧急压缩保留最近消息数 |
+| `MICRO_COMPACT_SUMMARY_MAX_MSGS` | 90 | 摘要最大处理消息数 |
+| `SUMMARY_MAX_INPUT_CHARS` | 32000 | 摘要输入字符上限 |
+| `SUMMARY_MAX_TOKEN_FRACTION` | 0.05 | 摘要输入占上下文窗口比例上限 |
 
 ---
 
@@ -578,47 +341,20 @@ and decisions.
 
 ### 5.2 摘要输入构建
 
-**字符预算控制**：
+**字符预算控制**：摘要输入预算取 `min(SUMMARY_MAX_INPUT_CHARS, max_tokens * SUMMARY_MAX_TOKEN_FRACTION * 4)`。以 deepseek-v4（1,000,000 Token）为例：5% Token 预算 = 50,000 Token，字符估算为 50,000 * 4 = 200,000 字符，实际取 min(32,000, 200,000) = **32,000 字符**。
 
-```python
-summary_budget = min(
-    SUMMARY_MAX_INPUT_CHARS,                     # 上限 32000 字符
-    int(max_tokens * SUMMARY_MAX_TOKEN_FRACTION * 4),  # 上下文窗口 5% 的字符估算
-)
-```
+**消息渲染**：摘要输入使用 `render_message()` 渲染每条消息，包含 role、tool name、tool_call_id、content 等元信息，帮助摘要 LLM 理解消息结构和来源。
 
-以 deepseek-v4（1,000,000 Token）为例：
-- 5% Token 预算：50,000 Token
-- 字符估算：50,000 * 4 = 200,000 字符
-- 实际取 min(32,000, 200,000) = **32,000 字符**
-
-**消息渲染**：
-
-摘要输入使用 `render_message()` 渲染每条消息，包含 role、tool name、tool_call_id、content 等元信息。渲染格式帮助摘要 LLM 理解消息结构和来源：
-
-```
-[AI] [tool_calls:read_file,search]    # AIMessage with tool calls
-[TOOL] [tool:read_file] [call_id:xxx] file content...  # ToolMessage with result
-```
-
-**截断策略**：
-
-从最近的消息开始向后组装，字节预算用尽时截断最后一条，并追加 `\n...(truncated)` 标记。
+**截断策略**：从最近的消息开始向后组装，字节预算用尽时截断最后一条，并追加截断标记。
 
 ### 5.3 LLM 调用
 
-```python
-response = await llm.ainvoke([
-    SystemMessage(content=_COMPACTION_SUMMARY_PROMPT),
-    HumanMessage(content=f"Messages to compact:\n\n{summary_input}"),
-])
-summary_text = response.content if hasattr(response, "content") else str(response)
-```
+摘要 LLM 接收 SystemMessage（摘要 Prompt）和 HumanMessage（待压缩消息文本），返回摘要文本。
 
 **降级策略**：
 
-- LLM 不可用（config 无 llm）：返回 `None`，压缩降级为纯 `RemoveMessage`（trim）。
-- LLM 调用异常：捕获所有异常，返回 `None`，同样降级为纯 trim。
+- LLM 不可用（config 无 llm）：返回空，压缩降级为纯 `RemoveMessage`（trim）。
+- LLM 调用异常：捕获所有异常，返回空，同样降级为纯 trim。
 
 降级行为保证上下文压缩不成为主流程的阻塞点。
 
@@ -630,28 +366,12 @@ summary_text = response.content if hasattr(response, "content") else str(respons
 
 `llm_call_node` 不直接处理异常，而是委托给 `LLMErrorHandlerRegistry`（职责链模式），将错误分类处理逻辑与节点调用逻辑解耦。
 
-**接口定义**（`domain/interfaces/llm_error_handler.py`）：
+**接口定义**（`ILLMErrorHandler`）：
 
-```python
-class ILLMErrorHandler(ABC):
-    def can_handle(self, error: BaseException) -> bool:
-        """判断是否能处理该错误"""
-        ...
+- `can_handle(error)` — 判断是否能处理该错误
+- `handle(error, state, context)` — 处理错误并返回状态更新
 
-    def handle(self, error: BaseException, state: dict, context: Any) -> dict:
-        """处理错误并返回状态更新 dict"""
-        ...
-
-class LLMErrorHandlerRegistry:
-    def __init__(self, handlers: list[ILLMErrorHandler] | None = None):
-        self._handlers = list(handlers or [])
-
-    def handle(self, error, state, context) -> dict:
-        for handler in self._handlers:
-            if handler.can_handle(error):
-                return handler.handle(error, state, context)
-        raise error  # 所有 handler 都不匹配时 re-raise
-```
+**注册器**（`LLMErrorHandlerRegistry`）：按注册顺序遍历处理器列表，第一个 `can_handle()` 返回 `True` 的处理器处理错误；所有处理器都不匹配时 re-raise 异常。
 
 ### 6.2 处理器列表
 
@@ -661,37 +381,9 @@ class LLMErrorHandlerRegistry:
 |------|--------|---------|---------|
 | 1 | `ContextLimitErrorHandler` | `is_context_limit_error()` 返回 True | 首次: 设置 `emergency_compact_requested=True`；二次: `should_end=True` |
 | 2 | `TimeoutErrorHandler` | `asyncio.TimeoutError` 或 `TimeoutError` | 设置 `should_end=True`，保留已收到的 partial text |
-| 3 | `DefaultErrorHandler` | 始终匹配（兜底） | re-raise 异常，由 `BaseNode._handle_error` 统一处理 |
+| 3 | `DefaultErrorHandler` | 始终匹配（兜底） | re-raise 异常，由统一错误处理机制接管 |
 
 ### 6.3 ContextLimitErrorHandler
-
-```python
-class ContextLimitErrorHandler(ILLMErrorHandler):
-    def can_handle(self, error: BaseException) -> bool:
-        return is_context_limit_error(error)
-
-    def handle(self, error, state, context) -> dict:
-        attempts = state.get("context_compaction_attempts", 0)
-
-        if attempts == 0:
-            # 第一次超限：给一次紧急压缩机会
-            return {
-                "emergency_compact_requested": True,
-                "should_end": False,
-                "compression_strategy": "emergency_compact",
-                "context_compaction_attempts": 1,
-                "error": str(error),
-                "phase": "context_overflow",
-            }
-
-        # 第二次超限：紧急压缩失败，终止
-        return {
-            "should_end": True,
-            "is_complete": False,
-            "error": f"Context window exceeded after emergency compaction: {error}",
-            "phase": "error",
-        }
-```
 
 **两次超限规则**：
 
@@ -702,66 +394,15 @@ class ContextLimitErrorHandler(ILLMErrorHandler):
 
 ### 6.4 TimeoutErrorHandler
 
-```python
-class TimeoutErrorHandler(ILLMErrorHandler):
-    def __init__(self, timeout_sec: int = 300):
-        self.timeout_sec = timeout_sec
-
-    def can_handle(self, error: BaseException) -> bool:
-        return isinstance(error, TimeoutError) or isinstance(error, asyncio.TimeoutError)
-
-    def handle(self, error, state, context) -> dict:
-        full_text = state.get("current_llm_text", "")
-        return {
-            "messages": [AIMessage(content=full_text or "LLM call timed out.")],
-            "pending_tool_calls": [],
-            "error": f"LLM streaming timed out after {self.timeout_sec}s",
-            "should_end": True,
-            ...
-        }
-```
-
-将已有 partial text 保存为 AIMessage，避免完全丢失已生成的文本。
+将已有的 partial text 保存为 AIMessage，避免完全丢失已生成的文本。设置 `should_end=True` 终止任务。
 
 ### 6.5 DefaultErrorHandler
 
-```python
-class DefaultErrorHandler(ILLMErrorHandler):
-    def can_handle(self, error: BaseException) -> bool:
-        return True  # 兜底，始终返回 True
-
-    def handle(self, error, state, context) -> dict:
-        raise error  # re-raise 给 BaseNode._handle_error 处理
-```
+兜底处理器，始终返回 `can_handle() = True`，行为为 re-raise 异常，交由上层统一错误处理。
 
 ### 6.6 注入方式
 
-在 `AgentLoopRunner` 中通过 `graph_config` 注入：
-
-```python
-graph_config = {
-    "configurable": {
-        "llm": llm,
-        # ...
-        "llm_error_handlers": LLMErrorHandlerRegistry([
-            ContextLimitErrorHandler(),
-            TimeoutErrorHandler(timeout_sec=300),
-            DefaultErrorHandler(),
-        ]),
-    }
-}
-```
-
-`llm_call_node` 通过 config 获取：
-
-```python
-error_registry = config.get("configurable", {}).get("llm_error_handlers")
-# ...
-except Exception as e:
-    if error_registry:
-        return error_registry.handle(e, state, context)
-    raise
-```
+在 `AgentLoopRunner` 中通过 `graph_config` 注入 `LLMErrorHandlerRegistry` 实例（包含三个处理器），`llm_call_node` 通过 config 获取并在异常时委托处理。
 
 ---
 
@@ -771,7 +412,7 @@ except Exception as e:
 
 | 字段 | 类型 | 描述 | 写入节点 |
 |------|------|------|---------|
-| `max_context_tokens` | `int` | 当前模型上下文窗口 Token 数上限 | 应用层初始化 (`resolve_max_context_tokens`) |
+| `max_context_tokens` | `int` | 当前模型上下文窗口 Token 数上限 | 应用层初始化 |
 | `context_token_estimate` | `int` | 当前 messages 的 Token 估算值 | `context_compact`、`llm_call` |
 | `context_token_baseline` | `Optional[int]` | 最近一次成功 LLM 调用返回的 `prompt_tokens` | `llm_call` |
 | `context_token_baseline_message_count` | `int` | baseline 对应的消息数量，用于判断增量/全量估算 | `llm_call` |
@@ -813,20 +454,7 @@ context_compact (下一轮)                               │ route_after_llm
 
 ### 7.3 应用层初始化
 
-在 `AgentLoopRunner._build_initial_state()` 中：
-
-```python
-initial_state = {
-    # ...
-    "max_context_tokens": resolve_max_context_tokens(model),
-    "context_token_estimate": 0,
-    "context_token_baseline": None,
-    "context_token_baseline_message_count": 0,
-    "context_compaction_attempts": 0,
-    "emergency_compact_requested": False,
-    "last_context_strategy": None,
-}
-```
+在 `AgentLoopRunner` 构建初始状态时，初始化所有上下文管理字段：`max_context_tokens`（通过 `resolve_max_context_tokens` 解析）、`context_token_estimate = 0`、`context_token_baseline = None`、`context_token_baseline_message_count = 0`、`context_compaction_attempts = 0`、`emergency_compact_requested = False`、`last_context_strategy = None`。
 
 ---
 
@@ -836,25 +464,7 @@ initial_state = {
 
 三个路由函数中，`context_compact` 是核心枢纽：
 
-**`route_after_llm`**：
-
-```python
-def route_after_llm(state: AgentState) -> str:
-    # 优先级最高：上下文超限后紧急压缩
-    if state.get("emergency_compact_requested"):
-        return "context_compact"
-
-    if state.get("should_end"):
-        return END
-
-    messages = state.get("messages", [])
-    last_msg = messages[-1]
-    tool_calls = _extract_tool_calls(last_msg)
-
-    if tool_calls:
-        return "loop_detect"       # → loop_detect → tool_execute → context_compact
-    return END                      # 纯文本完成
-```
+**`route_after_llm`**：优先级最高为 `emergency_compact_requested`（直接路由到 `context_compact`），其次为 `should_end`（终止），再次为 tool_calls（路由到 `loop_detect`），纯文本则终止。
 
 | 状态 | 路由目标 | 如何回到 context_compact |
 |------|---------|------------------------|
@@ -862,16 +472,7 @@ def route_after_llm(state: AgentState) -> str:
 | 有 tool_calls | `loop_detect` | 经 loop_detect/tool_execute 回到 context_compact |
 | should_end / 纯文本 | END | 不经过（已终止） |
 
-**`route_after_loop_detect`**：
-
-```python
-def route_after_loop_detect(state: AgentState) -> str:
-    if not state.get("loop_detected"):
-        return "tool_execute"          # → tool_execute → context_compact
-    if state.get("should_end"):
-        return END
-    return "context_compact"           # loop 纠正统一走守门
-```
+**`route_after_loop_detect`**：未检测到 loop 时路由到 `tool_execute`（最终回到 context_compact），检测到 loop 时直接路由到 `context_compact`（注入反馈后重试），`should_end` 时终止。
 
 | 状态 | 路由目标 | 如何回到 context_compact |
 |------|---------|------------------------|
@@ -879,14 +480,7 @@ def route_after_loop_detect(state: AgentState) -> str:
 | loop_detected (count 1/2) | `context_compact` | 直接进入（注入反馈后重试） |
 | should_end (count >=3) | END | 不经过（已终止） |
 
-**`route_after_tool_execute`**：
-
-```python
-def route_after_tool_execute(state: AgentState) -> str:
-    if state.get("awaiting_user_input"):
-        return END
-    return "context_compact"           # 工具结果加入后先守门
-```
+**`route_after_tool_execute`**：等待用户输入时终止，否则路由到 `context_compact`（工具结果加入后先守门）。
 
 ### 8.2 紧急压缩完整路径
 
@@ -925,12 +519,7 @@ llm_call → LLM 抛出 context window exceeded
 
 ### 9.1 设计变更
 
-初始历史消息的 Token 预算从硬编码的 `8000` 改为基于模型上下文窗口的动态计算：
-
-```python
-max_context_tokens = resolve_max_context_tokens(model)
-initial_history_budget = int(max_context_tokens * 0.25)
-```
+初始历史消息的 Token 预算从硬编码的 `8000` 改为基于模型上下文窗口的动态计算：`initial_history_budget = max_context_tokens * 0.25`。
 
 | 模型 | 上下文窗口 | 历史预算 (25%) | 旧值 (8000) |
 |------|----------|--------------|-----------|
@@ -952,46 +541,11 @@ initial_history_budget = int(max_context_tokens * 0.25)
 
 ### 9.3 使用方式
 
-```python
-# AgentLoopRunner._build_initial_state() 中
-api_messages = await self.prompt_context.build_messages(
-    system_message=system_prompt,
-    history=conversation_history,
-    max_tokens=initial_history_budget,  # max_context_tokens * 0.25
-)
-messages = LangChainAdapter.dict_messages_to_langchain(api_messages)
-```
-
-`PromptContextInterface.build_messages()` 使用 `max_tokens` 参数进行历史消息的 Token 预算裁剪，超过预算的旧消息被裁剪或丢弃。
+在 `AgentLoopRunner` 构建初始状态时，通过 `PromptContextInterface.build_messages()` 传入 `max_tokens = initial_history_budget` 参数进行历史消息的 Token 预算裁剪，超过预算的旧消息被裁剪或丢弃。
 
 ---
 
-## 附录 A：文件清单
-
-```
-backend/src/
-├── domain/
-│   ├── aggregates/agent/agent_state.py          # AgentState (7 个上下文管理字段)
-│   ├── services/
-│   │   ├── token_utils.py                       # count_tokens, render_message, estimate_context_tokens, resolve_max_context_tokens, is_context_limit_error
-│   │   └── agent_routing.py                     # route_after_llm, route_after_loop_detect, route_after_tool_execute
-│   └── interfaces/
-│       └── llm_error_handler.py                 # ILLMErrorHandler, LLMErrorHandlerRegistry
-├── infrastructure/agent/
-│   ├── nodes/
-│   │   ├── context_compact_node.py              # ContextCompactNode (4 级压缩, 摘要 Prompt)
-│   │   └── llm_call_node.py                     # LLMCallNode (baseline 写回, 错误委托)
-│   ├── error_handlers/
-│   │   ├── __init__.py                          # 模块导出
-│   │   ├── context_limit.py                     # ContextLimitErrorHandler
-│   │   ├── timeout.py                           # TimeoutErrorHandler
-│   │   └── default_handler.py                   # DefaultErrorHandler
-│   └── workflow_builder.py                      # AgentWorkflowBuilder (入口 context_compact)
-└── application/services/
-    └── agent_loop_runner.py                     # AgentLoopRunner (graph_config 注入, 初始历史预算)
-```
-
-## 附录 B：事件 Payload 汇总
+## 附录 A：事件 Payload 汇总
 
 | 策略 | 事件类型 | 关键字段 |
 |------|---------|---------|
@@ -1000,7 +554,7 @@ backend/src/
 | micro_compact | `context:compacting` | strategy=micro_compact, beforeTokens, afterTokens, removedCount, summaryLength, reason=watermark_60 |
 | emergency_compact | `context:compacting` | strategy=emergency_compact, beforeTokens, afterTokens, removedCount, summaryLength, reason=context_overflow |
 
-## 附录 C：日志格式汇总
+## 附录 B：日志格式汇总
 
 ```
 # Skip

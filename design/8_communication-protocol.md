@@ -343,34 +343,11 @@ SSE 本身基于 HTTP 长连接，TCP 流控天然提供背压。额外策略：
 
 定义于 `backend/src/application/dtos/event_dto.py`：
 
-```python
-class SSEEventDTO(BaseModel):
-    """SSE 事件数据传输对象"""
-
-    id: str                    # 事件序列号（整数转字符串）
-    event_type: str            # 事件类型（冒号分隔），如 "llm:chunk"
-    data: dict[str, Any]       # 事件载荷（各事件类型不同，自动注入 taskId）
-    timestamp: str             # ISO 8601 时间戳
-
-    @classmethod
-    def create(cls, task_id, seq, event_type, payload) -> "SSEEventDTO":
-        """创建事件 DTO，自动规范化事件名并注入 taskId"""
-```
+**SSEEventDTO** — SSE 事件数据传输对象，包含四个字段：事件序列号 `id`（整数转字符串）、事件类型 `event_type`（冒号分隔，如 `llm:chunk`）、事件载荷 `data`（各事件类型不同的 dict，自动注入 taskId）、ISO 8601 时间戳 `timestamp`。提供 `create()` 类方法用于构造 DTO，自动规范化事件名并注入 taskId。
 
 领域实体 `backend/src/domain/entities/event.py`：
 
-```python
-class Event:
-    event_type: str
-    payload: dict[str, Any]
-    sequence: int
-    task_id: str
-    timestamp: datetime
-
-    @property
-    def id(self) -> str:
-        return str(self.sequence)
-```
+**Event** — 领域实体，包含五个字段：`event_type`、`payload`、`sequence`、`task_id`、`timestamp`。通过 `id` 属性将 sequence 整数转为字符串形式的序列号。
 
 `StreamEventService` 内部在持久化时通过 `EventMapper`（`backend/src/application/services/event_mapper.py`）在 DTO 与实体之间转换。
 
@@ -545,57 +522,20 @@ class Event:
 
 定义于 `frontend/src/domain/entities/events.ts`：
 
-```typescript
-// 所有事件 payload 都包含的基础字段
-interface BaseEventPayload {
-  taskId: string;
-  sub_task_id?: string;         // Sub-agent 事件会携带此字段
-}
+**BaseEventPayload** — 所有事件 payload 的基础接口，包含必填字段 `taskId` 和可选字段 `sub_task_id`（Sub-agent 事件携带此字段用于区分事件来源）。
 
-// 完整的事件映射（共 22 种事件类型）
-interface AgentEventMap {
-  // — 生命周期 (6) —
-  'task:started':    TaskStartedPayload;
-  'task:completed':  TaskCompletedPayload;
-  'task:failed':     TaskFailedPayload;
-  'task:cancelled':  TaskCancelledPayload;
-  'task:paused':     TaskPausedPayload;
-  'task:resumed':    TaskResumedPayload;
+**AgentEventMap** — 完整的事件类型到 payload 类型的映射（共 22 种事件类型），按分类组织：
 
-  // — 阶段 —
-  'phase:changed':  PhaseChangedPayload;
+- 生命周期（6 种）：`task:started`、`task:completed`、`task:failed`、`task:cancelled`、`task:paused`、`task:resumed`
+- 阶段（1 种）：`phase:changed`
+- LLM 流式（3 种）：`thinking:chunk`、`llm:chunk`、`llm:complete`
+- 工具（2 种）：`tool:call`、`tool:result`
+- 系统（3 种）：`context:compacting`、`loop:detected`、`stuck:detected`（已定义但后端未 emit）
+- 多步骤（6 种）：`step:created`、`step:started`、`step:completed`、`step:parallel_group_started`、`step:parallel_group_completed`、`step:all_completed`
+- Sub-Agent（3 种）：`sub_agent:started`、`sub_agent:completed`、`sub_agent:failed`
+- 会话（1 种）：`session:message:saved`
 
-  // — LLM (3) —
-  'thinking:chunk':   ThinkingChunkPayload;
-  'llm:chunk':        LLMChunkPayload;
-  'llm:complete':     LLMCompletePayload;
-
-  // — 工具 (2) —
-  'tool:call':     ToolCallPayload;
-  'tool:result':   ToolResultPayload;
-
-  // — 系统 (2) —
-  'context:compacting': ContextCompactingPayload;   // 注意：payload 内 beforeTokens/afterTokens 和后端 beforeCount/afterCount 并存
-  'loop:detected':      LoopDetectedPayload;
-  'stuck:detected':     StuckDetectedPayload;       // 定义存在但后端未 emit
-
-  // — 多步骤 (6) —
-  'step:created':                     StepCreatedPayload;
-  'step:started':                     StepStartedPayload;
-  'step:completed':                   StepCompletedPayload;
-  'step:parallel_group_started':      StepParallelGroupStartedPayload;
-  'step:parallel_group_completed':    StepParallelGroupCompletedPayload;
-  'step:all_completed':               StepAllCompletedPayload;
-
-  // — Sub-Agent (3) —
-  'sub_agent:started':   SubAgentPayload;
-  'sub_agent:completed': SubAgentPayload;
-  'sub_agent:failed':    SubAgentPayload;
-
-  // — 会话 —
-  'session:message:saved': SessionMessageSavedPayload;
-}
-```
+每种事件类型关联一个专用的 payload 类型（如 `TaskStartedPayload`、`LLMChunkPayload` 等），通过 TypeScript 的索引类型系统提供类型安全的事件分发。
 
 #### 2.3.2 前后端 payload 字段差异说明
 
@@ -669,73 +609,31 @@ graph TB
 
 实际定义于 `backend/src/domain/services/event_emitter.py`：
 
-```python
-class IEventEmitter(ABC):
-    """Agent Loop 事件发射器接口。"""
+**IEventEmitter** — Agent Loop 事件发射器的抽象接口，包含以下方法：
 
-    @abstractmethod
-    async def emit(self, task_id: str, event_type: str, payload: dict[str, Any]) -> None:
-        """发射一个事件。"""
-
-    @abstractmethod
-    async def emit_phase_changed(self, task_id, new_phase, previous_phase, turn) -> None:
-        """发射阶段变更事件。"""
-
-    @abstractmethod
-    async def emit_llm_chunk(self, task_id, turn, text) -> None:
-        """发射 LLM 流式增量文本。"""
-
-    @abstractmethod
-    async def emit_thinking_chunk(self, task_id, turn, text) -> None:
-        """发射 LLM 深度思考流式增量文本。"""
-
-    async def emit_safe(self, task_id, event_type, payload) -> None:
-        """安全地发射事件，忽略异常。"""
-        try:
-            await self.emit(task_id, event_type, payload)
-        except Exception as exc:
-            logger.warning("event emit failed: %s", exc)
-```
-
-`emit_safe()` 是有默认实现的非抽象方法，属于模板方法模式。
+- `emit(task_id, event_type, payload)` — 核心发射方法，发射一个通用事件
+- `emit_phase_changed(task_id, new_phase, previous_phase, turn)` — 发射阶段变更事件
+- `emit_llm_chunk(task_id, turn, text)` — 发射 LLM 流式增量文本
+- `emit_thinking_chunk(task_id, turn, text)` — 发射 LLM 深度思考流式增量文本
+- `emit_safe(task_id, event_type, payload)` — 安全发射方法（模板方法模式，自带 try/except 忽略异常），有默认实现，非抽象方法
 
 #### 2.4.3 ProxyEventEmitter
 
 定义于同一文件 `backend/src/domain/services/event_emitter.py`：
 
-```python
-class ProxyEventEmitter(IEventEmitter):
-    """代理事件发射器 - 用于转发 sub-agent 事件到父 stream
-
-    将所有事件转发到父 event_emitter，并在 payload 中自动添加 sub_task_id 字段。
-    装饰器模式实现，用于事件转发和增强。
-    """
-
-    def __init__(self, parent_emitter: IEventEmitter, parent_task_id: str, sub_task_id: str):
-        ...
-
-    async def emit(self, task_id, event_type, payload):
-        payload = {**payload, "sub_task_id": self._sub_task_id}
-        await self._parent_emitter.emit(self._parent_task_id, event_type, payload)
-    # emit_phase_changed, emit_llm_chunk, emit_thinking_chunk 同理
-```
-
-这样 Sub-Agent 的事件会通过父 task 的 SSE 通道发送，前端通过 `sub_task_id` 字段区分来源。
+**ProxyEventEmitter** — IEventEmitter 的代理实现，用于将 Sub-Agent 的事件转发到父任务的事件流。采用装饰器模式：构造时接收父 emitter、父 task_id 和子 task_id，所有 emit 方法在转发前自动向 payload 注入 `sub_task_id` 字段，然后将事件通过父 task 的通道发送。这样 Sub-Agent 的事件会通过父 task 的 SSE 通道到达前端，前端通过 `sub_task_id` 字段区分事件来源。`emit_phase_changed`、`emit_llm_chunk`、`emit_thinking_chunk` 等便捷方法均遵循相同的转发逻辑。
 
 #### 2.4.4 StreamEventService 实现
 
 定义于 `backend/src/application/use_cases/stream_event.py`：
 
-```python
-class StreamEventService(IEventEmitter):
-    def __init__(self, event_repo_factory: EventRepoFactory, chunk_flush_size: int = 10):
-        self._event_repo_factory = event_repo_factory   # 工厂函数，每次创建新 repo 实例
-        self._subscribers: dict[str, list[asyncio.Queue]] = defaultdict(list)
-        self._sequences: dict[str, int] = defaultdict(int)
-        self._chunk_buffers: dict[str, list[SSEEventDTO]] = defaultdict(list)
-        self._locks: dict[str, asyncio.Lock] = {}
-        self._chunk_flush_size = chunk_flush_size       # app.py 中设为 5
-```
+**StreamEventService** — IEventEmitter 的核心实现，管理事件发射、持久化和订阅分发的全生命周期。内部维护以下数据结构：
+
+- `_event_repo_factory` — 工厂函数，每次操作创建新的 repository 实例
+- `_subscribers` — 按 task_id 分组的 `asyncio.Queue` 列表，用于实时推送
+- `_sequences` — 按 task_id 的单调递增序列号计数器
+- `_chunk_buffers` — LLM chunk 事件的批量写入缓冲区
+- `_locks` — 按 task_id 的 `asyncio.Lock`，保护 seq 生成和 buffer 操作
 
 **emit() 流程：**
 
@@ -759,21 +657,12 @@ class StreamEventService(IEventEmitter):
 
 定义于 `backend/src/domain/repositories/event_repository.py`：
 
-```python
-class IEventRepository(ABC):
-    @abstractmethod
-    async def save(self, task_id: str, event: Event) -> None:
-        """保存事件（领域实体）"""
-    @abstractmethod
-    async def save_batch(self, task_id: str, events: list[Event]) -> None:
-        """批量保存事件"""
-    @abstractmethod
-    async def get_after(self, task_id: str, last_event_id: str) -> list[Event]:
-        """获取指定序列号之后的事件（断线重连补发）"""
-    @abstractmethod
-    async def get_by_task_id(self, task_id: str) -> list[Event]:
-        """获取任务的所有事件"""
-```
+**IEventRepository** — 事件持久化的抽象接口，定义四个方法：
+
+- `save(task_id, event)` — 保存单个领域实体 Event
+- `save_batch(task_id, events)` — 批量保存多个 Event
+- `get_after(task_id, last_event_id)` — 获取指定序列号之后的事件（断线重连补发）
+- `get_by_task_id(task_id)` — 获取某任务的所有事件
 
 > **注意：** `IEventRepository` 中的方法签名使用领域实体 `Event`（`backend/src/domain/entities/event.py`），而非 DTO。`StreamEventService` 在调用持久化前通过 `EventMapper.to_entity()` 转换。
 
@@ -814,76 +703,29 @@ graph TB
 
 #### 2.7.1 AgentEventStream 客户端
 
-```typescript
-// frontend/src/infrastructure/api/eventStream.ts
+**AgentEventStream** — SSE 客户端封装，定义于 `frontend/src/infrastructure/api/eventStream.ts`。核心职责：
 
-class AgentEventStream {
-  private es: EventSource | null = null;
-  private reconnectAttempts = 0;
-  private maxReconnectAttempts = 10;
-  private handlers = new Map<string, Set<(data: unknown) => void>>();
-  private processedEventIds = new Set<string>();
-
-  // 重放模式
-  private replayMode = false;
-  private replayIntervalMs = 50;        // 重放间隔
-  private eventQueue: QueuedEvent[] = [];
-  private drainTimer: ReturnType<typeof setTimeout> | null = null;
-  private isDraining = false;
-
-  enableReplayMode(intervalMs = 50): void { ... }
-  connect(): void { ... }               // 注册所有 SSE_EVENT_TYPES 监听
-  on<K>(eventType: K, handler): () => void { ... }
-  disconnect(): void { ... }
-
-  private handleEvent(e: MessageEvent): void {
-    // JSON 解析 → 去重(processedEventIds) → normalizeEventType(连字符→冒号)
-    // → replayMode ? 入队定时分发 : 立即 dispatch
-  }
-
-  private handleError(): void {
-    // 指数退避重连：Math.min(1000 * 2^attempts, 30000)
-    // 超过 maxReconnectAttempts 时 dispatch('task:failed')
-  }
-}
-```
-
-**重放模式（Replay Mode）：** 用于回放历史事件时模拟流式体验，事件入队后按 `replayIntervalMs`（默认 50ms）逐个分发，而非一次性全部推送。
+- 封装浏览器 `EventSource` API，提供类型安全的事件监听（基于 `AgentEventMap`）
+- 内部维护 `processedEventIds` Set 用于 O(1) 事件去重（回放 + 实时流可能产生重复）
+- 在 `connect()` 时注册所有 `SSE_EVENT_TYPES` 的事件监听
+- `on(eventType, handler)` 返回取消订阅函数，支持按事件类型注册/注销 handler
+- `handleEvent` 处理接收的每条消息：JSON 解析、去重、事件名标准化（连字符还原为冒号），然后根据是否处于重放模式决定立即分发或入队
+- `handleError` 实现指数退避重连（延迟 `1000 * 2^attempts` 毫秒，上限 30 秒，最大 10 次），超出后分发 `task:failed`
+- 重放模式（`enableReplayMode`）：历史事件入队后按固定间隔（默认 50ms）逐个分发，模拟流式体验，避免一次性推送全部历史事件
 
 #### 2.7.2 useChat Hook 集成模式
 
-```typescript
-const useChat = ({ agentId, sessionId, ... }) => {
-  const sendMessage = async (content: string) => {
-    const { task_id } = await sessionApi.sendMessage(agentId, sessionId, { content });
-    const stream = new AgentEventStream(window.location.origin, task_id);
+**useChat** — 前端应用层编排 Hook，接收 `agentId` 和 `sessionId` 配置，封装消息发送、流式事件监听和任务取消的完整流程：
 
-    stream.on('llm:chunk', (data) => {
-      updateStreamingContent(prev => prev + data.text);
-    });
-    stream.on('thinking:chunk', (data) => {
-      updateThinkingContent(prev => prev + data.text);
-    });
-    stream.on('phase:changed', (data) => {
-      setCurrentPhase(data.phase);
-    });
-    stream.on('tool:call', (data) => appendToolCall(data));
-    stream.on('tool:result', (data) => updateToolResult(data));
-    stream.on('session:message:saved', (data) => {
-      replaceStreamingMessage(data.message);
-    });
-    stream.on('task:completed', () => { setPhase('complete'); stream.disconnect(); });
-    stream.on('task:failed', (data) => { setError(data.error); stream.disconnect(); });
+- `sendMessage(content)` — 通过 `sessionApi.sendMessage()` 发送消息获取 `task_id`，然后创建 `AgentEventStream` 实例，注册 8 种关键事件类型的监听器：
+  - `llm:chunk` / `thinking:chunk` — 追加流式/思考内容到显示状态
+  - `phase:changed` — 更新当前执行阶段展示
+  - `tool:call` / `tool:result` — 管理工具调用卡片的增删与状态更新
+  - `session:message:saved` — 用持久化消息替换前端临时占位消息
+  - `task:completed` / `task:failed` — 设置终端状态并断开 SSE 连接
+- `cancelExecution()` — 调用 `taskApi.cancelTask()` 后断开连接
 
-    stream.connect();
-  };
-
-  const cancelExecution = async () => {
-    await taskApi.cancelTask(currentTaskId);
-    stream.disconnect();
-  };
-};
-```
+这种设计将 SSE 事件与 React 状态管理（`useState`/`useReducer`）解耦，Hook 层仅负责数据流转，UI 组件通过状态变化驱动渲染。
 
 ### 2.8 可靠性保障
 
@@ -906,6 +748,7 @@ const useChat = ({ agentId, sessionId, ... }) => {
 #### 2.8.3 前端异常处理
 
 `AgentEventStream.handleError()` 在 `EventSource.CLOSED` 时进入指数退避重连流程：
+
 - 退避延迟：`1000 * 2^attempts`，上限 30 秒
 - 最大重试 10 次，超出后分发 `task:failed` 事件
 - 浏览器原生自动重连（`EventSource` 内置）先于前端自定义逻辑生效
@@ -962,22 +805,3 @@ const useChat = ({ agentId, sessionId, ... }) => {
 | 前端指数退避重连 | 未设计 | 已实现 | 最多 10 次，最大延迟 30s |
 | CORS | 未提及 | `app.py` 中配置：`http://localhost:3000` | 仅允许特定前端来源 |
 | chunk_flush_size | 10 | 5 | `app.py` 中硬编码 |
-
----
-
-## 四、实现文件索引
-
-| 层 | 文件 | 说明 |
-|---|------|------|
-| 领域层 | `backend/src/domain/agent_loop/event_types.py` | `AgentEventType` 枚举（31 种事件） |
-| 领域层 | `backend/src/domain/entities/event.py` | `Event` 领域实体 |
-| 领域层 | `backend/src/domain/services/event_emitter.py` | `IEventEmitter` 接口 + `ProxyEventEmitter` |
-| 领域层 | `backend/src/domain/services/event_utils.py` | `normalize_event_type()` |
-| 领域层 | `backend/src/domain/repositories/event_repository.py` | `IEventRepository` 接口 |
-| 应用层 | `backend/src/application/use_cases/stream_event.py` | `StreamEventService`（核心实现） |
-| 应用层 | `backend/src/application/dtos/event_dto.py` | `SSEEventDTO` + `to_sse_event_name()` |
-| 应用层 | `backend/src/application/services/event_mapper.py` | `EventMapper` |
-| 表现层 | `backend/src/presentation/routes/sse_stream.py` | SSE 路由（`event_generator` + `format_sse`） |
-| 表现层 | `backend/src/presentation/app.py` | FastAPI 应用工厂（CORS + event_service 初始化） |
-| 前端 | `frontend/src/domain/entities/events.ts` | 前端事件类型定义 + `SSE_EVENT_TYPES` |
-| 前端 | `frontend/src/infrastructure/api/eventStream.ts` | `AgentEventStream` 客户端 |

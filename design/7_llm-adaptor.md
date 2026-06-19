@@ -314,28 +314,11 @@ def _infer_provider(model: str) -> str:
 
 ### 6. LLMProviderImpl: ILLMProvider 接口实现
 
-```python
-class LLMProviderImpl(ILLMProvider):
-    """委托给 infrastructure/llm/model_factory.py 的 create_chat_model()"""
-    def create_chat_model(self, model=None, temperature=0.7, provider=None) -> BaseChatModel:
-        return _create_chat_model(model=model, temperature=temperature, provider=provider)
-```
-
-纯委托模式，将领域层 SPI 接口桥接到基础设施层的工厂函数。
+`LLMProviderImpl` 实现领域层的 `ILLMProvider` SPI 接口，采用纯委托模式：其 `create_chat_model()` 方法直接委托给基础设施层的 `create_chat_model()` 工厂函数，完成领域层接口到基础设施实现的桥接。
 
 ### 7. LLMErrorHandlerRegistry: 职责链模式错误处理
 
-位于 `domain/interfaces/llm_error_handler.py`:
-
-```python
-class LLMErrorHandlerRegistry:
-    """按注册顺序遍历 handlers，第一个 can_handle() 为 True 的 handler 处理错误"""
-    def handle(self, error, state, context):
-        for handler in self._handlers:
-            if handler.can_handle(error):
-                return handler.handle(error, state, context)
-        raise error  # 都不匹配时 re-raise
-```
+位于 `domain/interfaces/llm_error_handler.py`，采用职责链（Chain of Responsibility）模式：注册一组 `ILLMErrorHandler` 处理器，发生错误时按注册顺序依次询问每个 handler 是否能处理该错误（`can_handle()`），由第一个匹配的 handler 负责处理；若所有 handler 均不匹配，则重新抛出原始错误。
 
 已实现的 handler (位于 `infrastructure/agent/error_handlers/`):
 - `context_limit.py` -- `ContextLimitErrorHandler`: 处理上下文超限错误
@@ -344,31 +327,18 @@ class LLMErrorHandlerRegistry:
 
 ### 8. LLMConfig: 领域值对象
 
-```python
-class LLMProvider(str, Enum):
-    OPENAI = "openai"
-    AZURE_OPENAI = "azure_openai"
-    ANTHROPIC = "anthropic"
-    OLLAMA = "ollama"
-    GROQ = "groq"
-    DEEPSEEK = "deepseek"
-    QWEN = "qwen"
-    ZHIPU = "zhipu"
+`LLMProvider` 是一个字符串枚举，定义了 8 种支持的提供商：OpenAI、Azure OpenAI、Anthropic、Ollama、Groq、DeepSeek、Qwen（通义千问）和 Zhipu（智谱）。
 
-@dataclass(frozen=True)
-class LLMConfig:
-    provider: LLMProvider
-    model: str
-    temperature: float = 0.7
-    max_tokens: Optional[int] = None
-    timeout: int = 60
-    max_retries: int = 3
-    api_base: Optional[str] = None
-    api_key: Optional[str] = None
-    enable_thinking: bool = False      # 深度思考模式
-    thinking_budget: Optional[int] = None  # 思考 token 预算
-    extra: dict[str, Any] = field(default_factory=dict)
-```
+`LLMConfig` 是一个 frozen dataclass，作为领域值对象封装单次 LLM 调用所需的全部配置参数。核心字段包括：
+
+- **provider** / **model**: 指定提供商和模型名称
+- **temperature** / **max_tokens**: 控制生成行为的采样温度与输出长度上限
+- **timeout** / **max_retries**: 调用超时（秒）与重试次数
+- **api_base** / **api_key**: API 端点 URL 与认证密钥，均为可选（可通过环境变量注入）
+- **enable_thinking** / **thinking_budget**: 深度思考（Thinking）模式的开关及 token 预算
+- **extra**: 字典字段，用于传递提供商特定的额外参数（如 DeepSeek 的 `thinking` 配置）
+
+该值对象在模型工厂中由 `LLMSettings` 默认值与环境变量合并构建，然后传递给 `ProviderRegistry` 以匹配合适的适配器。
 
 ### 9. LLMSettings: 全局配置 (Pydantic BaseSettings)
 
