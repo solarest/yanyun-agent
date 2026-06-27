@@ -81,6 +81,23 @@ class SQLiteTaskRepository(ITaskRepository):
         models = result.scalars().all()
         return [self._to_entity(m) for m in models]
 
+    async def get_active_by_session_id(
+        self, session_id: str, agent_id: str
+    ) -> List[Task]:
+        """获取指定 session 下所有活跃任务（状态为 running 或 paused）"""
+        active_statuses = [TaskStatus.RUNNING.value, TaskStatus.PAUSED.value]
+        result = await self.session.execute(
+            select(TaskModel)
+            .where(
+                TaskModel.session_id == session_id,
+                TaskModel.agent_id == agent_id,
+                TaskModel.status.in_(active_statuses),
+            )
+            .order_by(TaskModel.created_at.desc())
+        )
+        models = result.scalars().all()
+        return [self._to_entity(m) for m in models]
+
     def _to_entity(self, model: TaskModel) -> Task:
         """数据库模型转领域实体"""
         return Task(

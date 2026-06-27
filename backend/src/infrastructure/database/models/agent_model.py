@@ -137,6 +137,7 @@ class SessionMessageModel(Base):
     thinking_content = Column(Text, nullable=False, default="")
     tool_calls = Column(JSON, default=[])
     tool_results = Column(JSON, default=[])
+    segments = Column(JSON, default=[])
     status = Column(String(20), nullable=False, default="completed")
     error = Column(Text, nullable=True)
     cost = Column(JSON, default={})

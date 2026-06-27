@@ -126,6 +126,7 @@ class SendMessageUseCase:
                 session_id=session_id,
                 role=SessionMessageRole.USER,
                 content=content,
+                segments=[],
                 status=MessageStatus.COMPLETED,
             )
             user_msg = await self.message_repo.add(user_msg)

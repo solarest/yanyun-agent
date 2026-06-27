@@ -33,3 +33,10 @@ class ITaskRepository(ABC):
     async def list_all(self, limit: int = 100, offset: int = 0) -> List[Task]:
         """获取任务列表"""
         pass
+
+    @abstractmethod
+    async def get_active_by_session_id(
+        self, session_id: str, agent_id: str
+    ) -> List[Task]:
+        """获取指定 session 下所有活跃任务（用于页面刷新后恢复）"""
+        pass

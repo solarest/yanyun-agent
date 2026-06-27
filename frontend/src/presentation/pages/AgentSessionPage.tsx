@@ -67,26 +67,38 @@ export const AgentSessionPage: React.FC = () => {
 
   // 手动触发 SSE 重放
   const handleReplay = useCallback(() => {
-    // 优先使用 currentTaskId，如果没有则从消息列表中获取最后一个 assistant 消息的 task_id
+    // 优先级: currentTaskId > 最后一条 assistant 消息的 task_id > localStorage
     const assistantMessages = messages.filter(m => m.role === 'assistant');
     const lastAssistantMsg = assistantMessages.pop();
-    const taskId = currentTaskId || lastAssistantMsg?.task_id;
-    
+    let taskId = currentTaskId || lastAssistantMsg?.task_id;
+
+    // Fallback: 从 localStorage 读取
+    if (!taskId) {
+      try {
+        const raw = localStorage.getItem('activeTaskState');
+        if (raw) {
+          const state = JSON.parse(raw);
+          if (state.agentId === agentId) {
+            taskId = state.taskId;
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+
     console.log('[AgentSessionPage] Replay debug:', {
-      currentTaskId,
-      assistantMessagesCount: assistantMessages.length,
-      lastAssistantTaskId: lastAssistantMsg?.task_id,
-      finalTaskId: taskId,
-      messagesCount: messages.length
+      currentTaskId, lastAssistantTaskId: lastAssistantMsg?.task_id,
+      finalTaskId: taskId, messagesCount: messages.length,
     });
-    
+
     if (taskId) {
       console.log('[AgentSessionPage] Replaying task:', taskId);
-      replayStream(true, taskId); // forceReplay = true, 传递 taskId
+      replayStream(true, taskId);
     } else {
       console.warn('[AgentSessionPage] No task to replay');
     }
-  }, [currentTaskId, messages, replayStream]);
+  }, [currentTaskId, messages, replayStream, agentId]);
 
   // 初始化：加载 Agent 信息和会话列表
   useEffect(() => {
@@ -98,32 +110,25 @@ export const AgentSessionPage: React.FC = () => {
     fetchSessions();
   }, [agentId, fetchAgent, fetchSessions, navigate]);
 
-  // 检测是否有活动任务需要恢复
+  // 检测活动任务恢复状态 (useChat 内部通过 API + localStorage 自动恢复)
   useEffect(() => {
-    const savedTaskId = sessionStorage.getItem('activeTaskId');
-    const savedSessionId = sessionStorage.getItem('activeSessionId');
-    const timestamp = sessionStorage.getItem('taskStateTimestamp');
-
-    if (savedTaskId && savedSessionId && timestamp) {
-      // 检查是否在5分钟内
-      if (Date.now() - parseInt(timestamp) < 5 * 60 * 1000) {
-        setIsRestoring(true);
-        // 当第一条消息被追加时,认为恢复完成
-        const checkRestored = setInterval(() => {
-          if (messages.length > 0) {
-            setIsRestoring(false);
-            clearInterval(checkRestored);
-          }
-        }, 500);
-        // 最多5秒后自动关闭提示
-        setTimeout(() => {
+    if (isReplaying) {
+      setIsRestoring(true);
+      // 当第一条消息被追加时，认为恢复完成
+      const checkRestored = setInterval(() => {
+        if (messages.length > 0) {
           setIsRestoring(false);
           clearInterval(checkRestored);
-        }, 5000);
-        return () => clearInterval(checkRestored);
-      }
+        }
+      }, 500);
+      // 最多 10 秒后自动关闭提示
+      setTimeout(() => {
+        setIsRestoring(false);
+        clearInterval(checkRestored);
+      }, 10000);
+      return () => clearInterval(checkRestored);
     }
-  }, [messages.length]);
+  }, [isReplaying, messages.length]);
 
   // 创建新会话
   const handleNewSession = useCallback(async () => {
@@ -146,12 +151,31 @@ export const AgentSessionPage: React.FC = () => {
     if (!currentSession) {
       const session = await createSession();
       if (!session) return;
-      // 等待 session 创建完成后发送（useChat 依赖 currentSession）
-      setTimeout(() => sendMessage(content, skillOpts), 50);
+      // 显式传入 session.id，避免等待 currentSession 闭包刷新导致的首条消息丢失
+      sendMessage(content, skillOpts, session.id);
       return;
     }
     sendMessage(content, skillOpts);
   }, [currentSession, createSession, sendMessage, selectedSkillIds]);
+
+  // 自动恢复上次活跃的 session（页面刷新后从 localStorage 读取）
+  useEffect(() => {
+    if (!agentId || sessions.length === 0 || currentSession) return;
+    try {
+      const raw = localStorage.getItem('activeTaskState');
+      if (!raw) return;
+      const state = JSON.parse(raw);
+      if (state.agentId === agentId && state.sessionId) {
+        const targetSession = sessions.find(s => s.id === state.sessionId);
+        if (targetSession) {
+          console.log('[AgentSessionPage] Auto-restoring session:', state.sessionId);
+          handleSelectSession(state.sessionId);
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }, [agentId, sessions, currentSession, handleSelectSession]);
 
   if (!agentId) return null;
 

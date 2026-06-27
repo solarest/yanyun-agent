@@ -50,6 +50,7 @@ class SQLiteSessionMessageRepository(ISessionMessageRepository):
         model.thinking_content = entity.thinking_content
         model.tool_calls = entity.tool_calls
         model.tool_results = entity.tool_results
+        model.segments = entity.segments
         model.status = entity.status.value
         model.error = entity.error
         model.cost = entity.cost
@@ -90,6 +91,7 @@ class SQLiteSessionMessageRepository(ISessionMessageRepository):
             has_thinking=bool(model.thinking_content),
             tool_calls=model.tool_calls or [],
             tool_results=model.tool_results or [],
+            segments=model.segments or [],
             status=MessageStatus(model.status),
             error=model.error,
             cost=model.cost or {},
@@ -106,6 +108,7 @@ class SQLiteSessionMessageRepository(ISessionMessageRepository):
             thinking_content=entity.thinking_content,
             tool_calls=entity.tool_calls,
             tool_results=entity.tool_results,
+            segments=entity.segments,
             status=entity.status.value,
             error=entity.error,
             cost=entity.cost,

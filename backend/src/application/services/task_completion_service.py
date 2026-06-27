@@ -118,20 +118,27 @@ class TaskCompletionService:
             )
 
         # 计算 assistant 正文：
-        # 1. 如果有 clarify 输出，直接使用 clarify 输出（final_result 已包含 clarify 内容，避免重复）
+        # 1. 如果有 clarify 输出，直接使用 clarify 输出
         # 2. 否则用终态输出 (final_result 或 error)
-        # 3. 最后回溯取最后一条非空消息内容
+        # 3. 最后回退到拼接所有 AI 消息内容 (修复多轮 ReAct 正文截断问题)
         if clarify_outputs:
             assistant_content = "\n\n".join(clarify_outputs)
         else:
             assistant_content = (
                 final_result
                 or error
-                or MessageContentService.extract_last_content(result.get("messages", []))
+                or MessageContentService.extract_all_llm_content(result.get("messages", []))
             )
         terminal_result = final_result or assistant_content
 
         thinking_text = result.get("thinking_text", "")
+
+        # 重建时间线 segments（保持与 SSE 流式运行时一致的展示顺序）
+        segments = self._build_segments(
+            result.get("messages", []),
+            thinking_text,
+            all_tool_results,
+        )
 
         assistant_msg: Optional[SessionMessage] = None
         if persist_session_messages:
@@ -144,6 +151,7 @@ class TaskCompletionService:
                 has_thinking=bool(thinking_text),
                 tool_calls=all_tool_calls,
                 tool_results=all_tool_results,
+                segments=segments,
                 status=MessageStatus.ERROR if error else MessageStatus.COMPLETED,
                 error=error,
             )
@@ -207,9 +215,91 @@ class TaskCompletionService:
                 "has_thinking": message.has_thinking,
                 "tool_calls": message.tool_calls,
                 "tool_results": message.tool_results,
+                "segments": message.segments,
                 "status": message.status.value,
                 "error": message.error,
                 "cost": message.cost,
                 "created_at": message.created_at.isoformat(),
             }
         }
+
+    @staticmethod
+    def _build_segments(
+        messages: list,
+        thinking_text: str,
+        all_tool_results: list,
+    ) -> list:
+        """从 LangGraph 消息列表重建时间线 segments。
+
+        按照 SSE 流式运行时的事件顺序重建 segments：
+        thinking → text → tool → text → tool → ...
+
+        跳过 HumanMessage / SystemMessage / ToolMessage（工具结果已通过
+        all_tool_results 关联到对应的 tool_call segment）。
+        """
+        segments: list = []
+
+        # 1. thinking 放在最前面（所有回合的思考内容）
+        if thinking_text:
+            segments.append({"type": "thinking", "content": thinking_text})
+
+        # 2. 按 messages 顺序遍历，交替插入 text + tool segments
+        def _is_ai(msg) -> bool:
+            if isinstance(msg, dict):
+                return bool(msg.get("tool_calls")) or msg.get("role") == "assistant"
+            msg_type = type(msg).__name__
+            return msg_type == "AIMessage"
+
+        def _is_human_or_system(msg) -> bool:
+            if isinstance(msg, dict):
+                return msg.get("role") in ("user", "system", "human")
+            return type(msg).__name__ in ("HumanMessage", "SystemMessage")
+
+        def _is_tool_msg(msg) -> bool:
+            if isinstance(msg, dict):
+                return msg.get("role") == "tool"
+            return type(msg).__name__ in ("ToolMessage", "FunctionMessage")
+
+        for msg in messages:
+            if _is_tool_msg(msg) or _is_human_or_system(msg):
+                continue
+
+            if _is_ai(msg):
+                # 提取 content
+                if isinstance(msg, dict):
+                    content = msg.get("content", "") or ""
+                    tool_calls = msg.get("tool_calls") or []
+                else:
+                    content = getattr(msg, "content", "") or ""
+                    tool_calls = getattr(msg, "tool_calls", None) or []
+
+                if content and isinstance(content, str) and content.strip():
+                    segments.append({"type": "text", "content": content.strip()})
+
+                for tc in tool_calls:
+                    tc_dict = tc if isinstance(tc, dict) else {
+                        "id": getattr(tc, "id", ""),
+                        "name": getattr(tc, "name", ""),
+                        "args": getattr(tc, "args", {}) or {},
+                    }
+                    tc_id = tc_dict.get("id", "")
+                    tc_name = tc_dict.get("name", "")
+                    tc_args = tc_dict.get("args", {})
+
+                    # 查找匹配的 tool result
+                    matched = None
+                    for tr in all_tool_results:
+                        if tr.get("id") == tc_id:
+                            matched = tr
+                            break
+
+                    segments.append({
+                        "type": "tool",
+                        "content": tc_name,
+                        "toolInput": tc_args,
+                        "toolCallId": tc_id,
+                        "toolStatus": matched["status"] if matched else "success",
+                        "toolResult": matched["result"] if matched else "",
+                    })
+
+        return segments

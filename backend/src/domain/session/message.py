@@ -37,6 +37,7 @@ class SessionMessage(Entity):
     has_thinking: bool = False
     tool_calls: List[Dict[str, Any]] = field(default_factory=list)
     tool_results: List[Dict[str, Any]] = field(default_factory=list)
+    segments: List[Dict[str, Any]] = field(default_factory=list)
     status: MessageStatus = MessageStatus.COMPLETED
     error: Optional[str] = None
     cost: Dict[str, Any] = field(default_factory=dict)

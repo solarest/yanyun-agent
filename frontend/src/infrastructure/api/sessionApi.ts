@@ -3,6 +3,7 @@
  */
 import { apiClient } from './client';
 import type {
+  ActiveTasksResponse,
   CreateSessionRequest,
   SendMessageRequest,
   SendMessageResponse,
@@ -78,6 +79,19 @@ export const sessionApi = {
     const response = await apiClient.post<SendMessageResponse>(
       `/agents/${agentId}/sessions/${sessionId}/messages`,
       request,
+    );
+    return response.data;
+  },
+
+  /**
+   * 获取会话下的活跃任务（用于页面刷新后恢复 SSE 连接）
+   */
+  getActiveTasks: async (
+    agentId: string,
+    sessionId: string,
+  ): Promise<ActiveTasksResponse> => {
+    const response = await apiClient.get<ActiveTasksResponse>(
+      `/agents/${agentId}/sessions/${sessionId}/active-tasks`,
     );
     return response.data;
   },

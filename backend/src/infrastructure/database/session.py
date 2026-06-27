@@ -142,6 +142,11 @@ def init_db():
         column="thinking_content",
         column_def="TEXT NOT NULL DEFAULT ''",
     )
+    _ensure_column(
+        table="session_messages",
+        column="segments",
+        column_def="JSON DEFAULT '[]'",
+    )
 
 
 def _ensure_column(table: str, column: str, column_def: str) -> None:

@@ -3,6 +3,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from src.application.dtos.session_dto import (
+    ActiveTaskDTO,
+    ActiveTasksResponseDTO,
     CreateSessionDTO,
     SendMessageDTO,
     SendMessageResponseDTO,
@@ -20,11 +22,13 @@ from src.domain.repositories.session_message_repository import (
     ISessionMessageRepository,
 )
 from src.domain.repositories.session_repository import ISessionRepository
+from src.domain.repositories.task_repository import ITaskRepository
 from src.presentation.dependencies import (
     get_agent_repository,
     get_session_message_repository,
     get_session_repository,
     get_send_message_use_case,
+    get_task_repository,
 )
 
 router = APIRouter(prefix="/api/agents/{agent_id}/sessions", tags=["sessions"])
@@ -54,6 +58,7 @@ def _to_message_response(msg: SessionMessage) -> SessionMessageResponseDTO:
         has_thinking=msg.has_thinking,
         tool_calls=msg.tool_calls,
         tool_results=msg.tool_results,
+        segments=msg.segments,
         status=msg.status.value,
         error=msg.error,
         cost=msg.cost,
@@ -135,6 +140,42 @@ async def get_session(
     return SessionDetailResponseDTO(
         session=_to_session_response(session),
         messages=[_to_message_response(m) for m in messages],
+    )
+
+
+@router.get(
+    "/{session_id}/active-tasks",
+    response_model=ActiveTasksResponseDTO,
+    summary="获取会话下的活跃任务",
+)
+async def get_active_tasks(
+    agent_id: str,
+    session_id: str,
+    session_repo: ISessionRepository = Depends(get_session_repository),
+    task_repo: ITaskRepository = Depends(get_task_repository),
+):
+    """获取当前 session 下所有活跃任务（running/paused 状态）。
+
+    用于页面刷新后恢复 SSE 连接，不再依赖前端 sessionStorage。
+    """
+    session = await session_repo.get_by_id(session_id)
+    if not session or session.agent_id != agent_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": {"code": "SESSION_NOT_FOUND"}},
+        )
+
+    tasks = await task_repo.get_active_by_session_id(session_id, agent_id)
+    return ActiveTasksResponseDTO(
+        tasks=[
+            ActiveTaskDTO(
+                task_id=t.id,
+                status=t.status.value,
+                message=t.message[:200] if t.message else "",
+                created_at=t.created_at.isoformat(),
+            )
+            for t in tasks
+        ]
     )
 
 

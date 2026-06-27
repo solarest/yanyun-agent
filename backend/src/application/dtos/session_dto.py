@@ -57,6 +57,7 @@ class SessionMessageResponseDTO(BaseModel):
     has_thinking: bool = False
     tool_calls: List[Dict[str, Any]] = []
     tool_results: List[Dict[str, Any]] = []
+    segments: List[Dict[str, Any]] = []
     status: str
     error: Optional[str] = None
     cost: Dict[str, Any] = {}
@@ -82,3 +83,18 @@ class SessionListResponseDTO(BaseModel):
 
     data: List[SessionResponseDTO]
     total: int
+
+
+class ActiveTaskDTO(BaseModel):
+    """活跃任务摘要（用于页面刷新后恢复 SSE 连接）"""
+
+    task_id: str
+    status: str
+    message: str
+    created_at: str
+
+
+class ActiveTasksResponseDTO(BaseModel):
+    """活跃任务列表响应"""
+
+    tasks: List[ActiveTaskDTO]

@@ -108,3 +108,14 @@ export interface SendMessageResponse {
   user_message: SessionMessage;
   task_id: string;
 }
+
+export interface ActiveTask {
+  task_id: string;
+  status: string;
+  message: string;
+  created_at: string;
+}
+
+export interface ActiveTasksResponse {
+  tasks: ActiveTask[];
+}
