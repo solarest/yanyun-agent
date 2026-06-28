@@ -108,11 +108,11 @@ export const useTeamManagement = () => {
   }, [currentTeam]);
 
   const executeTeam = useCallback(
-    async (teamId: string, goal: string, model?: string): Promise<ExecuteTeamResponse | null> => {
+    async (teamId: string, goal: string, model?: string, sessionId?: string): Promise<ExecuteTeamResponse | null> => {
       setIsLoading(true);
       setError(null);
       try {
-        const result = await teamApi.execute(teamId, { goal, model });
+        const result = await teamApi.execute(teamId, { goal, model, session_id: sessionId });
         return result;
       } catch (err) {
         setError(extractErrorMessage(err, '执行 Team 失败'));

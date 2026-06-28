@@ -54,11 +54,13 @@ export interface ExecuteTeamRequest {
   model?: string;
   max_turns?: number;
   workspace?: string;
+  session_id?: string;
 }
 
 export interface ExecuteTeamResponse {
   team_id: string;
   execution_id: string;
+  session_id: string;
   workspace: string;
   status: string;
   message: string;

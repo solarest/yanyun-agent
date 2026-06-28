@@ -18,6 +18,11 @@ from src.domain.team.values import TeamRole, TeamStatus
 from src.domain.team.orchestrator import TeamOrchestrator
 from src.domain.agent.repository import IAgentRepository
 from src.domain.aggregates.task.task import Task, TaskConfig, TaskStatus
+from src.domain.aggregates.session.session_message import (
+    SessionMessage,
+    SessionMessageRole,
+    MessageStatus,
+)
 from src.domain.repositories.task_repository import ITaskRepository
 from src.domain.repositories.session_repository import ISessionRepository
 from src.domain.repositories.session_message_repository import ISessionMessageRepository
@@ -171,6 +176,21 @@ class TeamExecutionUseCase:
                 logger.warning("Failed to emit team:execution:started event",
                                exc_info=True)
 
+        # 7b. 持久化用户消息（goal）以支持澄清链路的上下文连续性
+        # 参照 SendMessageUseCase：在启动 runner 前保存 USER 消息，使后续轮次
+        # （如用户回复澄清）能通过 list_by_session 加载到完整历史。
+        # Member 的任务消息由 assign_team_task 在其各自 session 中持久化。
+        await self._message_repo.add(
+            SessionMessage(
+                session_id=leader_task.session_id,
+                task_id=leader_task.id,
+                role=SessionMessageRole.USER,
+                content=goal,
+                segments=[],
+                status=MessageStatus.COMPLETED,
+            )
+        )
+
         # 8. 启动 leader AgentLoopRunner
         try:
             loop_runner = self._get_loop_runner()
@@ -188,7 +208,8 @@ class TeamExecutionUseCase:
                 team_message_bus=message_bus,
                 team_context=leader_context,
                 leader_agent_id=leader_member.agent_id,
-                persist_session_messages=False,
+                # 持久化 leader 会话消息（含澄清提问）以支持澄清链路上下文连续性
+                persist_session_messages=True,
             )
 
             # 9. 等待 leader 完成（member 由 assign_team_task 工具同步执行）

@@ -13,6 +13,7 @@ import { useTeamManagement } from '@application/services/useTeamManagement';
 import { AgentEventStream } from '@infrastructure/api/eventStream';
 import { ToolCallGroup } from '@presentation/components/chat/ToolCallGroup';
 import { ThinkingBlock } from '@presentation/components/chat/ThinkingBlock';
+import { MultiClarifyCard } from '@presentation/components/chat/MultiClarifyCard';
 import type { TeamMember } from '@domain/entities/team';
 
 // ═══════════════════════════════════════════════════════
@@ -43,9 +44,10 @@ interface ToolTimelineItem {
 
 /** buildTimeline 渲染项 */
 interface TimelineRenderItem {
-  type: 'thinking' | 'text' | 'tool_group' | 'system';
+  type: 'thinking' | 'text' | 'tool_group' | 'system' | 'clarify';
   content?: string;
   tools?: ToolTimelineItem[];
+  toolCallId?: string;
 }
 
 interface MemberRunState {
@@ -72,18 +74,23 @@ function buildTimeline(segments: TimelineSegment[]): TimelineRenderItem[] {
     if (seg.type === 'system') {
       items.push({ type: 'system', content: seg.content });
     } else if (seg.type === 'tool') {
-      const last = items[items.length - 1];
-      const tool: ToolTimelineItem = {
-        key: seg.toolCallId || nextSid(),
-        name: seg.content || seg.toolName || '',
-        status: seg.toolStatus || 'running',
-        result: seg.toolResult,
-        input: seg.toolInput,
-      };
-      if (last?.type === 'tool_group') {
-        last.tools!.push(tool);
+      // clarify 工具：用 chat 的 MultiClarifyCard 渲染为交互框（而非普通工具卡片）
+      if (seg.toolName === 'clarify' && seg.toolResult) {
+        items.push({ type: 'clarify', content: seg.toolResult, toolCallId: seg.toolCallId });
       } else {
-        items.push({ type: 'tool_group', tools: [tool] });
+        const last = items[items.length - 1];
+        const tool: ToolTimelineItem = {
+          key: seg.toolCallId || nextSid(),
+          name: seg.content || seg.toolName || '',
+          status: seg.toolStatus || 'running',
+          result: seg.toolResult,
+          input: seg.toolInput,
+        };
+        if (last?.type === 'tool_group') {
+          last.tools!.push(tool);
+        } else {
+          items.push({ type: 'tool_group', tools: [tool] });
+        }
       }
     } else if (seg.type === 'thinking') {
       const last = items[items.length - 1];
@@ -137,7 +144,12 @@ function partitionItems(items: TimelineRenderItem[]): Array<{ type: 'system'; co
 }
 
 /** 时间线 — 以 system 消息为界分组，每组非 system 段共享一个 card（与 chat 一致） */
-const TimelineBubble: React.FC<{ items: TimelineRenderItem[]; isStreaming: boolean }> = ({ items, isStreaming }) => {
+const TimelineBubble: React.FC<{
+  items: TimelineRenderItem[];
+  isStreaming: boolean;
+  activeClarifyId?: string | null;
+  onClarifyAnswer?: (answer: string) => void;
+}> = ({ items, isStreaming, activeClarifyId, onClarifyAnswer }) => {
   if (items.length === 0) {
     return isStreaming ? (
       <div className="rounded-2xl border border-border/50 bg-card px-4 py-3">
@@ -162,6 +174,19 @@ const TimelineBubble: React.FC<{ items: TimelineRenderItem[]; isStreaming: boole
               }
               if (item.type === 'tool_group') {
                 return <ToolCallGroup key={`g-${idx}`} items={item.tools!} isStreaming={isStreaming} />;
+              }
+              if (item.type === 'clarify') {
+                // 复用 chat 的 MultiClarifyCard：仅末尾未回复的澄清框可交互，其余置为已回复
+                const isActive = !!onClarifyAnswer && !!item.toolCallId && item.toolCallId === activeClarifyId;
+                return (
+                  <MultiClarifyCard
+                    key={`cl-${item.toolCallId || idx}`}
+                    content={item.content || ''}
+                    submitted={!isActive}
+                    disabled={!isActive}
+                    onAnswer={isActive ? (answers: string[]) => onClarifyAnswer?.(answers.join('\n')) : undefined}
+                  />
+                );
               }
               if (item.type === 'text') {
                 return (
@@ -222,6 +247,11 @@ export const TeamExecutionPage: React.FC = () => {
   const logsEndRef = useRef<HTMLDivElement>(null);
   const followUpRef = useRef('');
   const runningRef = useRef(false);
+  // 当前 leader 会话 ID：首次执行从响应中获取，追问时回传以保持澄清链路上下文连续
+  const leaderSessionIdRef = useRef<string | null>(null);
+  // 当前活跃的澄清 toolCallId：仅末尾未回复的澄清框可交互，回复/新执行时清空
+  const [activeClarifyId, setActiveClarifyId] = useState<string | null>(null);
+  const activeClarifyIdRef = useRef<string | null>(null);
 
   useEffect(() => { if (id) fetchTeam(id); }, [id, fetchTeam]);
   useEffect(() => {
@@ -250,6 +280,9 @@ export const TeamExecutionPage: React.FC = () => {
   const members: TeamMember[] = currentTeam?.members ?? [];
   const leader = members.find((m) => m.role === 'leader');
   const regularMembers = members.filter((m) => m.role === 'member');
+  // ref 镜像：SSE handler（含恢复重连）需读取最新的成员列表，避免闭包 stale
+  const regularMembersRef = useRef(regularMembers);
+  regularMembersRef.current = regularMembers;
 
   const allTabs = [
     { key: 'leader', label: leader?.agent_name || 'Leader', agentId: leader?.agent_id || '', role: 'leader' as const },
@@ -393,28 +426,27 @@ export const TeamExecutionPage: React.FC = () => {
     stream.connect();
   }, [pushMemberSegment, appendMemberThinking, appendMemberText, addMemberSystem]);
 
-  // ── Execute ──
-  const handleExecute = async () => {
-    if (!goal.trim() || !id) return;
-    setRunState('running'); setIsStreamingLeader(true);
-    setLeaderSegments([]); setMemberStates(new Map());
-    setFinalResult(''); runningRef.current = false;
+  // ── localStorage 持久化活跃执行（复用 chat 的刷新恢复模式）──
+  const TEAM_EXEC_KEY = 'activeTeamExecution';
 
-    const leaderName = leader?.agent_name || 'Leader';
-    setLeaderSegments([{ type: 'system', content: `开始执行: ${goal}` }]);
+  const saveActiveExecution = useCallback((executionId: string, sessionId: string) => {
+    if (!id) return;
+    try {
+      localStorage.setItem(TEAM_EXEC_KEY, JSON.stringify({
+        teamId: id, executionId, sessionId, timestamp: Date.now(),
+      }));
+    } catch { /* ignore */ }
+  }, [id]);
 
-    const result = await executeTeam(id, goal.trim());
-    if (!result) { setRunState('failed'); setIsStreamingLeader(false); addLeaderSystem('❌ 执行启动失败'); return; }
+  const clearActiveExecution = useCallback(() => {
+    try { localStorage.removeItem(TEAM_EXEC_KEY); } catch { /* ignore */ }
+  }, []);
 
-    const execId = result.execution_id;
-    setExecutionId(execId);
-    if (result.workspace) setWorkspace(result.workspace);
-    addLeaderSystem(`执行 ID: ${execId}`);
-
-    streamRef.current?.disconnect();
-    const ls = new AgentEventStream('', execId);
-    streamRef.current = ls;
-
+  /**
+   * 绑定 leader SSE 事件处理器。handleExecute / handleFollowUp / 刷新恢复共用同一套
+   * 事件处理 → 运行时与刷新后恢复的时序渲染完全一致（后端 SSE 在全新连接时重放全部事件）。
+   */
+  const bindLeaderStream = useCallback((ls: AgentEventStream, ctx: { execId: string; followUpGoal: string | null }) => {
     ls.on('tool:call', (p: any) => pushLeaderSegment({ type: 'tool', content: p.toolName || '', toolCallId: p.toolCallId, toolName: p.toolName, toolStatus: 'running', toolInput: p.input || {} }));
     ls.on('tool:result', (p: any) => {
       setLeaderSegments((prev) => {
@@ -427,12 +459,17 @@ export const TeamExecutionPage: React.FC = () => {
         }
         return segs;
       });
+      // clarify 工具：标记为活跃澄清框，等待用户在框内回复（而非作为"最终结果"）
+      if (p.toolName === 'clarify' && p.status !== 'error') {
+        activeClarifyIdRef.current = p.toolCallId || null;
+        setActiveClarifyId(p.toolCallId || null);
+      }
     });
     ls.on('thinking:chunk', (p: any) => { if (p.text) appendLeaderThinking(p.text); });
     ls.on('llm:chunk', (p: any) => { if (p.text) appendLeaderText(p.text); });
 
     ls.on('team:task:assigned', (p: any) => {
-      const mName = regularMembers.find((m) => m.agent_id === p.agent_id)?.agent_name || p.agent_id;
+      const mName = regularMembersRef.current.find((m) => m.agent_id === p.agent_id)?.agent_name || p.agent_id;
       addLeaderSystem(`📤 分配任务给 ${mName}:\n${p.description || ''}`);
       setMemberStates((prev) => {
         const next = new Map(prev);
@@ -442,7 +479,7 @@ export const TeamExecutionPage: React.FC = () => {
       if (p.task_id) bindMemberStream(p.agent_id, p.task_id, mName);
     });
     ls.on('team:task:reported', (p: any) => {
-      const mName = regularMembers.find((m) => m.agent_id === p.agent_id)?.agent_name || p.agent_id;
+      const mName = regularMembersRef.current.find((m) => m.agent_id === p.agent_id)?.agent_name || p.agent_id;
       addLeaderSystem(`${p.status === 'completed' ? '✅' : '❌'} ${mName} 完成`);
       setMemberStates((prev) => { const next = new Map(prev); const e = next.get(p.agent_id); if (e) next.set(p.agent_id, { ...e, status: 'done', result: p.result }); return next; });
     });
@@ -450,69 +487,113 @@ export const TeamExecutionPage: React.FC = () => {
     ls.on('task:completed', () => { addLeaderSystem('✅ Leader 执行完成'); });
 
     ls.on('team:execution:completed', (p: any) => {
-      setIsStreamingLeader(false); setIsFollowUpRunning(false);
-      addLeaderSystem('🎉 团队执行完成!');
-      setFinalResult(p.result || ''); setFinalResultExpanded(true); setRunState('completed');
-      setSidebarOpen(true);
+      runningRef.current = false; setIsStreamingLeader(false); setIsFollowUpRunning(false);
+      if (activeClarifyIdRef.current) {
+        // 澄清链路：不作为"最终结果"展示，保留澄清框与 localStorage 以便刷新后恢复
+        addLeaderSystem('💬 需要补充信息，请在上方澄清框中回复');
+        setRunState('completed');
+      } else {
+        addLeaderSystem(ctx.followUpGoal ? '🎉 追问执行完成!' : '🎉 团队执行完成!');
+        setFinalResult(p.result || ''); setFinalResultExpanded(true); setRunState('completed');
+        setSidebarOpen(true);
+        clearActiveExecution(); // 真正完成 → 清除恢复态
+      }
     });
     ls.on('team:execution:failed', (p: any) => {
-      setIsStreamingLeader(false); setIsFollowUpRunning(false);
+      runningRef.current = false; setIsStreamingLeader(false); setIsFollowUpRunning(false);
       addLeaderSystem(`❌ 执行失败: ${p.error}`); setRunState('failed');
+      clearActiveExecution();
     });
+  }, [pushLeaderSegment, appendLeaderThinking, appendLeaderText, addLeaderSystem, bindMemberStream, clearActiveExecution]);
+
+  // ── 刷新恢复：复用 chat 的 localStorage + SSE replay 模式 ──
+  // 后端 SSE 在全新连接时重放该 task 的全部事件，故重连后用同一套 handler 重建 timeline，
+  // 与运行时渲染完全一致；澄清等待中（未 clearActiveExecution）也会恢复澄清框。
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (!id) return;
+    let entry: { teamId?: string; executionId?: string; sessionId?: string; timestamp?: number } | null = null;
+    try {
+      const raw = localStorage.getItem(TEAM_EXEC_KEY);
+      if (raw) entry = JSON.parse(raw);
+    } catch { /* ignore */ }
+    if (!entry || entry.teamId !== id) return;
+    // 超过 30min 视为陈旧，不恢复
+    if (Date.now() - (entry.timestamp || 0) > 30 * 60 * 1000) { clearActiveExecution(); return; }
+    // 首次恢复：设置运行状态与系统提示（StrictMode remount 时不重复设置，避免重复消息）
+    if (!restoredRef.current) {
+      restoredRef.current = true;
+      setRunState('running'); setIsStreamingLeader(true);
+      setExecutionId(entry.executionId!);
+      leaderSessionIdRef.current = entry.sessionId || entry.executionId!;
+      addLeaderSystem('🔄 恢复上次执行...');
+    }
+    // 每次挂载都（重）连 SSE 流：StrictMode 卸载会断开流，remount 需重连；
+    // 后端在全新连接时重放该 task 全部事件，故用同一套 handler 重建 timeline（与运行时一致）。
+    streamRef.current?.disconnect();
+    const ls = new AgentEventStream('', entry.executionId!);
+    streamRef.current = ls;
+    ls.enableReplayMode();
+    bindLeaderStream(ls, { execId: entry.executionId!, followUpGoal: null });
+    ls.connect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
+  // ── Execute ──
+  const handleExecute = async () => {
+    if (!goal.trim() || !id) return;
+    setRunState('running'); setIsStreamingLeader(true);
+    setLeaderSegments([]); setMemberStates(new Map());
+    setFinalResult(''); runningRef.current = false;
+    activeClarifyIdRef.current = null; setActiveClarifyId(null);
+
+    const leaderName = leader?.agent_name || 'Leader';
+    setLeaderSegments([{ type: 'system', content: `开始执行: ${goal}` }]);
+
+    const result = await executeTeam(id, goal.trim());
+    if (!result) { setRunState('failed'); setIsStreamingLeader(false); addLeaderSystem('❌ 执行启动失败'); return; }
+
+    const execId = result.execution_id;
+    setExecutionId(execId);
+    leaderSessionIdRef.current = result.session_id || execId;
+    if (result.workspace) setWorkspace(result.workspace);
+    addLeaderSystem(`执行 ID: ${execId}`);
+
+    saveActiveExecution(execId, result.session_id || execId);
+    streamRef.current?.disconnect();
+    const ls = new AgentEventStream('', execId);
+    streamRef.current = ls;
+    bindLeaderStream(ls, { execId, followUpGoal: null });
     ls.connect();
   };
 
   // ── Follow-up ──
-  const handleFollowUp = useCallback(async () => {
-    const q = followUpRef.current.trim();
+  const handleFollowUp = useCallback(async (answer?: string) => {
+    const q = (answer ?? followUpRef.current).trim();
     if (!q || !id || runningRef.current) return;
     runningRef.current = true; setFollowUpInput(''); followUpRef.current = '';
+    activeClarifyIdRef.current = null; setActiveClarifyId(null);
     setIsFollowUpRunning(true); setRunState('running'); setIsStreamingLeader(true);
     addLeaderSystem(`💬 追问: ${q}`);
 
-    const result = await executeTeam(id, q);
+    const result = await executeTeam(id, q, undefined, leaderSessionIdRef.current || undefined);
     if (!result) { runningRef.current = false; setIsFollowUpRunning(false); setRunState('failed'); addLeaderSystem('❌ 追问执行失败'); return; }
 
     const execId = result.execution_id; setExecutionId(execId); if (result.workspace) setWorkspace(result.workspace);
+    saveActiveExecution(execId, result.session_id || leaderSessionIdRef.current || execId);
     streamRef.current?.disconnect();
     const ls = new AgentEventStream('', execId);
     streamRef.current = ls;
-
-    ls.on('tool:call', (p: any) => pushLeaderSegment({ type: 'tool', content: p.toolName || '', toolCallId: p.toolCallId, toolName: p.toolName, toolStatus: 'running', toolInput: p.input || {} }));
-    ls.on('tool:result', (p: any) => {
-      setLeaderSegments((prev) => {
-        const segs = [...prev];
-        for (let i = segs.length - 1; i >= 0; i--) {
-          if (segs[i].type === 'tool' && segs[i].toolStatus === 'running' && (!p.toolCallId || segs[i].toolCallId === p.toolCallId)) {
-            segs[i] = { ...segs[i], toolStatus: p.status === 'success' ? 'success' : 'error', toolResult: (p.output || '').slice(0, 3000) };
-            break;
-          }
-        }
-        return segs;
-      });
-    });
-    ls.on('thinking:chunk', (p: any) => { if (p.text) appendLeaderThinking(p.text); });
-    ls.on('llm:chunk', (p: any) => { if (p.text) appendLeaderText(p.text); });
-    ls.on('team:task:assigned', (p: any) => {
-      const mName = regularMembers.find((m) => m.agent_id === p.agent_id)?.agent_name || p.agent_id;
-      addLeaderSystem(`📤 分配任务给 ${mName}:\n${p.description || ''}`);
-      if (p.task_id) bindMemberStream(p.agent_id, p.task_id, mName);
-    });
-    ls.on('team:task:reported', (p: any) => { addLeaderSystem(`${p.status === 'completed' ? '✅' : '❌'} ${regularMembers.find((m) => m.agent_id === p.agent_id)?.agent_name || p.agent_id} 完成`); });
-    ls.on('team:task:updated', (p: any) => { addLeaderSystem(`📋 任务列表更新 — ${p.task_count} 项`); });
-    ls.on('task:completed', () => { addLeaderSystem('✅ Leader 执行完成'); });
-    ls.on('team:execution:completed', (p: any) => {
-      runningRef.current = false; setIsStreamingLeader(false); setIsFollowUpRunning(false);
-      addLeaderSystem('🎉 追问执行完成!');
-      setFinalResult(p.result || ''); setFinalResultExpanded(true); setRunState('completed');
-      setSidebarResults((prev) => [...prev, { goal: q, result: p.result || '', id: execId }]);
-    });
-    ls.on('team:execution:failed', (p: any) => {
-      runningRef.current = false; setIsStreamingLeader(false); setIsFollowUpRunning(false);
-      addLeaderSystem(`❌ 追问失败: ${p.error}`); setRunState('failed');
-    });
+    bindLeaderStream(ls, { execId, followUpGoal: q });
     ls.connect();
-  }, [id, leader, executeTeam, pushLeaderSegment, appendLeaderThinking, appendLeaderText, addLeaderSystem, regularMembers, bindMemberStream]);
+  }, [id, executeTeam, addLeaderSystem, saveActiveExecution, bindLeaderStream]);
+
+  // 澄清框回复：复用追问链路（带 session_id），清空活跃澄清标记使该框转为已回复态
+  const handleClarifyAnswer = useCallback((answer: string) => {
+    activeClarifyIdRef.current = null;
+    setActiveClarifyId(null);
+    handleFollowUp(answer);
+  }, [handleFollowUp]);
 
   // ── Render ──
   const timelineItems = useMemo(() => buildTimeline(currentSegments), [currentSegments]);
@@ -572,7 +653,12 @@ export const TeamExecutionPage: React.FC = () => {
                   {timelineItems.length === 0 && !showStreaming && (
                     <div className="py-20 text-center text-muted-foreground/50"><p className="text-sm">等待执行开始...</p></div>
                   )}
-                  <TimelineBubble items={timelineItems} isStreaming={showStreaming} />
+                  <TimelineBubble
+                    items={timelineItems}
+                    isStreaming={showStreaming}
+                    activeClarifyId={activeTab === 'leader' ? activeClarifyId : undefined}
+                    onClarifyAnswer={activeTab === 'leader' ? handleClarifyAnswer : undefined}
+                  />
                   <div ref={logsEndRef} />
                 </div>
               </div>
@@ -614,7 +700,7 @@ export const TeamExecutionPage: React.FC = () => {
           <div className="border-t bg-card px-4 py-3">
             <div className="mx-auto flex max-w-3xl items-end gap-3">
               <textarea className="flex-1 resize-none rounded-xl border border-border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground/50 focus:border-primary/30 focus:outline-none focus:ring-0" rows={1} placeholder="继续追问..." value={followUpInput} disabled={isFollowUpRunning || runState === 'running'} onChange={(e) => { followUpRef.current = e.target.value; setFollowUpInput(e.target.value); e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px'; }} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleFollowUp(); }}} />
-              <button type="button" className="btn btn-primary shrink-0 text-sm" disabled={!followUpInput.trim() || isFollowUpRunning || runState === 'running'} onClick={handleFollowUp}>{isFollowUpRunning ? '执行中...' : '发送'}</button>
+              <button type="button" className="btn btn-primary shrink-0 text-sm" disabled={!followUpInput.trim() || isFollowUpRunning || runState === 'running'} onClick={() => handleFollowUp()}>{isFollowUpRunning ? '执行中...' : '发送'}</button>
             </div>
           </div>
         </>

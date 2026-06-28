@@ -207,7 +207,7 @@ class AgentLoopRunner:
                 # Sub-agent 只接收本次原子任务，不继承父 session 历史
                 messages = [HumanMessage(content=content)]
             elif team_mode:
-                # Team mode (leader + member): 从自有 session 加载历史 + 追加本次任务
+                # Team mode (leader + member): 从自有 session 加载历史
                 if self.prompt_context:
                     history_messages = await self.message_repo.list_by_session(
                         session_id, limit=100
@@ -223,10 +223,14 @@ class AgentLoopRunner:
                         max_tokens=initial_history_budget,
                     )
                     messages = LangChainAdapter.dict_messages_to_langchain(api_messages)
-                    # 追加本次任务/用户消息
-                    messages.append(HumanMessage(content=content))
                 else:
                     messages = await self._load_history_fallback(session_id)
+                # 追加本次用户消息：
+                # - member 通过 content 接收任务（assign_team_task 未将其持久化为
+                #   user 消息），需 append 才能让 LLM 看到本次任务；
+                # - leader 已由 TeamExecutionUseCase 在启动前持久化 user 消息，历史
+                #   已包含本次输入，不再追加以免重复（重复会让澄清回复出现两次）。
+                if team_role != "leader":
                     messages.append(HumanMessage(content=content))
             elif self.prompt_context:
                 # 使用 PromptContextInterface 进行 Token 预算管理 + 裁剪
