@@ -17,6 +17,7 @@ from src.domain.aggregates.agent.agent_state import AgentState
 from src.domain.aggregates.agent.state_groups import ToolFields
 from src.domain.entities.event_types import AgentEventType
 from src.domain.entities.tool import ToolContext
+from src.domain.services.tool_output_limits import truncate_tool_output
 from src.infrastructure.agent.nodes.base_node import BaseNode, NodeContext
 from src.infrastructure.tools.confirmation.contract import (
     BYPASS_CONFIRMATION_KEY,
@@ -110,7 +111,7 @@ async def _execute_single_tool(
                 "toolCallId": tool_call_id,
                 "toolName": tool_name,
                 "status": status,
-                "output": result.output,
+                "output": truncate_tool_output(result.output),
                 "metadata": metadata,
             },
         )

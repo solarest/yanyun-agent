@@ -23,6 +23,7 @@ from src.domain.repositories.session_repository import ISessionRepository
 from src.domain.repositories.task_repository import ITaskRepository
 from src.domain.services import IEventEmitter
 from src.domain.services.message_content import MessageContentService
+from src.domain.services.tool_output_limits import truncate_tool_output
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +114,7 @@ class TaskCompletionService:
                     "tool_name": tool_result.get("tool_name", ""),
                     "id": tool_call_id,
                     "status": tool_result.get("status", "success"),
-                    "result": output,
+                    "result": truncate_tool_output(output),
                 }
             )
 
@@ -224,6 +225,39 @@ class TaskCompletionService:
         }
 
     @staticmethod
+    def _get_message_kind(msg) -> str:
+        """将 LangGraph 消息统一分类为消息类型。
+
+        返回: "ai" | "human" | "system" | "tool" | "unknown"
+
+        同时支持 dict 格式和 LangChain Message 对象格式。
+        """
+        # ── dict 格式 ──
+        if isinstance(msg, dict):
+            role = msg.get("role", "")
+            if msg.get("tool_calls") or role == "assistant":
+                return "ai"
+            if role == "user" or role == "human":
+                return "human"
+            if role == "system":
+                return "system"
+            if role == "tool":
+                return "tool"
+            return "unknown"
+
+        # ── LangChain Message 对象 ──
+        msg_type = type(msg).__name__
+        if msg_type in ("AIMessage", "AIMessageChunk"):
+            return "ai"
+        if msg_type == "HumanMessage":
+            return "human"
+        if msg_type == "SystemMessage":
+            return "system"
+        if msg_type in ("ToolMessage", "FunctionMessage"):
+            return "tool"
+        return "unknown"
+
+    @staticmethod
     def _build_segments(
         messages: list,
         thinking_text: str,
@@ -244,62 +278,54 @@ class TaskCompletionService:
             segments.append({"type": "thinking", "content": thinking_text})
 
         # 2. 按 messages 顺序遍历，交替插入 text + tool segments
-        def _is_ai(msg) -> bool:
-            if isinstance(msg, dict):
-                return bool(msg.get("tool_calls")) or msg.get("role") == "assistant"
-            msg_type = type(msg).__name__
-            return msg_type == "AIMessage"
-
-        def _is_human_or_system(msg) -> bool:
-            if isinstance(msg, dict):
-                return msg.get("role") in ("user", "system", "human")
-            return type(msg).__name__ in ("HumanMessage", "SystemMessage")
-
-        def _is_tool_msg(msg) -> bool:
-            if isinstance(msg, dict):
-                return msg.get("role") == "tool"
-            return type(msg).__name__ in ("ToolMessage", "FunctionMessage")
-
         for msg in messages:
-            if _is_tool_msg(msg) or _is_human_or_system(msg):
+            kind = TaskCompletionService._get_message_kind(msg)
+            if kind in ("human", "system", "tool", "unknown"):
                 continue
 
-            if _is_ai(msg):
-                # 提取 content
-                if isinstance(msg, dict):
-                    content = msg.get("content", "") or ""
-                    tool_calls = msg.get("tool_calls") or []
-                else:
-                    content = getattr(msg, "content", "") or ""
-                    tool_calls = getattr(msg, "tool_calls", None) or []
+            # AI message: extract content and tool_calls
+            if isinstance(msg, dict):
+                content = msg.get("content", "") or ""
+                tool_calls = msg.get("tool_calls") or []
+            else:
+                content = getattr(msg, "content", "") or ""
+                tool_calls = getattr(msg, "tool_calls", None) or []
 
-                if content and isinstance(content, str) and content.strip():
-                    segments.append({"type": "text", "content": content.strip()})
+            if content and isinstance(content, str) and content.strip():
+                segments.append({"type": "text", "content": content.strip()})
 
-                for tc in tool_calls:
-                    tc_dict = tc if isinstance(tc, dict) else {
-                        "id": getattr(tc, "id", ""),
-                        "name": getattr(tc, "name", ""),
-                        "args": getattr(tc, "args", {}) or {},
-                    }
-                    tc_id = tc_dict.get("id", "")
-                    tc_name = tc_dict.get("name", "")
-                    tc_args = tc_dict.get("args", {})
+            for tc in tool_calls:
+                tc_dict = tc if isinstance(tc, dict) else {
+                    "id": getattr(tc, "id", ""),
+                    "name": getattr(tc, "name", ""),
+                    "args": getattr(tc, "args", {}) or {},
+                }
+                tc_id = tc_dict.get("id", "")
+                tc_name = tc_dict.get("name", "")
 
-                    # 查找匹配的 tool result
-                    matched = None
-                    for tr in all_tool_results:
-                        if tr.get("id") == tc_id:
-                            matched = tr
-                            break
+                # 跳过空 ID 的工具调用（损坏数据）
+                if not tc_id:
+                    logger.warning(
+                        "Skipping tool_call '%s' with empty id", tc_name
+                    )
+                    continue
 
-                    segments.append({
-                        "type": "tool",
-                        "content": tc_name,
-                        "toolInput": tc_args,
-                        "toolCallId": tc_id,
-                        "toolStatus": matched["status"] if matched else "success",
-                        "toolResult": matched["result"] if matched else "",
-                    })
+                tc_args = tc_dict.get("args", {})
+
+                # 查找匹配的 tool result
+                matched = None
+                for tr in all_tool_results:
+                    if tr.get("id") == tc_id:
+                        matched = tr
+                        break
+
+                segments.append({
+                    "type": "tool",
+                    "content": tc_name,
+                    "toolInput": tc_args,
+                    "toolCallId": tc_id,
+                    "toolStatus": matched["status"] if matched else "success",
+                    "toolResult": matched["result"] if matched else "",
+                })
 
         return segments

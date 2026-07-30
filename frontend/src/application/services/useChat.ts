@@ -51,6 +51,7 @@ interface UseChatOptions {
   ) => void;
   onUpdateLastAssistant?: (updater: (msg: SessionMessage) => SessionMessage) => void;
   onSessionUpdated?: () => void; // 新增：会话更新回调
+  getMessages?: () => SessionMessage[]; // Sub-agent 回放防护：检查消息列表中是否已有持久化记录
 }
 
 const INITIAL_STATE: ChatState = {
@@ -213,6 +214,7 @@ export const useChat = ({
   onUpdateMessageById,
   onUpdateLastAssistant,
   onSessionUpdated,
+  getMessages,
 }: UseChatOptions) => {
   const [state, setState] = useState<ChatState>(INITIAL_STATE);
 
@@ -469,7 +471,21 @@ export const useChat = ({
     stepId?: number,
     description?: string,
   ) => {
-    if (!sessionId || subAgentMessagesRef.current.has(subTaskId)) return;
+    if (!sessionId) return;
+    if (subAgentMessagesRef.current.has(subTaskId)) return;
+
+    // 回放防护：检查消息列表中是否已存在持久化的 sub-agent 消息
+    // 当页面刷新重连 SSE 时，后端回放的 sub_agent:started 不应覆盖
+    // 已从 API 恢复的持久化数据
+    if (getMessages) {
+      const persisted = getMessages().find(
+        (m) => m.id === subTaskId && m.status !== 'streaming',
+      );
+      if (persisted) {
+        subAgentMessagesRef.current.add(subTaskId);
+        return;
+      }
+    }
 
     const message: SessionMessage = {
       id: subTaskId,
@@ -491,7 +507,7 @@ export const useChat = ({
     };
     onUpsertMessage?.(message);
     subAgentMessagesRef.current.add(subTaskId);
-  }, [onUpsertMessage, sessionId]);
+  }, [onUpsertMessage, sessionId, getMessages]);
 
   const finalizeSubAgentMessage = useCallback((
     subTaskId: string,
@@ -828,26 +844,13 @@ export const useChat = ({
     });
 
     // —— 最终落库消息:替换占位 ——
-    // 保护：如果流式构建的内容比落库内容更丰富（更长），保留流式版本
+    // 后端 _build_segments() 是 segments 的唯一权威来源，
+    // 流式期间的临时 segments 仅用于实时展示，saved message 到达后完整替换。
     stream.on('session:message:saved', (data) => {
       const savedMsg = data.message;
       if (savedMsg) {
         onMessageSaved?.(savedMsg);
-        updateMessage(mainMessageIdRef.current, (prevMsg) => {
-          const streamContent = prevMsg.content || '';
-          const savedContent = savedMsg.content || '';
-          // 优先保留更长的内容（流式构建的通常更完整）
-          const finalContent = streamContent.length >= savedContent.length
-            ? streamContent
-            : savedContent;
-          return {
-            ...savedMsg,
-            content: finalContent,
-            thinking_content: prevMsg.thinking_content || savedMsg.thinking_content || '',
-            has_thinking: prevMsg.has_thinking || savedMsg.has_thinking || false,
-            segments: prevMsg.segments || savedMsg.segments,
-          };
-        });
+        updateMessage(mainMessageIdRef.current, (_prevMsg) => savedMsg);
         mainMessageIdRef.current = savedMsg.id;
       }
     });
