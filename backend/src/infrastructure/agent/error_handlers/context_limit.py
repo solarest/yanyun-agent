@@ -31,7 +31,6 @@ class ContextLimitErrorHandler(ILLMErrorHandler):
             return {
                 "emergency_compact_requested": True,
                 "should_end": False,
-                "compression_strategy": "emergency_compact",
                 "context_compaction_attempts": 1,
                 "error": str(error),
                 "phase": "context_overflow",

@@ -1,8 +1,8 @@
 """Plan工作流集成测试
 
 测试新的Plan工作流（plan_execute已降级为闭包工具）:
-1. LLM调用plan_execute工具 → route_after_llm → loop_detect
-2. route_after_tool_execute → tool_observe（不再有 plan_prepare 分支）
+1. LLM调用plan_execute工具 → route_after_llm → tool_execute
+2. route_after_tool_execute → context_compact
 3. 子Agent工具集排除plan相关工具
 """
 
@@ -34,19 +34,10 @@ def make_state(**overrides) -> AgentState:
         "tool_results": {},
         "awaiting_user_input": False,
         "last_executed_tool_call_ids": [],
-        "loop_detection_count": 0,
-        "loop_detected": False,
-        "loop_type": None,
-        "stuck_detection_count": 0,
-        "stuck_detected": False,
-        "stuck_type": None,
         "current_llm_text": "",
-        "empty_retry_count": 0,
-        "planning_retry_count": 0,
         "system_prompt": "",
         "final_result": None,
         "error": None,
-        "compression_strategy": None,
         "max_context_tokens": 128_000,
         "context_token_estimate": 0,
         "context_token_baseline": None,
@@ -64,8 +55,8 @@ def make_state(**overrides) -> AgentState:
 class TestPlanWorkflowIntegration:
     """Plan工作流集成测试"""
 
-    def test_route_after_llm_sends_plan_execute_to_loop_detect(self):
-        """plan_execute工具调用通过 loop_detect 前置守卫"""
+    def test_route_after_llm_sends_plan_execute_to_tool_execute(self):
+        """plan_execute工具调用直接路由到 tool_execute"""
         state = make_state(
             messages=[
                 AIMessage(
@@ -89,10 +80,10 @@ class TestPlanWorkflowIntegration:
         )
 
         route = route_after_llm(state)
-        assert route == "loop_detect"
+        assert route == "tool_execute"
 
-    def test_route_after_tool_execute_goes_to_loop_detect(self):
-        """工具执行后路由到 loop_detect(循环检测前置守卫)"""
+    def test_route_after_tool_execute_goes_to_context_compact(self):
+        """工具执行后路由到 context_compact"""
         state = make_state(
             last_executed_tool_call_ids=["call-plan"],
             tool_results={
@@ -108,7 +99,7 @@ class TestPlanWorkflowIntegration:
         assert route_after_tool_execute(state) == "context_compact"
 
     def test_route_after_llm_with_regular_tool_calls(self):
-        """普通工具调用仍路由到 loop_detect"""
+        """普通工具调用直接路由到 tool_execute"""
         state = make_state(
             messages=[
                 AIMessage(
@@ -125,7 +116,7 @@ class TestPlanWorkflowIntegration:
         )
 
         route = route_after_llm(state)
-        assert route == "loop_detect"
+        assert route == "tool_execute"
 
 
 class TestSubAgentToolRegistry:

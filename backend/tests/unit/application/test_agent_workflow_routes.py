@@ -1,7 +1,6 @@
 from src.domain.services.agent_routing import (
     route_after_llm,
     route_after_tool_execute,
-    route_after_loop_detect,
 )
 
 
@@ -21,19 +20,10 @@ def make_state(**overrides):
         "tool_results": {},
         "awaiting_user_input": False,
         "last_executed_tool_call_ids": [],
-        "loop_detection_count": 0,
-        "loop_detected": False,
-        "loop_type": None,
-        "stuck_detection_count": 0,
-        "stuck_detected": False,
-        "stuck_type": None,
         "current_llm_text": "",
-        "empty_retry_count": 0,
-        "planning_retry_count": 0,
         "system_prompt": "",
         "final_result": None,
         "error": None,
-        "compression_strategy": None,
         # === 上下文管理 ===
         "max_context_tokens": 128_000,
         "context_token_estimate": 0,
@@ -60,8 +50,8 @@ def test_route_after_llm_plain_text_goes_to_end() -> None:
     assert route_after_llm(state) == "__end__"
 
 
-def test_route_after_llm_tool_calls_goes_to_loop_detect() -> None:
-    """有 tool_calls 路由到 loop_detect(前置守卫)"""
+def test_route_after_llm_tool_calls_goes_to_tool_execute() -> None:
+    """有 tool_calls 直接路由到 tool_execute (不再经过 loop_detect)"""
     state = make_state(
         messages=[
             {
@@ -71,7 +61,7 @@ def test_route_after_llm_tool_calls_goes_to_loop_detect() -> None:
             }
         ],
     )
-    assert route_after_llm(state) == "loop_detect"
+    assert route_after_llm(state) == "tool_execute"
 
 
 def test_route_after_llm_should_end() -> None:
@@ -91,34 +81,6 @@ def test_route_after_llm_emergency_overrides_should_end() -> None:
     """emergency_compact_requested 优先于 should_end"""
     state = make_state(emergency_compact_requested=True, should_end=True)
     assert route_after_llm(state) == "context_compact"
-
-
-# === route_after_loop_detect 测试 ===
-
-
-def test_route_after_loop_detect_no_loop() -> None:
-    """未检测到循环时路由到 tool_execute"""
-    state = make_state(loop_detected=False)
-    assert route_after_loop_detect(state) == "tool_execute"
-
-
-def test_route_after_loop_detect_should_end() -> None:
-    """检测到循环且 should_end=True 时路由到 END"""
-    state = make_state(loop_detected=True, should_end=True,
-                       loop_detection_count=3)
-    assert route_after_loop_detect(state) == "__end__"
-
-
-def test_route_after_loop_detect_count_2() -> None:
-    """loop_detection_count=2 时路由到 context_compact"""
-    state = make_state(loop_detected=True, loop_detection_count=2)
-    assert route_after_loop_detect(state) == "context_compact"
-
-
-def test_route_after_loop_detect_count_1() -> None:
-    """loop_detection_count=1 时路由到 context_compact（统一走上下文守门）"""
-    state = make_state(loop_detected=True, loop_detection_count=1)
-    assert route_after_loop_detect(state) == "context_compact"
 
 
 # === route_after_tool_execute 测试 ===

@@ -29,7 +29,7 @@ def route_after_llm(state: AgentState) -> str:
 
     - emergency_compact_requested → context_compact (紧急压缩优先)
     - should_end → END
-    - has tool_calls → loop_detect (先检测循环)
+    - has tool_calls → tool_execute (直接路由，不再经过 loop_detect)
     - otherwise → END
     """
     if state.get("emergency_compact_requested"):
@@ -46,23 +46,8 @@ def route_after_llm(state: AgentState) -> str:
     tool_calls = _extract_tool_calls(last_msg)
 
     if tool_calls:
-        return "loop_detect"
-    return END
-
-
-def route_after_loop_detect(state: AgentState) -> str:
-    """Loop 检测后的路由决策
-
-    - no loop detected → tool_execute
-    - should_end → END
-    - loop detected (feedback or compact) → context_compact
-    """
-    if not state.get("loop_detected"):
         return "tool_execute"
-    if state.get("should_end"):
-        return END
-    # count==1 (feedback) 和 count==2 (compact) 统一走 context_compact
-    return "context_compact"
+    return END
 
 
 def route_after_tool_execute(state: AgentState) -> str:

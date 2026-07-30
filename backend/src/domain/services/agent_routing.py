@@ -2,6 +2,5 @@
 
 from src.domain.agent_loop.agent_routing import (  # noqa: F401
     route_after_llm,
-    route_after_loop_detect,
     route_after_tool_execute,
 )

@@ -136,7 +136,7 @@ class LLMCallNode(BaseNode):
         # 从聚合后的消息中提取完整的 tool_calls
         tool_calls_list = []
         if accumulated and hasattr(accumulated, "tool_calls") and accumulated.tool_calls:
-            # 不再过滤无效工具调用,保留给 loop_detect 检测
+            # 提取完整的 tool_calls（不再经过 loop_detect 过滤）
             tool_calls_list = accumulated.tool_calls
 
         # 解析 tool_calls 为 pending_tool_calls 格式

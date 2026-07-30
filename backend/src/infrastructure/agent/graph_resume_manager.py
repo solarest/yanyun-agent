@@ -80,12 +80,14 @@ class GraphResumeManager:
             return False
 
         async def _resume_loop():
-            """在后台恢复图执行，处理可能的多次中断。"""
-            try:
-                current_config = ctx.config
-                # 确保 thread_id 与初始执行一致
-                current_config["configurable"]["thread_id"] = task_id
+            """在后台恢复图执行。若再次中断则重新注册，等待下次决策。"""
+            from langgraph.errors import GraphInterrupt as GI
 
+            current_config = ctx.config
+            current_config["configurable"]["thread_id"] = task_id
+            should_cleanup = True
+
+            try:
                 logger.info(
                     "GraphResumeManager: resuming task_id=%s with decision=%s",
                     task_id, decision,
@@ -101,6 +103,17 @@ class GraphResumeManager:
 
                 if ctx.on_complete:
                     await ctx.on_complete(result)
+
+            except GI:
+                # 图再次中断（同一 agent loop 中另一个危险命令）
+                logger.info(
+                    "GraphResumeManager: task_id=%s interrupted again, "
+                    "re-registering for next decision", task_id
+                )
+                ctx.config = current_config
+                await self.register(task_id, ctx)
+                should_cleanup = False  # 不清理，等待下次 /approvals
+
             except asyncio.CancelledError:
                 logger.info("GraphResumeManager: task_id=%s resume cancelled", task_id)
             except Exception:
@@ -108,7 +121,8 @@ class GraphResumeManager:
                     "GraphResumeManager: task_id=%s resume failed", task_id
                 )
             finally:
-                await self.remove(task_id)
+                if should_cleanup:
+                    await self.remove(task_id)
 
         asyncio.create_task(_resume_loop())
         return True
