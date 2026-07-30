@@ -33,6 +33,7 @@ class AgentEventType(str, Enum):
     # ── 工具调用 ──
     TOOL_CALL = "tool:call"
     TOOL_RESULT = "tool:result"
+    TOOL_CONFIRMATION_REQUIRED = "tool:confirmation_required"
 
     # ── 上下文 ──
     CONTEXT_COMPACTING = "context:compacting"

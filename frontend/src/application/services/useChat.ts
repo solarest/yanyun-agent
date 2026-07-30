@@ -429,6 +429,30 @@ export const useChat = ({
       });
     });
 
+    // 危险命令待确认：更新对应 tool 片段为 awaiting_confirmation 并填入风险原因
+    stream.on('tool:confirmation_required', (data) => {
+      const targetMessageId = data.sub_task_id || messageId;
+      updateMessage(targetMessageId, (msg) => {
+        const segments = [...(msg.segments || [])];
+        // 反向查找最后一个匹配的 tool 片段并更新其状态
+        for (let i = segments.length - 1; i >= 0; i--) {
+          const seg = segments[i];
+          if (
+            seg.type === 'tool' &&
+            (!data.toolCallId || seg.toolCallId === data.toolCallId)
+          ) {
+            segments[i] = {
+              ...seg,
+              toolStatus: 'awaiting_confirmation',
+              riskReason: data.riskReason || seg.riskReason,
+            };
+            break;
+          }
+        }
+        return { ...msg, segments };
+      });
+    });
+
     // 处理 LLM 完成事件，保存完整思考内容
     stream.on('llm:complete', (data) => {
       const targetMessageId = data.sub_task_id || messageId;

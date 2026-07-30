@@ -1,8 +1,10 @@
 """基础设施层 - Agent 工作流构建器实现
 
 编译 LangGraph StateGraph，将领域层路由逻辑与基础设施层节点组合在一起。
+使用 MemorySaver checkpointer 支持 interrupt() 暂停/恢复（人在回路确认）。
 """
 
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
@@ -18,6 +20,17 @@ from src.domain.services.agent_routing import (
     route_after_loop_detect,
     route_after_tool_execute,
 )
+
+
+_checkpointer_singleton: MemorySaver | None = None
+
+
+def _default_checkpointer() -> MemorySaver:
+    """进程级单例 MemorySaver——确保初始执行与恢复使用同一实例。"""
+    global _checkpointer_singleton
+    if _checkpointer_singleton is None:
+        _checkpointer_singleton = MemorySaver()
+    return _checkpointer_singleton
 
 
 class AgentWorkflowBuilder(IAgentWorkflowBuilder):
@@ -60,5 +73,12 @@ class AgentWorkflowBuilder(IAgentWorkflowBuilder):
 
         workflow.add_edge("context_compact", "llm_call")
 
-        cls._compiled = workflow.compile()
+        cls._compiled = workflow.compile(checkpointer=_default_checkpointer())
         return cls._compiled
+
+    @classmethod
+    def reset(cls) -> None:
+        """重置编译缓存（测试用）。"""
+        cls._compiled = None
+        global _checkpointer_singleton
+        _checkpointer_singleton = None

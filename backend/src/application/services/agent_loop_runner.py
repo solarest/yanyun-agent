@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from langchain_core.messages import AIMessage, HumanMessage
+from langgraph.errors import GraphInterrupt
 
 from src.application.services.task_completion_service import TaskCompletionService
 from src.domain.aggregates.session.session_message import SessionMessageRole
@@ -283,6 +284,7 @@ class AgentLoopRunner:
 
             graph_config = {
                 "configurable": {
+                    "thread_id": task.id,  # Checkpointer 恢复用
                     "llm": llm,
                     "event_emitter": effective_event_emitter,
                     "event_service": effective_event_emitter,
@@ -325,6 +327,59 @@ class AgentLoopRunner:
                 event_emitter=effective_event_emitter,
                 persist_session_messages=persist_session_messages,
             )
+
+        except GraphInterrupt:
+            # 人在回路确认中断——不是错误，图已暂存等待用户决策
+            logger.info(
+                "Agent loop interrupted for task %s — awaiting user confirmation", task.id
+            )
+            # 注册恢复上下文，供 /approvals 端点唤醒
+            from src.infrastructure.agent.graph_resume_manager import (
+                GraphResumeManager,
+                ResumeContext,
+                get_default_resume_manager,
+            )
+
+            resume_mgr = get_default_resume_manager()
+
+            async def _on_resume_complete(result: dict) -> None:
+                """图恢复执行完成后的回调。"""
+                try:
+                    if self.task_repo:
+                        task.status = TaskStatus.COMPLETED
+                        task.completed_at = datetime.now()
+                        await self.task_repo.update(task)
+                    await self.task_completion_service.finalize(
+                        task=task,
+                        session_id=session_id,
+                        result=result,
+                        event_emitter=effective_event_emitter,
+                        persist_session_messages=persist_session_messages,
+                    )
+                    if effective_event_emitter:
+                        await effective_event_emitter.emit(
+                            task.id, AgentEventType.TASK_COMPLETED, {}
+                        )
+                except Exception:
+                    logger.exception(
+                        "Resume completion callback failed for task %s", task.id
+                    )
+
+            await resume_mgr.register(
+                task.id,
+                ResumeContext(
+                    graph=graph,
+                    config=graph_config,
+                    task_id=task.id,
+                    session_id=session_id,
+                    on_complete=_on_resume_complete,
+                ),
+            )
+
+            # 更新任务状态为"等待确认"（非终态）
+            if self.task_repo:
+                task.status = TaskStatus.RUNNING  # 保持 running，不是 failed/cancelled
+                await self.task_repo.update(task)
 
         except asyncio.CancelledError:
             logger.info("Agent loop cancelled for task %s", task.id)
@@ -413,11 +468,14 @@ class AgentLoopRunner:
         team_role: Optional[str] = None,
     ) -> Optional[IToolRegistry]:
         """根据模式构建工具注册表。"""
+        from src.infrastructure.tools.confirmation.pipeline import (
+            build_default_pipeline,
+        )
         from src.infrastructure.tools.registry import ToolRegistry
 
         if team_mode:
             # Team mode: 根据角色过滤工具
-            registry = ToolRegistry()
+            registry = ToolRegistry(pipeline=build_default_pipeline())
             if team_role == "leader":
                 # Leader: coordination + file ops (read/search) + clarify
                 LEADER_ALLOWED_TOOLS = frozenset({
@@ -451,7 +509,7 @@ class AgentLoopRunner:
         orchestrator = SubAgentOrchestrator()
         return orchestrator.create_sub_agent_tool_registry(
             self.tool_registry,
-            registry_factory=lambda: ToolRegistry(),
+            registry_factory=lambda: ToolRegistry(pipeline=build_default_pipeline()),
             allowed_tools=allowed_tools,
         )
 

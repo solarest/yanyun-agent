@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from src.application.dtos.approval_dto import ApprovalDecisionDTO
 from src.application.dtos.task_dto import (
     CreateTaskDTO,
     TaskListResponseDTO,
@@ -14,7 +15,14 @@ from src.application.tasks.management import (
     TaskNotRunningError,
 )
 from src.domain.repositories.task_repository import ITaskRepository
-from src.presentation.dependencies import get_task_management_use_case, get_task_repository
+from src.infrastructure.tools.confirmation.store import (
+    PendingApprovalRegistry,
+)
+from src.presentation.dependencies import (
+    get_pending_approval_registry,
+    get_task_management_use_case,
+    get_task_repository,
+)
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -175,3 +183,64 @@ async def cancel_task(
         )
 
     return {"message": "cancel requested", "task_id": result["task_id"]}
+
+
+@router.post(
+    "/{task_id}/approvals",
+    status_code=status.HTTP_200_OK,
+    summary="提交命令确认决策",
+    description="对挂起等待确认的危险 shell 命令提交用户决策"
+    "（本次允许 / 全部允许 / 拒绝），恢复 LangGraph 图执行。",
+    responses={404: {"description": "无此待确认调用"}},
+)
+async def submit_approval(
+    task_id: str,
+    dto: ApprovalDecisionDTO,
+    registry: PendingApprovalRegistry = Depends(get_pending_approval_registry),
+):
+    """提交命令确认决策。
+
+    校验 PendingApprovalRegistry 中存在对应 toolCallId 后，
+    通过 GraphResumeManager 以 Command(resume=decision) 恢复图执行。
+    不存在对应待审批调用则返回 404。
+    """
+    # 校验待审批调用存在（中间件已登记）
+    exists = await registry.has(task_id, dto.toolCallId)
+    if not exists:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": {
+                    "code": "NO_PENDING_APPROVAL",
+                    "message": "无此待确认调用",
+                }
+            },
+        )
+
+    # 清理待审批登记
+    await registry.remove(task_id, dto.toolCallId)
+
+    # 恢复图执行
+    from src.infrastructure.agent.graph_resume_manager import (
+        get_default_resume_manager,
+    )
+
+    resume_mgr = get_default_resume_manager()
+    resumed = await resume_mgr.resume(task_id, dto.decision)
+    if not resumed:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": {
+                    "code": "NO_PENDING_GRAPH",
+                    "message": "无此待恢复的图执行",
+                }
+            },
+        )
+
+    return {
+        "message": "approval submitted",
+        "task_id": task_id,
+        "tool_call_id": dto.toolCallId,
+        "decision": dto.decision,
+    }

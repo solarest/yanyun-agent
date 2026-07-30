@@ -10,7 +10,7 @@ ToolExecuteNode._execute_single_tool  (tool_execute_node.py:76)
   → final_handler: t.func(inp, ctx)   (pipeline.py:54，全仓唯一 .func 调用)
 ```
 
-中间件协议 `async def process(tool, input, context, next_handler) -> ToolResult`（`pipeline.py:15-24`）天然允许在调用 `next_handler` 前 `await` 任意异步闸门。`tool_call_id` 已在 `tool_execute_node.py:53` 被塞进 `context.extra`。
+中间件协议 `async def process(tool, input, context, next_handler) -> ToolResult`（`register/pipeline.py:15-24`，`tools/pipeline.py` 为兼容 shim）天然允许在调用 `next_handler` 前 `await` 任意异步闸门。`tool_call_id` 已在 `tool_execute_node.py:53` 被塞进 `context.extra`。
 
 关键现状缺口：
 
@@ -81,6 +81,8 @@ ToolExecuteNode._execute_single_tool  (tool_execute_node.py:76)
 
 **副影响处理**：注入非空 pipeline 后，sub-agent / team 工具将首次受 `Security` / `RateLimit` / `Timeout` / `Sandbox` 约束（既有行为变化）。design 取向：**注入与顶层相同的全量 pipeline**（而非仅 `Confirmation`），理由——这些中间件本就该对所有执行生效，sub-agent / team 当前"绕过"本身就是缺陷；顺带修正。若实现期发现回归问题，可降级为仅注入 `Confirmation`（design 留此 fallback，见 Open Questions）。
 
+注入点共三处，缺一不可：① 顶层 `create_tool_registry()`（`dependencies.py`）；② team 的 `_build_tool_registry` 分支（`agent_loop_runner.py:420` 的 `ToolRegistry()` 无参 → 空 pipeline）；③ sub-agent 经 `registry_factory=lambda: ToolRegistry()`（`agent_loop_runner.py:454`）+ `SubAgentOrchestrator.create_sub_agent_tool_registry`（后者 spec 须一并改，不能仍注入空 pipeline）。注入的 pipeline 中的 `ConfirmationMiddleware` 必须经决策 θ 的访问器取**共享**审批存储实例，否则端点解析不到 sub-agent/team 的 Future。
+
 ### 决策 η：审批超时 5 分钟自动 deny
 
 `ConfirmationMiddleware` 用 `asyncio.wait_for(Future, timeout=300)` 包裹等待；超时返回 `error="approval_timeout"`（视同 deny）。防止挂起的 Future 永久占内存 / 工具协程永久挂起。超时时长配置化，默认 300s。
@@ -103,6 +105,19 @@ Confirmation → Security → RateLimit → Timeout(30s) → Sandbox → final_h
 
 中间件只收 `context`（`ToolContext`），拿不到 graph config 里的 event emitter。在 `tool_execute_node.py:53`（已设 `tool_call_id`）处顺手把 emitter 塞进 `context.extra["event_emitter"]`，`ConfirmationMiddleware` 即可经它发 `tool:confirmation_required`。备选：在节点层（`tool:call` 之后、`tool_registry.execute` 之前）发确认事件——但那样分类逻辑就散到节点、脱离中间件，不取。
 
+### 决策 θ：审批存储为进程级共享单例 + 按"有效 task_id"建键
+
+`PendingApprovalRegistry` 与 `SessionApprovalStore` 都是**进程级单例**——在 `presentation/dependencies.py` 提供 `get_pending_approval_registry()` / `get_session_approval_store()` 访问器，仿 `get_llm_settings` 的 `@lru_cache` 模式。所有 `ConfirmationMiddleware` 实例（顶层 / sub-agent / team member）与 `POST /approvals` 端点**都经访问器取同一实例**。
+
+理由：确认 Future 产生于"每次新建"的 pipeline——`create_tool_registry()` 每用例新建、`_build_tool_registry()` 每次调用新建——但端点只凭 `(task_id, tool_call_id)` 解析、不知 Future 来自哪个作用域。只有共享单例才能让端点够得着 sub-agent/team 的 Future。这恰好承接决策 β（单机内存态）：进程单例就是那块内存。`SessionApprovalStore` 同理必须共享：sub-agent 的 allow-all 才能在同会话的顶层 agent 生效，符合 spec"同会话不再追问"语义——per-pipeline store 会割裂这一语义。
+
+**键的一致性（关键子问题）**：端点路径含 `task_id`，但 sub-agent/team 的 Future 若按其自身 `context.task_id`（sub-task）登记、前端却按所在 SSE 流的**父 task_id** POST，键不匹配 → 404。复用既有管线：sub-agent（`tool_execute_node.py:191`）与 team member（`team_tools.py:162`）都已把 `parent_task_id` 放进 `context.extra`，且二者事件**本就发在父 task_id 上**（`team_tools.py:340`）。故：
+
+- `PendingApprovalRegistry` 键 = `(effective_task_id, tool_call_id)`，其中 `effective_task_id = context.extra.get("parent_task_id") or context.task_id`——sub-agent/team 取父 task_id、顶层取自身 task_id。
+- `ConfirmationMiddleware` 登记 Future 与发 `tool:confirmation_required` 都用 `effective_task_id`。
+- 前端收到事件时所在流即父 task_id，POST `/api/tasks/{父task_id}/approvals` 与登记键一致。
+- 事件 payload 补 `taskId`（= `effective_task_id`），让前端不必靠"所在流"推断，多任务卡片场景也稳。
+
 ## Risks / Trade-offs
 
 - **[重启丢失待审批]** → 单机自用可接受；task 标 failed、用户重跑。未来上 C（DB 持久化）彻底解。
@@ -111,6 +126,7 @@ Confirmation → Security → RateLimit → Timeout(30s) → Sandbox → final_h
 - **[sub-agent 注入全量 pipeline 的回归]** → 原本绕过中间件的 sub-agent / team 工具突然受 `RateLimit` / `Timeout` 约束可能改变行为。缓解：实现期跑回归（尤其 team 多成员并发调用触发 `RateLimit`）；必要时降级为仅注入 `Confirmation`（见 Open Questions）。
 - **[多个待确认命令并发]** → 一个 turn 内 LLM 可能并发多个 shell `tool_call`（`tool_execute_node` 用 `asyncio.gather`）。每个 `tool_call` 各自挂起、各自确认；前端按 `toolCallId` 区分卡片。无全局锁。需确保 `SessionApprovalStore` 并发安全（`asyncio.Lock` 或线程安全结构）。
 - **[用户离线 / 关闭页面]** → 5 分钟超时自动 deny 收尾，不留僵尸 Future。
+- **[clarify / task_create 优先级过滤]** → 非风险，记录交互：一 turn 内若 LLM 同时发危险 `shell` 与 `clarify` / `task_create`，后者会把 `shell` 过滤掉、本 turn 不执行（`tool_execute_node.py:228-259`）；`shell` 延后到下一 turn 才触发确认门。符合预期，无需处理。
 
 ## Migration Plan
 
@@ -122,7 +138,7 @@ Confirmation → Security → RateLimit → Timeout(30s) → Sandbox → final_h
 
 ## Open Questions
 
-- sub-agent / team 注入"全量 pipeline"还是"仅 `Confirmation`"——实现期回归后定（见决策 ζ 的 fallback）。
+- sub-agent / team 注入：**已选全量 pipeline**（决策 ζ 主决策）。6.2 单元级并发回归通过、未触发降级；真实 team 多成员并发下的 RateLimit / Timeout 回归仍待 8.x E2E 确认，届时若回归再降级为仅 `Confirmation`。
 - 危险命令集合的默认条目与分类类别名——评审配置文件草稿时定稿。
 - "全部允许"作用域是否需要可配置（会话级 vs agent 级）——初版固定会话级，按需再加。
 - 超时时长 300s 是否需配置化暴露——初版写死默认 + 配置文件可覆盖。

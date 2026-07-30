@@ -144,6 +144,43 @@ def get_llm_provider() -> ILLMProvider:
     return LLMProviderImpl()
 
 
+# === 命令确认 依赖注入（进程级单例，见 design 决策 θ）===
+
+
+@lru_cache()
+def get_pending_approval_registry():
+    """获取待审批注册表单例。
+
+    顶层 / sub-agent / team 的 ConfirmationMiddleware 与 /approvals 端点
+    共享同一实例——用于校验待确认调用存在性。
+    """
+    from src.infrastructure.tools.confirmation.store import get_default_registry
+
+    return get_default_registry()
+
+
+@lru_cache()
+def get_session_approval_store():
+    """获取会话许可存储单例（同上共享）。"""
+    from src.infrastructure.tools.confirmation.store import get_default_session_store
+
+    return get_default_session_store()
+
+
+@lru_cache()
+def get_graph_resume_manager():
+    """获取图恢复管理器单例。
+
+    agent_loop_runner 在 GraphInterrupt 时注册恢复上下文；
+    /approvals 端点取回并执行 graph.ainvoke(Command(resume=decision))。
+    """
+    from src.infrastructure.agent.graph_resume_manager import (
+        get_default_resume_manager,
+    )
+
+    return get_default_resume_manager()
+
+
 # === Tool Registry 依赖注入 ===
 
 
@@ -157,11 +194,7 @@ def create_tool_registry() -> IToolRegistry:
 
     组装 ExecutionPipeline + 中间件 + 自动注册内置工具。
     """
-    from src.infrastructure.tools.pipeline import ExecutionPipeline
-    from src.infrastructure.tools.middleware.security import SecurityMiddleware
-    from src.infrastructure.tools.middleware.rate_limit import RateLimitMiddleware
-    from src.infrastructure.tools.middleware.timeout import TimeoutMiddleware
-    from src.infrastructure.tools.middleware.sandbox import SandboxMiddleware
+    from src.infrastructure.tools.confirmation.pipeline import build_default_pipeline
 
     # 导入内置工具模块（触发 @tool 装饰器注册）
     import src.infrastructure.tools.builtin.web_search  # noqa: F401
@@ -174,12 +207,8 @@ def create_tool_registry() -> IToolRegistry:
     import src.infrastructure.tools.builtin.session_spawn  # noqa: F401
     import src.infrastructure.tools.builtin.team_tools  # noqa: F401
 
-    # 构建中间件管道
-    pipeline = ExecutionPipeline()
-    pipeline.add_middleware(SecurityMiddleware(allowed_tools=None))
-    pipeline.add_middleware(RateLimitMiddleware(global_max_per_minute=300))
-    pipeline.add_middleware(TimeoutMiddleware())
-    pipeline.add_middleware(SandboxMiddleware())
+    # 构建中间件管道（Confirmation 置于 Security 之前 = Timeout 之外）
+    pipeline = build_default_pipeline()
 
     # 创建 Registry 并自动注册
     registry = ToolRegistry(pipeline=pipeline)

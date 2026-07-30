@@ -89,6 +89,18 @@ export interface ToolResultPayload extends BaseEventPayload {
   metadata?: Record<string, unknown>;
 }
 
+/** 用户对一条待确认危险命令的决策 */
+export type ApprovalDecision = 'allow_once' | 'allow_all' | 'deny';
+
+/** tool-confirmation_required 事件（危险命令挂起等待确认） */
+export interface ConfirmationRequiredPayload extends BaseEventPayload {
+  toolCallId: string;
+  command: string;
+  riskReason: string;
+  workingDir: string;
+  options: ApprovalDecision[];
+}
+
 /** context-compacting 事件 */
 export interface ContextCompactingPayload extends BaseEventPayload {
   beforeTokens: number;
@@ -262,6 +274,7 @@ export interface AgentEventMap {
   'llm:complete': LLMCompletePayload;
   'tool:call': ToolCallPayload;
   'tool:result': ToolResultPayload;
+  'tool:confirmation_required': ConfirmationRequiredPayload;
   'context:compacting': ContextCompactingPayload;
   'loop:detected': LoopDetectedPayload;
   'stuck:detected': StuckDetectedPayload;
@@ -306,6 +319,7 @@ export const SSE_EVENT_TYPES: readonly string[] = [
   'llm-complete',
   'tool-call',
   'tool-result',
+  'tool-confirmation_required',
   'context-compacting',
   'loop-detected',
   'stuck-detected',

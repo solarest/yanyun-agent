@@ -76,6 +76,10 @@ The system SHALL expose an HTTP endpoint that accepts a decision (`allow_once` /
 - **WHEN** a decision arrives after the approval timeout has auto-denied the call
 - **THEN** the decision is rejected because the pending confirmation no longer exists
 
+#### Scenario: Cross-scope pending call is resolvable
+- **WHEN** a pending confirmation belongs to a sub-agent's or team member's `shell` call rather than the top-level agent's
+- **THEN** the approvals endpoint resolves it by task id and tool call id exactly as for a top-level call, because the pending registry is a single shared instance across all execution scopes and is keyed by the effective (parent) task id that matches the event stream the frontend received the confirmation on
+
 ### Requirement: Confirmation-required SSE event
 
 The system SHALL emit a `tool:confirmation_required` SSE event carrying the tool call id, command, risk reason, working directory, and available options, so the frontend can render a confirmation card while the tool is suspended. Task status SHALL remain running (not paused) during the wait.
