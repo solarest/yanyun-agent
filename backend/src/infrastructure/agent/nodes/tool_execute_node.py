@@ -14,6 +14,7 @@ from langchain_core.messages import ToolMessage
 from langgraph.types import RunnableConfig, interrupt
 
 from src.domain.aggregates.agent.agent_state import AgentState
+from src.domain.aggregates.agent.state_groups import ToolFields
 from src.domain.entities.event_types import AgentEventType
 from src.domain.entities.tool import ToolContext
 from src.infrastructure.agent.nodes.base_node import BaseNode, NodeContext
@@ -220,10 +221,11 @@ class ToolExecuteNode(BaseNode):
             extra=extra,
         )
 
-        pending_tools = state.get("pending_tool_calls", [])
-        structured_results = dict(state.get("tool_results", {}))
+        tf = ToolFields.from_state(state)
+        pending_tools = tf.pending
+        structured_results = dict(tf.results)
         awaiting_user_input = False
-        final_result = state.get("final_result")
+        final_result = tf.final_result
         last_executed_tool_call_ids: list[str] = []
 
         # Node 入口日志(将由基类自动记录)
@@ -253,7 +255,7 @@ class ToolExecuteNode(BaseNode):
                     "[NODE:tool_execute] PRIORITY_FILTER | task_id=%s | filter_type=clarify | "
                     "kept_count=%d | filtered_out_count=%d",
                     context.task_id, len(pending_tools),
-                    len([tc for tc in state.get("pending_tool_calls", [])
+                    len([tc for tc in tf.pending
                         if tc.get("name") != "clarify"])
                 )
             elif has_task_create:
@@ -264,7 +266,7 @@ class ToolExecuteNode(BaseNode):
                     "[NODE:tool_execute] PRIORITY_FILTER | task_id=%s | filter_type=task_create | "
                     "kept_count=%d | filtered_out_count=%d",
                     context.task_id, len(pending_tools),
-                    len([tc for tc in state.get("pending_tool_calls", [])
+                    len([tc for tc in tf.pending
                         if tc.get("name") != "task_create"])
                 )
 

@@ -10,6 +10,12 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any, Optional
 
+from src.domain.aggregates.agent.state_groups import (
+    ContextFields,
+    ControlFields,
+    TaskFields,
+    ToolFields,
+)
 from src.domain.services.token_utils import count_tokens, resolve_max_context_tokens
 from src.infrastructure.adapters.langchain_adapter import LangChainAdapter
 from src.infrastructure.tools.confirmation.pipeline import build_default_pipeline
@@ -325,35 +331,42 @@ class AgentLoopContext:
         )
         return {
             "messages": messages,
-            "task_id": task.id,
-            "workspace": workspace,
-            "user_message": content,
-            "task_start_message_count": len(messages),
-            "model": model,
-            "current_turn": 0,
-            "max_turns": max_turns,
-            "phase": "idle",
-            "should_end": False,
-            "is_complete": False,
-            "pending_tool_calls": [],
-            "tool_results": {},
-            "awaiting_user_input": False,
-            "last_executed_tool_call_ids": [],
             "current_llm_text": "",
-            "system_prompt": system_prompt,
-            "final_result": None,
-            "error": None,
-            # Context management
-            "max_context_tokens": max_context_tokens,
-            "context_token_estimate": initial_estimate,
-            "context_token_baseline": None,
-            "context_token_baseline_message_count": len(messages),
-            "context_compaction_attempts": 0,
-            "emergency_compact_requested": False,
-            "last_context_strategy": None,
-            # Sub-Agent
-            "is_sub_agent": is_sub_agent,
-            "parent_task_id": parent_task_id,
-            # thinking_text (for deepseek reasoning_content)
             "thinking_text": "",
+            "error": None,
+            "final_result": None,
+            # ── Grouped accessors: per spec, use dataclasses for structured state ──
+            **TaskFields(
+                task_id=task.id,
+                workspace=workspace,
+                user_message=content,
+                task_start_message_count=len(messages),
+                model=model or "",
+                system_prompt=system_prompt,
+                is_sub_agent=is_sub_agent,
+                parent_task_id=parent_task_id,
+            ).to_update(),
+            **ControlFields(
+                current_turn=0,
+                max_turns=max_turns,
+                phase="idle",
+                should_end=False,
+                is_complete=False,
+            ).to_update(),
+            **ContextFields(
+                max_tokens=max_context_tokens,
+                estimate=initial_estimate,
+                baseline=None,
+                baseline_count=len(messages),
+                compaction_attempts=0,
+                emergency_requested=False,
+                last_strategy=None,
+            ).to_update(),
+            **ToolFields(
+                pending=[],
+                results={},
+                awaiting_input=False,
+                last_executed_ids=[],
+                final_result=None,
+            ).to_update(),
         }

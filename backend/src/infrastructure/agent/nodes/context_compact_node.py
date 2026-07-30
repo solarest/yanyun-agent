@@ -22,6 +22,7 @@ from langchain_core.messages import RemoveMessage
 from langgraph.types import RunnableConfig
 
 from src.domain.aggregates.agent.agent_state import AgentState
+from src.domain.aggregates.agent.state_groups import ContextFields
 from src.domain.entities.event_types import AgentEventType
 from src.domain.services.token_utils import estimate_context_tokens
 from src.infrastructure.agent.nodes.base_node import BaseNode, NodeContext
@@ -57,11 +58,10 @@ class ContextCompactNode(BaseNode):
     async def execute(
         self, state: AgentState, config: RunnableConfig, context: NodeContext
     ) -> dict:
-        max_tokens = state.get("max_context_tokens", 128_000)
+        ctx = ContextFields.from_state(state)
+        max_tokens = ctx.max_tokens
         messages = list(state["messages"])
-        baseline = state.get("context_token_baseline")
-        baseline_count = state.get("context_token_baseline_message_count", 0)
-        current_tokens = estimate_context_tokens(messages, baseline, baseline_count)
+        current_tokens = estimate_context_tokens(messages, ctx.baseline, ctx.baseline_count)
 
         # 按 priority 降序遍历策略链，执行第一个匹配的策略
         chosen: CompactionStrategy | None = None
