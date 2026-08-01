@@ -6,9 +6,11 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { SessionMessage, MessageSegment } from '@domain/entities/session';
 import { ClarifyCard } from './ClarifyCard';
+import { CommandConfirmCard } from './CommandConfirmCard';
 import { MultiClarifyCard, parseAllClarifyPrompts } from './MultiClarifyCard';
 import { ToolCallGroup } from './ToolCallGroup';
 import { ThinkingBlock } from './ThinkingBlock';
+import { approvalApi } from '@infrastructure/api/approvals';
 
 interface MessageBubbleProps {
   message: SessionMessage;
@@ -31,6 +33,8 @@ interface ToolTimelineItem {
   result?: string;
   input?: Record<string, unknown>;
   args?: Record<string, unknown>;
+  /** 仅 awaiting_confirmation：危险命令风险原因 */
+  riskReason?: string;
 }
 
 const buildToolTimeline = (
@@ -199,6 +203,7 @@ function buildTimelineFromSegments(
           status: seg.toolStatus || 'running',
           result: seg.toolResult,
           input: seg.toolInput,
+          riskReason: seg.riskReason,
         });
       } else {
         // 新建工具组
@@ -210,6 +215,7 @@ function buildTimelineFromSegments(
             status: seg.toolStatus || 'running',
             result: seg.toolResult,
             input: seg.toolInput,
+            riskReason: seg.riskReason,
           }],
         });
       }
@@ -267,6 +273,9 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   onClarifyAnswer,
 }) => {
   const [clarifySubmitted, setClarifySubmitted] = useState(false);
+  const [confirmSubmitted, setConfirmSubmitted] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [isSubAgentExpanded, setIsSubAgentExpanded] = useState(false);
   const isUser = message.role === 'user';
   const isError = message.status === 'error';
@@ -411,12 +420,38 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
                       );
                     }
                     if (item.type === 'tool_group') {
+                      const awaiting = item
+                        .tools!.filter((t) => t.status === 'awaiting_confirmation');
+                      const rest = item
+                        .tools!.filter((t) => t.status !== 'awaiting_confirmation');
                       return (
-                        <ToolCallGroup
-                          key={`tools-${idx}`}
-                          items={item.tools!}
-                          isStreaming={isStreaming}
-                        />
+                        <React.Fragment key={`tools-${idx}`}>
+                          {rest.length > 0 && (
+                            <ToolCallGroup
+                              items={rest}
+                              isStreaming={isStreaming}
+                            />
+                          )}
+                          {awaiting.map((t) => (
+                            <CommandConfirmCard
+                              key={`confirm-${t.key}`}
+                              command={String(t.input?.command ?? '')}
+                              riskReason={t.riskReason}
+                              submitted={confirmSubmitted.has(t.key)}
+                              timestamp={message.created_at}
+                              onDecision={(decision) => {
+                                approvalApi.postApproval(
+                                  message.task_id || '',
+                                  t.key,
+                                  decision,
+                                );
+                                setConfirmSubmitted(
+                                  (prev) => new Set(prev).add(t.key),
+                                );
+                              }}
+                            />
+                          ))}
+                        </React.Fragment>
                       );
                     }
                     if (item.type === 'text') {

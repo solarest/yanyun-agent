@@ -13,6 +13,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk, SystemMessage
 from langgraph.types import RunnableConfig
 
 from src.domain.aggregates.agent.agent_state import AgentState
+from src.domain.aggregates.agent.state_groups import ContextFields, ControlFields
 from src.domain.entities.event_types import AgentEventType
 from src.domain.interfaces.llm_error_handler import LLMErrorHandlerRegistry
 from src.domain.services.token_utils import count_tokens, render_message
@@ -136,7 +137,7 @@ class LLMCallNode(BaseNode):
         # 从聚合后的消息中提取完整的 tool_calls
         tool_calls_list = []
         if accumulated and hasattr(accumulated, "tool_calls") and accumulated.tool_calls:
-            # 不再过滤无效工具调用,保留给 loop_detect 检测
+            # 提取完整的 tool_calls（不再经过 loop_detect 过滤）
             tool_calls_list = accumulated.tool_calls
 
         # 解析 tool_calls 为 pending_tool_calls 格式
@@ -187,30 +188,32 @@ class LLMCallNode(BaseNode):
         # ── Token 校准：提取 LLM 返回的真实 prompt_tokens ──
         prompt_tokens = _extract_prompt_tokens(accumulated)
 
-        # 返回状态更新(包含 pending_tool_calls 供 tool_execute_node 使用)
+        # ── 返回状态更新（使用分组访问器） ──
         result = {
             "messages": [
                 AIMessage(content=full_text, tool_calls=tool_calls_list or [])
             ],
             "pending_tool_calls": pending_tool_calls,
-            # 上一轮工具执行结果在此处失效,避免 observe 误走 Mode B。
             "last_executed_tool_call_ids": [],
             "current_llm_text": full_text,
             "thinking_text": thinking_text,
-            "phase": "complete" if is_complete else "thinking",
-            "current_turn": current_turn,
-            "should_end": should_end,
-            "is_complete": is_complete,
+            **ControlFields(
+                current_turn=current_turn,
+                phase="complete" if is_complete else "thinking",
+                should_end=should_end,
+                is_complete=is_complete,
+            ).to_update(),
         }
 
         if prompt_tokens is not None:
-            result.update({
-                "context_token_baseline": prompt_tokens,
-                "context_token_baseline_message_count": message_count,
-                "context_token_estimate": prompt_tokens,
-            })
+            result.update(
+                ContextFields(
+                    baseline=prompt_tokens,
+                    baseline_count=message_count,
+                    estimate=prompt_tokens,
+                ).to_update()
+            )
         else:
-            # 降级：全量 char/4 估算
             result["context_token_estimate"] = sum(
                 count_tokens(render_message(m)) for m in messages
             )

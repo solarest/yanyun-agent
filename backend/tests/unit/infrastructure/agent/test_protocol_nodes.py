@@ -12,7 +12,6 @@ from langchain_core.messages import (
 
 from src.infrastructure.agent.nodes.context_compact_node import context_compact_node
 from src.infrastructure.agent.nodes.llm_call_node import llm_call_node
-from src.infrastructure.agent.nodes.loop_detect_node import loop_detect_node
 from src.infrastructure.agent.nodes.tool_execute_node import tool_execute_node
 from src.domain.entities.event_types import AgentEventType
 
@@ -95,17 +94,10 @@ def make_state(**overrides):
         "tool_results": {},
         "awaiting_user_input": False,
         "last_executed_tool_call_ids": [],
-        "loop_detection_count": 0,
-        "loop_detected": False,
-        "loop_type": None,
-        "stuck_detection_count": 0,
-        "stuck_detected": False,
-        "stuck_type": None,
         "current_llm_text": "",
         "system_prompt": "",
         "final_result": None,
         "error": None,
-        "compression_strategy": None,
         # === 上下文管理 ===
         "max_context_tokens": 128_000,
         "context_token_estimate": 0,
@@ -335,106 +327,6 @@ async def test_tool_execute_node_executes_all_tools_uniformly() -> None:
 
 
 @pytest.mark.asyncio
-async def test_loop_detect_node_emits_loop_detected_and_phase_change() -> None:
-    emitter = RecordingEmitter()
-
-    result = await loop_detect_node(
-        make_state(
-            phase="thinking",
-            current_turn=3,
-            messages=[
-                {"role": "assistant", "tool_calls": [
-                    {"name": "search", "args": {"q": "x"}}]},
-                {"role": "assistant", "tool_calls": [
-                    {"name": "search", "args": {"q": "x"}}]},
-                {"role": "assistant", "tool_calls": [
-                    {"name": "search", "args": {"q": "x"}}]},
-            ],
-        ),
-        {"configurable": {"event_emitter": emitter}},
-    )
-
-    assert [event["event_type"] for event in emitter.events] == [
-        AgentEventType.LOOP_DETECTED,
-        AgentEventType.PHASE_CHANGED,
-    ]
-    assert result["loop_detected"] is True
-    assert result["loop_type"] == "exact_tool_repeat"
-    assert result["phase"] == "loop_correcting"
-
-
-@pytest.mark.asyncio
-async def test_loop_detect_invalid_tool_calls() -> None:
-    """测试无效工具调用检测（缺少 name 或 id）"""
-    emitter = RecordingEmitter()
-
-    result = await loop_detect_node(
-        make_state(
-            pending_tool_calls=[
-                {"id": "", "name": "search", "input": {"q": "x"}},  # 缺少 id
-            ],
-        ),
-        {"configurable": {"event_emitter": emitter}},
-    )
-
-    assert result["loop_detected"] is True
-    assert result["loop_type"] == "invalid_tool_call"
-    assert result["loop_detection_count"] == 1
-    assert result["phase"] == "loop_correcting"
-
-
-@pytest.mark.asyncio
-async def test_loop_detect_alternating_pattern() -> None:
-    """测试 A-B-A-B 交替模式检测"""
-    emitter = RecordingEmitter()
-
-    result = await loop_detect_node(
-        make_state(
-            messages=[
-                {"role": "assistant", "tool_calls": [
-                    {"name": "read_file", "args": {"path": "a.txt"}}]},
-                {"role": "assistant", "tool_calls": [
-                    {"name": "grep_search", "args": {"query": "x"}}]},
-                {"role": "assistant", "tool_calls": [
-                    {"name": "read_file", "args": {"path": "a.txt"}}]},
-                {"role": "assistant", "tool_calls": [
-                    {"name": "grep_search", "args": {"query": "x"}}]},
-            ],
-        ),
-        {"configurable": {"event_emitter": emitter}},
-    )
-
-    assert result["loop_detected"] is True
-    assert result["loop_type"] == "alternating_pattern"
-    assert result["phase"] == "loop_correcting"
-
-
-@pytest.mark.asyncio
-async def test_loop_detect_node_ignores_tool_history_before_current_task() -> None:
-    emitter = RecordingEmitter()
-
-    result = await loop_detect_node(
-        make_state(
-            task_start_message_count=3,
-            messages=[
-                {"role": "assistant", "tool_calls": [
-                    {"name": "search", "args": {"q": "x"}}]},
-                {"role": "assistant", "tool_calls": [
-                    {"name": "search", "args": {"q": "x"}}]},
-                {"role": "assistant", "tool_calls": [
-                    {"name": "search", "args": {"q": "x"}}]},
-                {"role": "assistant", "content": "new run", "tool_calls": [
-                    {"name": "search", "args": {"q": "y"}}]},
-            ],
-        ),
-        {"configurable": {"event_emitter": emitter}},
-    )
-
-    assert result["loop_detected"] is False
-    assert emitter.events == []
-
-
-@pytest.mark.asyncio
 async def test_context_compact_node_skip_when_below_watermark() -> None:
     """Token 低于 40% 水线时，只发 skip 事件，不改消息"""
     emitter = RecordingEmitter()
@@ -563,7 +455,6 @@ async def test_context_compact_node_emergency_compact() -> None:
     assert result["last_context_strategy"] == "emergency_compact"
     assert result["emergency_compact_requested"] is False
     assert result["context_compaction_attempts"] == 1
-    assert result["compression_strategy"] is None
 
     payload = emitter.events[1]["payload"]
     assert payload["strategy"] == "emergency_compact"

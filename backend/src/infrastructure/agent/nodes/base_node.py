@@ -10,6 +10,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
+from langgraph.errors import GraphInterrupt
 from langgraph.types import RunnableConfig
 
 from src.domain.aggregates.agent.agent_state import AgentState
@@ -86,6 +87,10 @@ class BaseNode(ABC):
             self._log_complete(context, result, duration)
 
             return result
+
+        except GraphInterrupt:
+            # interrupt() 暂停图执行——必须透传，不可捕获转换
+            raise
 
         except Exception as e:
             # 6. 异常处理与日志

@@ -44,6 +44,8 @@ export const AgentSessionPage: React.FC = () => {
   } = useSessionService(agentId || '');
 
   // Chat 交互
+  const getMessages = React.useCallback(() => messages, [messages]);
+
   const {
     isSending,
     isStreaming,
@@ -63,6 +65,7 @@ export const AgentSessionPage: React.FC = () => {
     onUpdateMessageById: updateMessageById,
     onUpdateLastAssistant: updateLastAssistantMessage,
     onSessionUpdated: fetchSessions, // 刷新会话列表以获取最新标题
+    getMessages,
   });
 
   // 手动触发 SSE 重放

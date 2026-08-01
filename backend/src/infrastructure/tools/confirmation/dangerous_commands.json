@@ -1,0 +1,44 @@
+{
+  "dangerous_commands": [
+    {
+      "pattern": "\\brm\\s+-[a-zA-Z]*r",
+      "category": "rm-recursive",
+      "reason": "递归删除（rm -r/-rf），可能清空整个目录树"
+    },
+    {
+      "pattern": "\\bsudo\\b",
+      "category": "sudo",
+      "reason": "以超级用户权限执行，风险高"
+    },
+    {
+      "pattern": "(?:^|[\\s;|&])\\d*>+",
+      "category": "redirect-overwrite",
+      "reason": "输出重定向（> / >> / 2>），可能覆盖文件"
+    },
+    {
+      "pattern": "\\bmkfs\\b",
+      "category": "mkfs",
+      "reason": "格式化文件系统，将清空磁盘"
+    },
+    {
+      "pattern": "\\bdd\\s+if=",
+      "category": "dd-write",
+      "reason": "dd 直接读写块设备，可破坏磁盘数据"
+    },
+    {
+      "pattern": "\\bchmod\\s+(-[a-zA-Z]*R[a-zA-Z]*|--recursive)",
+      "category": "chmod-recursive",
+      "reason": "递归修改权限，影响范围大"
+    },
+    {
+      "pattern": "\\b(?:curl|wget)\\b[^|;&\\n]*\\|\\s*(?:sh|bash|zsh)\\b",
+      "category": "remote-pipe-shell",
+      "reason": "从网络拉取脚本直接管道给 shell 执行，任意代码"
+    },
+    {
+      "pattern": ":\\s*\\(\\s*\\)\\s*\\{",
+      "category": "fork-bomb",
+      "reason": "fork 炸弹，可导致系统资源耗尽"
+    }
+  ]
+}

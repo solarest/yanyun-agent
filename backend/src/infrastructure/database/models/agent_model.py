@@ -32,24 +32,6 @@ class TaskModel(Base):
         return f"<TaskModel(id={self.id}, status={self.status})>"
 
 
-class EventModel(Base):
-    """SSE 事件数据库模型"""
-
-    __tablename__ = "sse_events"
-
-    # 数据库自增主键（用于排序与索引，不对外暴露）
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    task_id = Column(String, nullable=False, index=True)
-    # 任务级别的事件序号（每个 task 从 1 开始递增），与 SSEEventDTO.id 对应
-    task_seq = Column(Integer, nullable=False, default=0)
-    event_type = Column(String, nullable=False)
-    event_data = Column(JSON, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    def __repr__(self) -> str:
-        return f"<EventModel(id={self.id}, task_id={self.task_id}, seq={self.task_seq}, type={self.event_type})>"
-
-
 class AgentModel(Base):
     """Agent 数据库模型 - 单表设计（OpenClaw 七文件模式）"""
 

@@ -54,6 +54,7 @@ class SendMessageUseCase:
         title_generator: Optional[SessionTitleGenerator] = None,
         running_tasks: Optional[dict[str, asyncio.Task]] = None,
         default_model: str = "gpt-4",
+        file_storage=None,
     ):
         self.session_repo = session_repo
         self.message_repo = message_repo
@@ -65,6 +66,7 @@ class SendMessageUseCase:
         self.title_generator = title_generator
         self.running_tasks = running_tasks if running_tasks is not None else {}
         self.default_model = default_model
+        self._file_storage = file_storage
 
     async def execute(
         self,
@@ -118,32 +120,7 @@ class SendMessageUseCase:
         """
         persist_session_messages = not is_sub_agent
 
-        # 1. 保存用户消息。sub-agent 的中间对话不写入父 session，最终结果通过
-        #    Task.result 和 session_spawn 的 ToolMessage 回到主 agent。
-        user_msg: Optional[SessionMessage] = None
-        if persist_session_messages:
-            user_msg = SessionMessage(
-                session_id=session_id,
-                role=SessionMessageRole.USER,
-                content=content,
-                segments=[],
-                status=MessageStatus.COMPLETED,
-            )
-            user_msg = await self.message_repo.add(user_msg)
-
-            # 2. 更新 Session 元数据
-            session = await self.session_repo.get_by_id(session_id)
-            if session:
-                session.update_metadata(content)
-                # 首条消息自动生成标题 - 使用 LLM 提炼
-                if session.message_count == 1 and self.title_generator:
-                    # 异步生成标题，不阻塞主流程
-                    asyncio.create_task(
-                        self.title_generator.generate(session_id, content)
-                    )
-                await self.session_repo.update(session)
-
-        # 3. 创建 Task
+        # 1. Create Task first (need task_id for file storage directory)
         effective_model = model or self.default_model
         if sub_task is not None:
             task = sub_task
@@ -163,6 +140,49 @@ class SendMessageUseCase:
             )
         if self.task_repo and sub_task is None:
             task = await self.task_repo.add(task)
+
+        # 1.5 Create file storage directory and register with event emitter
+        task_dir = None
+        if self._file_storage:
+            if is_sub_agent and parent_task_id:
+                # Sub-agent: create under parent task's sub_agents/ directory
+                parent_task_dir = self._file_storage.base_path / session_id / parent_task_id
+                task_dir = self._file_storage.create_sub_agent_dir(parent_task_dir, task.id)
+            else:
+                task_dir = self._file_storage.create_task_dir(session_id, task.id)
+            # Register task dir with StreamEventService for file-backed event storage
+            if self.event_emitter and hasattr(self.event_emitter, 'set_task_dir'):
+                self.event_emitter.set_task_dir(task.id, task_dir)
+
+        # 2. Save user message — to file (deferred) or DB (sub-agent skips both)
+        user_msg: Optional[SessionMessage] = None
+        if persist_session_messages:
+            user_msg = SessionMessage(
+                session_id=session_id,
+                role=SessionMessageRole.USER,
+                content=content,
+                segments=[],
+                status=MessageStatus.COMPLETED,
+            )
+            if self._file_storage and task_dir is not None:
+                self._file_storage.write_user_msg(task_dir, {
+                    "role": "user",
+                    "content": content,
+                    "session_id": session_id,
+                    "task_id": task.id,
+                })
+            else:
+                user_msg = await self.message_repo.add(user_msg)
+
+            # 3. Update Session metadata
+            session = await self.session_repo.get_by_id(session_id)
+            if session:
+                session.update_metadata(content)
+                if session.message_count == 1 and self.title_generator:
+                    asyncio.create_task(
+                        self.title_generator.generate(session_id, content)
+                    )
+                await self.session_repo.update(session)
 
         if self.event_publisher and not is_sub_agent:
             await self.event_publisher.publish(TaskCreated(
@@ -192,6 +212,7 @@ class SendMessageUseCase:
                     allowed_tools=allowed_tools,
                     persist_session_messages=persist_session_messages,
                     send_message_use_case=self,
+                    task_dir=str(task_dir) if task_dir else None,
                     team_mode=team_mode,
                     team_id=team_id,
                     team_role=team_role,

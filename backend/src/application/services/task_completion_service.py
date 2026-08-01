@@ -23,6 +23,11 @@ from src.domain.repositories.session_repository import ISessionRepository
 from src.domain.repositories.task_repository import ITaskRepository
 from src.domain.services import IEventEmitter
 from src.domain.services.message_content import MessageContentService
+from src.domain.services.tool_output_limits import (
+    MAX_TOOL_OUTPUT_SIZE,
+    truncate_tool_output,
+    truncate_tool_output_for_db,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,11 +50,13 @@ class TaskCompletionService:
         task_repo: Optional[ITaskRepository] = None,
         session_repo: Optional[ISessionRepository] = None,
         event_publisher: Optional[IEventPublisher] = None,
+        file_storage=None,
     ):
         self.message_repo = message_repo
         self.task_repo = task_repo
         self.session_repo = session_repo
         self.event_publisher = event_publisher
+        self._file_storage = file_storage
 
     async def finalize(
         self,
@@ -59,6 +66,7 @@ class TaskCompletionService:
         result: Dict[str, Any],
         event_emitter: Optional[IEventEmitter] = None,
         persist_session_messages: bool = True,
+        task_dir=None,
     ) -> None:
         """处理终态结果。
 
@@ -68,6 +76,7 @@ class TaskCompletionService:
             result: LangGraph 执行结果
             event_emitter: 事件发射器
             persist_session_messages: 是否持久化会话消息（sub-agent 模式为 False）
+            task_dir: 本地文件存储目录（可选，用于读取延迟写入的用户消息）
         """
         final_result = result.get("final_result")
         error = result.get("error")
@@ -108,12 +117,30 @@ class TaskCompletionService:
                 if output:
                     clarify_outputs.append(output)
                 continue
+            # Three-path truncation for tool outputs:
+            # 1. SSE live push → already truncated by tool_execute_node
+            # 2. events.jsonl → matches SSE (truncated)
+            # 3. DB tool_results → truncate + file_ref + write full file
+            if (
+                output
+                and len(output) > MAX_TOOL_OUTPUT_SIZE
+                and self._file_storage
+                and task_dir is not None
+            ):
+                file_ref = f"tool_results/{tool_call_id}.txt"
+                self._file_storage.write_tool_result_file(task_dir, tool_call_id, output)
+            else:
+                file_ref = None
+
+            db_result = truncate_tool_output_for_db(output, ref=file_ref)
             all_tool_results.append(
                 {
                     "tool_name": tool_result.get("tool_name", ""),
                     "id": tool_call_id,
                     "status": tool_result.get("status", "success"),
-                    "result": output,
+                    "result": db_result["result"],
+                    **({"full_result_ref": db_result["full_result_ref"]}
+                       if "full_result_ref" in db_result else {}),
                 }
             )
 
@@ -142,6 +169,20 @@ class TaskCompletionService:
 
         assistant_msg: Optional[SessionMessage] = None
         if persist_session_messages:
+            # Persist user message from file storage (deferred from HTTP request phase)
+            if self._file_storage and task_dir is not None:
+                user_msg_data = self._file_storage.read_user_msg(task_dir)
+                if user_msg_data:
+                    user_msg = SessionMessage(
+                        session_id=session_id,
+                        task_id=task.id,
+                        role=SessionMessageRole.USER,
+                        content=user_msg_data.get("content", ""),
+                        segments=[],
+                        status=MessageStatus.COMPLETED,
+                    )
+                    await self.message_repo.add(user_msg)
+
             assistant_msg = SessionMessage(
                 session_id=session_id,
                 task_id=task.id,
@@ -224,6 +265,39 @@ class TaskCompletionService:
         }
 
     @staticmethod
+    def _get_message_kind(msg) -> str:
+        """将 LangGraph 消息统一分类为消息类型。
+
+        返回: "ai" | "human" | "system" | "tool" | "unknown"
+
+        同时支持 dict 格式和 LangChain Message 对象格式。
+        """
+        # ── dict 格式 ──
+        if isinstance(msg, dict):
+            role = msg.get("role", "")
+            if msg.get("tool_calls") or role == "assistant":
+                return "ai"
+            if role == "user" or role == "human":
+                return "human"
+            if role == "system":
+                return "system"
+            if role == "tool":
+                return "tool"
+            return "unknown"
+
+        # ── LangChain Message 对象 ──
+        msg_type = type(msg).__name__
+        if msg_type in ("AIMessage", "AIMessageChunk"):
+            return "ai"
+        if msg_type == "HumanMessage":
+            return "human"
+        if msg_type == "SystemMessage":
+            return "system"
+        if msg_type in ("ToolMessage", "FunctionMessage"):
+            return "tool"
+        return "unknown"
+
+    @staticmethod
     def _build_segments(
         messages: list,
         thinking_text: str,
@@ -244,62 +318,54 @@ class TaskCompletionService:
             segments.append({"type": "thinking", "content": thinking_text})
 
         # 2. 按 messages 顺序遍历，交替插入 text + tool segments
-        def _is_ai(msg) -> bool:
-            if isinstance(msg, dict):
-                return bool(msg.get("tool_calls")) or msg.get("role") == "assistant"
-            msg_type = type(msg).__name__
-            return msg_type == "AIMessage"
-
-        def _is_human_or_system(msg) -> bool:
-            if isinstance(msg, dict):
-                return msg.get("role") in ("user", "system", "human")
-            return type(msg).__name__ in ("HumanMessage", "SystemMessage")
-
-        def _is_tool_msg(msg) -> bool:
-            if isinstance(msg, dict):
-                return msg.get("role") == "tool"
-            return type(msg).__name__ in ("ToolMessage", "FunctionMessage")
-
         for msg in messages:
-            if _is_tool_msg(msg) or _is_human_or_system(msg):
+            kind = TaskCompletionService._get_message_kind(msg)
+            if kind in ("human", "system", "tool", "unknown"):
                 continue
 
-            if _is_ai(msg):
-                # 提取 content
-                if isinstance(msg, dict):
-                    content = msg.get("content", "") or ""
-                    tool_calls = msg.get("tool_calls") or []
-                else:
-                    content = getattr(msg, "content", "") or ""
-                    tool_calls = getattr(msg, "tool_calls", None) or []
+            # AI message: extract content and tool_calls
+            if isinstance(msg, dict):
+                content = msg.get("content", "") or ""
+                tool_calls = msg.get("tool_calls") or []
+            else:
+                content = getattr(msg, "content", "") or ""
+                tool_calls = getattr(msg, "tool_calls", None) or []
 
-                if content and isinstance(content, str) and content.strip():
-                    segments.append({"type": "text", "content": content.strip()})
+            if content and isinstance(content, str) and content.strip():
+                segments.append({"type": "text", "content": content.strip()})
 
-                for tc in tool_calls:
-                    tc_dict = tc if isinstance(tc, dict) else {
-                        "id": getattr(tc, "id", ""),
-                        "name": getattr(tc, "name", ""),
-                        "args": getattr(tc, "args", {}) or {},
-                    }
-                    tc_id = tc_dict.get("id", "")
-                    tc_name = tc_dict.get("name", "")
-                    tc_args = tc_dict.get("args", {})
+            for tc in tool_calls:
+                tc_dict = tc if isinstance(tc, dict) else {
+                    "id": getattr(tc, "id", ""),
+                    "name": getattr(tc, "name", ""),
+                    "args": getattr(tc, "args", {}) or {},
+                }
+                tc_id = tc_dict.get("id", "")
+                tc_name = tc_dict.get("name", "")
 
-                    # 查找匹配的 tool result
-                    matched = None
-                    for tr in all_tool_results:
-                        if tr.get("id") == tc_id:
-                            matched = tr
-                            break
+                # 跳过空 ID 的工具调用（损坏数据）
+                if not tc_id:
+                    logger.warning(
+                        "Skipping tool_call '%s' with empty id", tc_name
+                    )
+                    continue
 
-                    segments.append({
-                        "type": "tool",
-                        "content": tc_name,
-                        "toolInput": tc_args,
-                        "toolCallId": tc_id,
-                        "toolStatus": matched["status"] if matched else "success",
-                        "toolResult": matched["result"] if matched else "",
-                    })
+                tc_args = tc_dict.get("args", {})
+
+                # 查找匹配的 tool result
+                matched = None
+                for tr in all_tool_results:
+                    if tr.get("id") == tc_id:
+                        matched = tr
+                        break
+
+                segments.append({
+                    "type": "tool",
+                    "content": tc_name,
+                    "toolInput": tc_args,
+                    "toolCallId": tc_id,
+                    "toolStatus": matched["status"] if matched else "success",
+                    "toolResult": matched["result"] if matched else "",
+                })
 
         return segments

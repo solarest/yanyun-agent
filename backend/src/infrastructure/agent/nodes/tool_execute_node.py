@@ -1,19 +1,28 @@
 """基础设施层 - 工具执行节点
 
 LangGraph Node: tool_execute_node
-职责:执行工具调用并返回结果
+职责:执行工具调用并返回结果。
+
+支持人在回路确认：当工具返回 confirmation_required 标记时，
+通过 LangGraph interrupt() 暂停图执行；用户决策到达后恢复。
 """
 
 import asyncio
 import logging
 
 from langchain_core.messages import ToolMessage
-from langgraph.types import RunnableConfig
+from langgraph.types import RunnableConfig, interrupt
 
 from src.domain.aggregates.agent.agent_state import AgentState
+from src.domain.aggregates.agent.state_groups import ToolFields
 from src.domain.entities.event_types import AgentEventType
 from src.domain.entities.tool import ToolContext
+from src.domain.services.tool_output_limits import truncate_tool_output
 from src.infrastructure.agent.nodes.base_node import BaseNode, NodeContext
+from src.infrastructure.tools.confirmation.contract import (
+    BYPASS_CONFIRMATION_KEY,
+    CONFIRMATION_METADATA_KEY,
+)
 
 logger = logging.getLogger("tool.call")
 
@@ -51,6 +60,7 @@ async def _execute_single_tool(
         extra={
             **context.extra,
             "tool_call_id": tool_call_id,
+            "event_emitter": event_emitter,
         },
     )
 
@@ -101,7 +111,7 @@ async def _execute_single_tool(
                 "toolCallId": tool_call_id,
                 "toolName": tool_name,
                 "status": status,
-                "output": result.output,
+                "output": truncate_tool_output(result.output),
                 "metadata": metadata,
             },
         )
@@ -138,7 +148,7 @@ async def _execute_single_tool(
 
 
 class ToolExecuteNode(BaseNode):
-    """工具执行节点"""
+    """工具执行节点（支持人在回路确认中断/恢复）"""
 
     @property
     def node_name(self) -> str:
@@ -153,8 +163,10 @@ class ToolExecuteNode(BaseNode):
 
         1. 并行执行所有待执行工具调用
         2. 发射工具相关事件
-        3. 构建 ToolMessage 列表
-        4. 返回工具结果
+        3. 如有 confirmation_required → interrupt() 暂停图
+        4. 恢复后按决策重新执行或拒绝
+        5. 构建 ToolMessage 列表
+        6. 返回工具结果
 
         Args:
             state: 当前 Agent 状态
@@ -178,13 +190,13 @@ class ToolExecuteNode(BaseNode):
 
         # 构建工具 context
         # 注入 sub-agent 和 team 相关依赖到 extra 中
-        extra = {}
+        # session_id 对所有作用域注入，供 ConfirmationMiddleware 做会话级 allow-all
+        extra = {"session_id": session_id}
         if send_message_use_case:
             extra.update({
                 "send_message_use_case": send_message_use_case,
                 "sub_agent_runtime_scope": sub_agent_runtime_scope,
                 "task_repo": task_repo,
-                "event_emitter": event_emitter,
                 "parent_state": state,
                 "parent_agent_id": context.agent_id,
                 "parent_session_id": session_id,
@@ -210,10 +222,11 @@ class ToolExecuteNode(BaseNode):
             extra=extra,
         )
 
-        pending_tools = state.get("pending_tool_calls", [])
-        structured_results = dict(state.get("tool_results", {}))
+        tf = ToolFields.from_state(state)
+        pending_tools = tf.pending
+        structured_results = dict(tf.results)
         awaiting_user_input = False
-        final_result = state.get("final_result")
+        final_result = tf.final_result
         last_executed_tool_call_ids: list[str] = []
 
         # Node 入口日志(将由基类自动记录)
@@ -243,7 +256,7 @@ class ToolExecuteNode(BaseNode):
                     "[NODE:tool_execute] PRIORITY_FILTER | task_id=%s | filter_type=clarify | "
                     "kept_count=%d | filtered_out_count=%d",
                     context.task_id, len(pending_tools),
-                    len([tc for tc in state.get("pending_tool_calls", [])
+                    len([tc for tc in tf.pending
                         if tc.get("name") != "clarify"])
                 )
             elif has_task_create:
@@ -254,9 +267,11 @@ class ToolExecuteNode(BaseNode):
                     "[NODE:tool_execute] PRIORITY_FILTER | task_id=%s | filter_type=task_create | "
                     "kept_count=%d | filtered_out_count=%d",
                     context.task_id, len(pending_tools),
-                    len([tc for tc in state.get("pending_tool_calls", [])
+                    len([tc for tc in tf.pending
                         if tc.get("name") != "task_create"])
                 )
+
+            # ── 第一轮执行 ─────────────────────────────────
             tasks = [
                 _execute_single_tool(
                     tool_registry,
@@ -269,6 +284,85 @@ class ToolExecuteNode(BaseNode):
             ]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
+            # ── 检查是否需要确认中断 ────────────────────────
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    continue
+                _, result_dict = result
+                if result_dict.get("metadata", {}).get(CONFIRMATION_METADATA_KEY):
+                    # 需要人在回路确认 → interrupt() 暂停图
+                    meta = result_dict["metadata"]
+                    effective_task_id = extra.get("parent_task_id") or context.task_id
+
+                    interrupt_payload = {
+                        "toolCallId": meta["tool_call_id"],
+                        "command": meta["command"],
+                        "category": meta["category"],
+                        "riskReason": meta["risk_reason"],
+                        "sessionId": meta.get("session_id", ""),
+                        "taskId": effective_task_id,
+                        "options": ["allow_once", "allow_all", "deny"],
+                    }
+
+                    logger.info(
+                        "[NODE:tool_execute] AWAITING_CONFIRMATION | task_id=%s | "
+                        "tool_call_id=%s | command=%s",
+                        effective_task_id, meta["tool_call_id"], meta["command"],
+                    )
+
+                    # 暂停图执行——状态持久化到 checkpointer
+                    decision = interrupt(interrupt_payload)
+
+                    logger.info(
+                        "[NODE:tool_execute] CONFIRMATION_RESUMED | task_id=%s | "
+                        "tool_call_id=%s | decision=%s",
+                        effective_task_id, meta["tool_call_id"], decision,
+                    )
+
+                    # ── 恢复后按决策处理 ────────────────────
+                    if decision == "deny":
+                        results[i] = (meta["tool_call_id"], {
+                            "tool_name": result_dict["tool_name"],
+                            "status": "error",
+                            "output": "用户拒绝执行该命令",
+                            "error": "user_denied",
+                            "metadata": {},
+                        })
+                    else:
+                        # allow_once 或 allow_all → 重执行（绕过确认）
+                        if decision == "allow_all":
+                            from src.infrastructure.tools.confirmation.store import (
+                                get_default_session_store,
+                            )
+                            session_store = get_default_session_store()
+                            sess_id = meta.get("session_id", "")
+                            if sess_id:
+                                await session_store.allow(sess_id, meta["category"])
+
+                        tc = pending_tools[i]
+                        bypass_extra = {
+                            **extra,
+                            BYPASS_CONFIRMATION_KEY: True,
+                            "tool_call_id": meta["tool_call_id"],
+                            "event_emitter": event_emitter,
+                        }
+                        bypass_context = ToolContext(
+                            task_id=context.task_id,
+                            workspace=state.get("workspace", ""),
+                            agent_id=context.agent_id,
+                            extra=bypass_extra,
+                        )
+                        results[i] = await _execute_single_tool(
+                            tool_registry,
+                            context.event_emitter,
+                            context.task_id,
+                            tc,
+                            bypass_context,
+                        )
+
+                    break  # 一次只处理一个确认（单次通常只有一个 shell 调用）
+
+            # ── 汇总结果 ────────────────────────────────────
             for i, result in enumerate(results):
                 tc = pending_tools[i]
                 tool_call_id = tc.get("id", "")

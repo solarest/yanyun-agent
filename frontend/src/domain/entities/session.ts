@@ -24,6 +24,8 @@ export interface MessageSegment {
   toolStatus?: string;
   /** 仅 tool 类型：工具调用 ID */
   toolCallId?: string;
+  /** 仅 tool 类型：危险命令风险原因（awaiting_confirmation 时由确认事件填入） */
+  riskReason?: string;
 }
 
 export interface Session {

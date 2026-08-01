@@ -101,10 +101,10 @@ def create_app() -> FastAPI:
 
     # 全局共享的 StreamEventService（SSE 事件需要单例以共享订阅）
     from src.application.agent_loop.stream_event import StreamEventService
-    from src.presentation.dependencies import create_event_repo_factory
+    from src.application.services.session_file_storage import SessionFileStorage
 
     app.state.event_service = StreamEventService(
-        create_event_repo_factory(), chunk_flush_size=5)
+        file_storage=SessionFileStorage(), chunk_flush_size=5)
 
     # 全局状态
     app.state.running_tasks = {}  # task_id -> asyncio.Task
