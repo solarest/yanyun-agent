@@ -50,14 +50,18 @@ class AgentLoopLifecycle:
         result: dict,
         event_emitter: Optional[IEventEmitter],
         persist_session_messages: bool = True,
+        task_dir: Optional[str] = None,
     ) -> None:
         """处理正常完成的 graph 执行"""
+        from pathlib import Path
+
         await self._task_completion_service.finalize(
             task=task,
             session_id=session_id,
             result=result,
             event_emitter=event_emitter,
             persist_session_messages=persist_session_messages,
+            task_dir=Path(task_dir) if task_dir else None,
         )
 
     async def handle_interrupt(
@@ -68,6 +72,7 @@ class AgentLoopLifecycle:
         config: dict,
         event_emitter: Optional[IEventEmitter],
         persist_session_messages: bool = True,
+        task_dir: Optional[str] = None,
     ) -> None:
         """处理人在回路中断（GraphInterrupt）
 

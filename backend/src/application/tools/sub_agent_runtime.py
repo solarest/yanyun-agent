@@ -71,6 +71,9 @@ async def sub_agent_runtime_scope(
         shared_tool_registry = send_message_use_case.tool_registry
         shared_running_tasks = send_message_use_case.running_tasks
 
+        # 共享资源
+        shared_file_storage = getattr(send_message_use_case, '_file_storage', None)
+
         # 构建应用服务（isolated repos + shared singletons）
         title_generator = SessionTitleGenerator(
             llm_provider=shared_llm_provider,
@@ -80,6 +83,7 @@ async def sub_agent_runtime_scope(
             message_repo=isolated_message_repo,
             task_repo=isolated_task_repo,
             session_repo=isolated_session_repo,
+            file_storage=shared_file_storage,
         )
         loop_runner = AgentLoopRunner(
             agent_repo=isolated_agent_repo,
@@ -94,6 +98,7 @@ async def sub_agent_runtime_scope(
             workflow_builder=None,
             task_completion_service=completion_service,
             default_model=send_message_use_case.default_model,
+            file_storage=shared_file_storage,
         )
 
         isolated_use_case = SendMessageUseCase(
@@ -105,5 +110,6 @@ async def sub_agent_runtime_scope(
             loop_runner=loop_runner,
             title_generator=title_generator,
             running_tasks=shared_running_tasks,
+            file_storage=shared_file_storage,
         )
         yield isolated_use_case, isolated_task_repo

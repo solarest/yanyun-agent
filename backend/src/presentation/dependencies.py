@@ -10,7 +10,6 @@ from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.application.agent_loop.stream_event import StreamEventService
-from src.domain.repositories.event_repository import IEventRepository
 from src.domain.repositories.task_repository import ITaskRepository
 from src.domain.repositories.agent_repository import IAgentRepository
 from src.domain.repositories.session_repository import ISessionRepository
@@ -22,7 +21,6 @@ from src.domain.interfaces.prompt_context_interface import PromptContextInterfac
 from src.infrastructure.agent.prompt_context_impl import PromptContextImpl
 from src.infrastructure.llm.config import LLMSettings
 from src.infrastructure.llm.llm_provider_impl import LLMProviderImpl
-from src.infrastructure.repositories.sqlite_event_repo import SQLiteEventRepository
 from src.infrastructure.repositories.sqlite_task_repo import SQLiteTaskRepository
 from src.infrastructure.repositories.sqlite_agent_repo import SQLiteAgentRepository
 from src.infrastructure.repositories.sqlite_session_repo import SQLiteSessionRepository
@@ -54,13 +52,6 @@ def get_task_repository(
     return SQLiteTaskRepository(db)
 
 
-def get_event_repository(
-    db: AsyncSession = Depends(get_async_db),
-) -> IEventRepository:
-    """获取事件仓储实例"""
-    return SQLiteEventRepository(db)
-
-
 def get_agent_repository(
     db: AsyncSession = Depends(get_async_db),
 ) -> IAgentRepository:
@@ -78,19 +69,14 @@ def get_agent_use_case(
 
 def get_event_service() -> StreamEventService:
     """获取事件服务实例"""
-    return StreamEventService(create_event_repo_factory())
+    from src.application.services.session_file_storage import SessionFileStorage
+    return StreamEventService(file_storage=SessionFileStorage())
 
 
-def create_event_repo_factory():
-    """创建供 StreamEventService 使用的短生命周期事件仓储工厂。"""
-    from src.infrastructure.database.session import AsyncSessionLocal
-
-    @asynccontextmanager
-    async def _factory():
-        async with AsyncSessionLocal() as session:
-            yield SQLiteEventRepository(session)
-
-    return _factory
+def create_file_storage():
+    """创建 SessionFileStorage 实例。"""
+    from src.application.services.session_file_storage import SessionFileStorage
+    return SessionFileStorage()
 
 
 def get_session_repository(
@@ -264,6 +250,7 @@ def get_send_message_use_case(request: Request):
         SQLiteSessionMessageRepository,
     )
     from src.infrastructure.skills import SQLiteSkillRepository
+    from src.application.services.session_file_storage import SessionFileStorage
 
     bg_db = SAAsyncSession(async_engine)
     bg_task_repo = SQLiteTaskRepository(bg_db)
@@ -277,6 +264,7 @@ def get_send_message_use_case(request: Request):
     bg_llm_provider = get_llm_provider()
     bg_llm_settings = get_llm_settings()
     bg_prompt_context = get_prompt_context()
+    bg_file_storage = SessionFileStorage()
 
     title_generator = SessionTitleGenerator(
         llm_provider=bg_llm_provider,
@@ -286,6 +274,7 @@ def get_send_message_use_case(request: Request):
         message_repo=bg_message_repo,
         task_repo=bg_task_repo,
         session_repo=bg_session_repo,
+        file_storage=bg_file_storage,
     )
     loop_runner = AgentLoopRunner(
         agent_repo=bg_agent_repo,
@@ -300,6 +289,7 @@ def get_send_message_use_case(request: Request):
         workflow_builder=None,
         task_completion_service=completion_service,
         default_model=bg_llm_settings.default_model,
+        file_storage=bg_file_storage,
     )
 
     return SendMessageUseCase(
@@ -312,6 +302,7 @@ def get_send_message_use_case(request: Request):
         title_generator=title_generator,
         default_model=bg_llm_settings.default_model,
         running_tasks=request.app.state.running_tasks,
+        file_storage=bg_file_storage,
     )
 
 

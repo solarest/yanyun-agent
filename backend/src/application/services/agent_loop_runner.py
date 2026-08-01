@@ -10,6 +10,8 @@ from typing import Any, Optional
 
 from langgraph.errors import GraphInterrupt
 
+from pathlib import Path
+
 from src.domain.entities.event_types import AgentEventType
 from src.application.services.agent_loop_context import AgentLoopContext
 from src.application.services.agent_loop_lifecycle import AgentLoopLifecycle
@@ -18,6 +20,7 @@ from src.domain.repositories.session_message_repository import (
     ISessionMessageRepository,
 )
 from src.application.services.task_completion_service import TaskCompletionService
+from src.domain.services.checkpoint_serializer import serialize_agent_state
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +46,7 @@ class AgentLoopRunner:
         workflow_builder: Any,
         task_completion_service: TaskCompletionService,
         default_model: str = "gpt-4",
+        file_storage=None,
     ):
         self._context = AgentLoopContext(
             agent_repo=agent_repo,
@@ -61,6 +65,7 @@ class AgentLoopRunner:
             task_repo=task_repo,
             task_completion_service=task_completion_service,
         )
+        self._file_storage = file_storage
 
     async def run(
         self,
@@ -86,6 +91,7 @@ class AgentLoopRunner:
         team_message_bus: Any = None,
         team_context: Optional[str] = None,
         leader_agent_id: Optional[str] = None,
+        task_dir: Optional[str] = None,
     ) -> None:
         """执行 Agent Loop。
 
@@ -144,6 +150,9 @@ class AgentLoopRunner:
             await effective_event_emitter.emit(task.id, AgentEventType.TASK_STARTED, {})
             result = await graph.ainvoke(initial_state, graph_config)
 
+            # Save checkpoint after successful graph execution
+            self._save_checkpoint(task.id, task_dir, result)
+
             # Step 3: 正常完成
             await self._lifecycle.handle_normal_completion(
                 task=task,
@@ -151,6 +160,7 @@ class AgentLoopRunner:
                 result=result,
                 event_emitter=effective_event_emitter,
                 persist_session_messages=persist_session_messages,
+                task_dir=task_dir,
             )
 
         except GraphInterrupt:
@@ -161,6 +171,7 @@ class AgentLoopRunner:
                 config=graph_config,
                 event_emitter=effective_event_emitter,
                 persist_session_messages=persist_session_messages,
+                task_dir=task_dir,
             )
 
         except asyncio.CancelledError:
@@ -175,3 +186,16 @@ class AgentLoopRunner:
                 error=e,
                 event_emitter=effective_event_emitter,
             )
+
+    def _save_checkpoint(self, task_id: str, task_dir: str | None, state: dict) -> None:
+        """Save an AgentState checkpoint to file storage."""
+        if not self._file_storage or not task_dir:
+            return
+        try:
+            turn = state.get("current_turn", 0)
+            serialized = serialize_agent_state(state)
+            self._file_storage.write_checkpoint(
+                Path(task_dir), serialized, turn_number=turn
+            )
+        except Exception:
+            logger.exception("Failed to save checkpoint for task %s", task_id)

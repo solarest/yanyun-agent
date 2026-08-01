@@ -1,35 +1,43 @@
 """应用层 - SSE 事件服务
 
 职责：
-1. 发射事件：生成序列号、构建 DTO、持久化、推送
+1. 发射事件：生成序列号、构建 DTO、持久化到文件、推送
 2. 订阅管理：多客户端订阅同一任务
 3. 断线重连：支持 last-event-id 补发
 """
 
 import asyncio
 from collections import defaultdict
-from typing import Any, AsyncContextManager, Callable, Dict, List
+from pathlib import Path
+from typing import Any, Dict, List
 
 from src.application.dtos.event_dto import SSEEventDTO
-from src.application.services.event_mapper import EventMapper
 from src.domain.entities.event_types import AgentEventType
-from src.domain.repositories.event_repository import IEventRepository
 from src.domain.services import IEventEmitter
 
 
-EventRepoFactory = Callable[[], AsyncContextManager[IEventRepository]]
-
-
 class StreamEventService(IEventEmitter):
-    """SSE 事件服务 — 应用层"""
+    """SSE 事件服务 — 应用层
 
-    def __init__(self, event_repo_factory: EventRepoFactory, chunk_flush_size: int = 10):
-        self._event_repo_factory = event_repo_factory
+    事件持久化到本地文件 (events.jsonl)，同时推送至订阅者队列。
+    """
+
+    def __init__(
+        self,
+        file_storage=None,
+        chunk_flush_size: int = 10,
+    ):
+        self._file_storage = file_storage
+        self._task_dirs: Dict[str, Path] = {}
         self._subscribers: Dict[str, List[asyncio.Queue]] = defaultdict(list)
         self._sequences: Dict[str, int] = defaultdict(int)
         self._chunk_buffers: Dict[str, List[SSEEventDTO]] = defaultdict(list)
         self._locks: Dict[str, asyncio.Lock] = {}
         self._chunk_flush_size = chunk_flush_size
+
+    def set_task_dir(self, task_id: str, task_dir: Path) -> None:
+        """Register the file storage directory for a task."""
+        self._task_dirs[task_id] = task_dir
 
     def _get_lock(self, task_id: str) -> asyncio.Lock:
         lock = self._locks.get(task_id)
@@ -39,18 +47,31 @@ class StreamEventService(IEventEmitter):
         return lock
 
     async def _save_event(self, task_id: str, event: SSEEventDTO) -> None:
-        # 将 DTO 转换为领域实体后保存
-        entity = EventMapper.to_entity(event)
-        async with self._event_repo_factory() as event_repo:
-            await event_repo.save(task_id, entity)
+        task_dir = self._task_dirs.get(task_id)
+        if task_dir is None:
+            return
+        if self._file_storage is None:
+            return
+        self._file_storage.append_event(task_dir, {
+            "seq": int(event.id),
+            "type": event.event_type,
+            "data": event.data,
+        })
 
     async def _save_events(self, task_id: str, events: List[SSEEventDTO]) -> None:
         if not events:
             return
-        # 将 DTO 列表转换为领域实体列表后保存
-        entities = EventMapper.to_entity_list(events)
-        async with self._event_repo_factory() as event_repo:
-            await event_repo.save_batch(task_id, entities)
+        task_dir = self._task_dirs.get(task_id)
+        if task_dir is None:
+            return
+        if self._file_storage is None:
+            return
+        for event in events:
+            self._file_storage.append_event(task_dir, {
+                "seq": int(event.id),
+                "type": event.event_type,
+                "data": event.data,
+            })
 
     async def _flush_chunks_locked(self, task_id: str) -> None:
         buffered = self._chunk_buffers.get(task_id, [])
@@ -175,11 +196,21 @@ class StreamEventService(IEventEmitter):
         """
         async with self._get_lock(task_id):
             await self._flush_chunks_locked(task_id)
-            async with self._event_repo_factory() as event_repo:
-                events = await event_repo.get_by_task_id(task_id)
-        # 将领域实体转换为 DTO，然后序列化
-        dtos = EventMapper.to_dto_list(events)
-        return [dto.model_dump_json() for dto in dtos]
+
+        task_dir = self._task_dirs.get(task_id)
+        if task_dir is None or self._file_storage is None:
+            return []
+
+        raw_events = self._file_storage.read_events(task_dir)
+        return [
+            SSEEventDTO(
+                id=str(e["seq"]),
+                event_type=e["type"],
+                data=e.get("data", {}),
+                timestamp=e.get("timestamp", ""),
+            ).model_dump_json()
+            for e in raw_events
+        ]
 
     async def get_events_after(self, task_id: str, last_event_id: str) -> List[str]:
         """获取指定序列号之后的事件 (断线重连补发)
@@ -193,8 +224,19 @@ class StreamEventService(IEventEmitter):
         """
         async with self._get_lock(task_id):
             await self._flush_chunks_locked(task_id)
-            async with self._event_repo_factory() as event_repo:
-                events = await event_repo.get_after(task_id, last_event_id)
-        # 将领域实体转换为 DTO，然后序列化
-        dtos = EventMapper.to_dto_list(events)
-        return [dto.model_dump_json() for dto in dtos]
+
+        task_dir = self._task_dirs.get(task_id)
+        if task_dir is None or self._file_storage is None:
+            return []
+
+        last_seq = int(last_event_id)
+        raw_events = self._file_storage.read_events(task_dir, last_event_id=last_seq)
+        return [
+            SSEEventDTO(
+                id=str(e["seq"]),
+                event_type=e["type"],
+                data=e.get("data", {}),
+                timestamp=e.get("timestamp", ""),
+            ).model_dump_json()
+            for e in raw_events
+        ]

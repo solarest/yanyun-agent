@@ -106,9 +106,10 @@ class TestTeamModeLeader:
                     team_role="leader",
                 )
 
-                # Leader should NOT have the inbound content appended
-                assert len(messages) == 1
+                # Leader: content is now appended in load() for deferred message persistence
+                assert len(messages) == 2
                 assert messages[0].content == "hello"
+                assert messages[1].content == "inbound msg"
 
 
 class TestTeamModeMember:
@@ -169,11 +170,14 @@ class TestFallbackMode:
             is_sub_agent=False,
         )
 
-        assert len(messages) == 2
+        # Current user message appended at end (deferred persistence from file)
+        assert len(messages) == 3
         assert isinstance(messages[0], HumanMessage)
         assert messages[0].content == "hi"
         assert isinstance(messages[1], AIMessage)
         assert messages[1].content == "Hi! How can I help?"
+        assert isinstance(messages[2], HumanMessage)
+        assert messages[2].content == "new msg"
 
     @pytest.mark.asyncio
     async def test_load_fallback_handles_tool_summary_role(self, message_repo):
@@ -191,9 +195,12 @@ class TestFallbackMode:
             is_sub_agent=False,
         )
 
-        assert len(messages) == 1
+        # Current user message appended at end
+        assert len(messages) == 2
         assert isinstance(messages[0], HumanMessage)
         assert messages[0].content == "[Tool Results] files modified: a.py"
+        assert isinstance(messages[1], HumanMessage)
+        assert messages[1].content == "new"
 
     @pytest.mark.asyncio
     async def test_load_fallback_appends_tool_names_to_assistant(self, message_repo):
@@ -215,9 +222,12 @@ class TestFallbackMode:
             is_sub_agent=False,
         )
 
-        assert len(messages) == 1
+        # Current user message appended at end
+        assert len(messages) == 2
         assert isinstance(messages[0], AIMessage)
         assert "[Used Tools: read_file, search]" in messages[0].content
+        assert isinstance(messages[1], HumanMessage)
+        assert messages[1].content == "new"
 
 
 class TestPromptContextMode:
@@ -257,6 +267,8 @@ class TestPromptContextMode:
                     content="new msg",
                 )
 
-                assert len(messages) == 1
+                # Current user message appended at end
+                assert len(messages) == 2
                 assert messages[0].content == "hello"
+                assert messages[1].content == "new msg"
                 prompt_context.build_messages.assert_called_once()

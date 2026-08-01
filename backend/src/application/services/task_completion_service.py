@@ -23,7 +23,11 @@ from src.domain.repositories.session_repository import ISessionRepository
 from src.domain.repositories.task_repository import ITaskRepository
 from src.domain.services import IEventEmitter
 from src.domain.services.message_content import MessageContentService
-from src.domain.services.tool_output_limits import truncate_tool_output
+from src.domain.services.tool_output_limits import (
+    MAX_TOOL_OUTPUT_SIZE,
+    truncate_tool_output,
+    truncate_tool_output_for_db,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,11 +50,13 @@ class TaskCompletionService:
         task_repo: Optional[ITaskRepository] = None,
         session_repo: Optional[ISessionRepository] = None,
         event_publisher: Optional[IEventPublisher] = None,
+        file_storage=None,
     ):
         self.message_repo = message_repo
         self.task_repo = task_repo
         self.session_repo = session_repo
         self.event_publisher = event_publisher
+        self._file_storage = file_storage
 
     async def finalize(
         self,
@@ -60,6 +66,7 @@ class TaskCompletionService:
         result: Dict[str, Any],
         event_emitter: Optional[IEventEmitter] = None,
         persist_session_messages: bool = True,
+        task_dir=None,
     ) -> None:
         """处理终态结果。
 
@@ -69,6 +76,7 @@ class TaskCompletionService:
             result: LangGraph 执行结果
             event_emitter: 事件发射器
             persist_session_messages: 是否持久化会话消息（sub-agent 模式为 False）
+            task_dir: 本地文件存储目录（可选，用于读取延迟写入的用户消息）
         """
         final_result = result.get("final_result")
         error = result.get("error")
@@ -109,12 +117,30 @@ class TaskCompletionService:
                 if output:
                     clarify_outputs.append(output)
                 continue
+            # Three-path truncation for tool outputs:
+            # 1. SSE live push → already truncated by tool_execute_node
+            # 2. events.jsonl → matches SSE (truncated)
+            # 3. DB tool_results → truncate + file_ref + write full file
+            if (
+                output
+                and len(output) > MAX_TOOL_OUTPUT_SIZE
+                and self._file_storage
+                and task_dir is not None
+            ):
+                file_ref = f"tool_results/{tool_call_id}.txt"
+                self._file_storage.write_tool_result_file(task_dir, tool_call_id, output)
+            else:
+                file_ref = None
+
+            db_result = truncate_tool_output_for_db(output, ref=file_ref)
             all_tool_results.append(
                 {
                     "tool_name": tool_result.get("tool_name", ""),
                     "id": tool_call_id,
                     "status": tool_result.get("status", "success"),
-                    "result": truncate_tool_output(output),
+                    "result": db_result["result"],
+                    **({"full_result_ref": db_result["full_result_ref"]}
+                       if "full_result_ref" in db_result else {}),
                 }
             )
 
@@ -143,6 +169,20 @@ class TaskCompletionService:
 
         assistant_msg: Optional[SessionMessage] = None
         if persist_session_messages:
+            # Persist user message from file storage (deferred from HTTP request phase)
+            if self._file_storage and task_dir is not None:
+                user_msg_data = self._file_storage.read_user_msg(task_dir)
+                if user_msg_data:
+                    user_msg = SessionMessage(
+                        session_id=session_id,
+                        task_id=task.id,
+                        role=SessionMessageRole.USER,
+                        content=user_msg_data.get("content", ""),
+                        segments=[],
+                        status=MessageStatus.COMPLETED,
+                    )
+                    await self.message_repo.add(user_msg)
+
             assistant_msg = SessionMessage(
                 session_id=session_id,
                 task_id=task.id,

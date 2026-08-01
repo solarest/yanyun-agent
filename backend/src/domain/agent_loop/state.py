@@ -14,6 +14,15 @@ def _merge_messages(left: list, right: list) -> list:
     return left + right
 
 
+def _merge_tool_results(left: dict, right: dict) -> dict:
+    """Reducer that merges two tool_results dicts.
+
+    Right-hand values overwrite left-hand on key conflict so that repeated
+    tool_call_ids in the same turn use the latest result.
+    """
+    return {**left, **right}
+
+
 class AgentState(TypedDict):
     """Agent 运行状态 — 在节点间传递的共享数据
 
@@ -41,7 +50,7 @@ class AgentState(TypedDict):
 
     # === 工具调用 ===
     pending_tool_calls: List[Dict[str, Any]]
-    tool_results: Dict[str, Dict[str, Any]]
+    tool_results: Annotated[Dict[str, Dict[str, Any]], _merge_tool_results]
     awaiting_user_input: bool
     last_executed_tool_call_ids: List[str]
 

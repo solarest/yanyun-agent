@@ -103,12 +103,20 @@ def _init_wal() -> None:
         conn.commit()
 
 
+def _drop_table_if_exists(table_name: str) -> None:
+    """Drop a table if it exists (safe migration helper)."""
+    from sqlalchemy import text
+
+    with sync_engine.connect() as conn:
+        conn.execute(text(f"DROP TABLE IF EXISTS {table_name}"))
+        conn.commit()
+
+
 def init_db():
     """初始化数据库(创建所有表 + 轻量列迁移 + WAL 优化)"""
     # 导入所有模型以注册
     from src.infrastructure.database.models.agent_model import (  # noqa: F401
         TaskModel,
-        EventModel,
         AgentModel,
         SessionModel,
         SessionMessageModel,
@@ -126,12 +134,10 @@ def init_db():
 
     Base.metadata.create_all(bind=sync_engine)
 
+    # Drop legacy sse_events table (replaced by file-based event storage)
+    _drop_table_if_exists("sse_events")
+
     # 轻量列迁移：兼容旧库（避免重建数据库）
-    _ensure_column(
-        table="sse_events",
-        column="task_seq",
-        column_def="INTEGER NOT NULL DEFAULT 0",
-    )
     _ensure_column(
         table="skills",
         column="file_path",

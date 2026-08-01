@@ -75,17 +75,20 @@ class HistoryLoader:
             return [HumanMessage(content=content)]
 
         if team_mode:
-            return await self._load_team_mode(
+            messages = await self._load_team_mode(
                 session_id, system_prompt, model, content, team_role, default_model,
             )
-
-        if self._prompt_context:
-            return await self._load_with_prompt_context(
+        elif self._prompt_context:
+            messages = await self._load_with_prompt_context(
                 session_id, system_prompt, model, default_model,
             )
+        else:
+            # 降级：简单历史加载
+            messages = await self._load_fallback(session_id)
 
-        # 降级：简单历史加载
-        return await self._load_fallback(session_id)
+        # 追加当前用户消息（用户消息延迟写入文件后，DB 历史中不再包含当前消息）
+        messages.append(HumanMessage(content=content))
+        return messages
 
     async def _load_team_mode(
         self,
@@ -115,9 +118,6 @@ class HistoryLoader:
         else:
             messages = await self._load_fallback(session_id)
 
-        # member 需要追加入站消息（assign_team_task 不持久化 user 消息）
-        if team_role != "leader":
-            messages.append(HumanMessage(content=content))
         return messages
 
     async def _load_with_prompt_context(
