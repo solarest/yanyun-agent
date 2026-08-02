@@ -65,10 +65,35 @@
 - [ ] 9.3 Remove `sse_events` table query from reconnection path
 - [ ] 9.4 Write integration test: disconnect → reconnect → events replayed → graph continues
 
-## 10. Integration & cleanup
+## 11. FileBackedSaver — persistent MemorySaver with JSON serialization
 
-- [ ] 10.1 Run full backend test suite, fix regressions
-- [ ] 10.2 Manual end-to-end test: send message → execute with tool calls → disconnect → reconnect → verify full event history replayed
-- [ ] 10.3 Manual resume test: interrupt (confirmation) → restart server → reconnect → approve → verify execution continues
-- [ ] 10.4 Verify DB schema: no `sse_events` table, `session_messages` has user+assistant rows after finalize only
-- [ ] 10.5 Verify file structure on disk matches expected layout
+- [ ] 11.1 Implement `FileBackedSaver` extending `MemorySaver`, overriding `put` / `aput` / `put_writes` to persist state to JSON file
+- [ ] 11.2 Implement `_save()`: serialize `storage`, `writes`, `blobs` to JSON with base64-encoded msgpack data
+- [ ] 11.3 Implement `_load()`: restore `storage`, `writes`, `blobs` from JSON file into MemorySaver internal state
+- [ ] 11.4 Write unit tests: save → load round-trip, writes persistence, empty state
+- [ ] 11.5 Replace `_default_checkpointer()` in `workflow_builder.py` to use `FileBackedSaver`
+
+## 12. save_checkpoint_node — graph node for checkpoint persistence
+
+- [ ] 12.1 Create `save_checkpoint_node(state, config)` that serializes current checkpointer state to `checkpointer.json`
+- [ ] 12.2 Insert node into graph: `context_compact → save_checkpoint_node → llm_call`
+- [ ] 12.3 Pass `task_dir` through `config["configurable"]` so node knows where to write
+- [ ] 12.4 Write unit test: node saves checkpointer state when graph runs
+
+## 13. GraphInterrupt checkpoint save
+
+- [ ] 13.1 In `AgentLoopRunner`, catch `GraphInterrupt` → call `checkpointer.save_to_file(task_dir)` after checkpointer has `writes`
+- [ ] 13.2 Write unit test: interrupt → checkpointer.json has writes
+
+## 14. Approval resume from checkpointer.json
+
+- [ ] 14.1 Create `resume_meta.json` alongside `checkpointer.json` with `agent_id`, `session_id`, `model`, `workspace`
+- [ ] 14.2 Implement resume flow in `/approvals` endpoint: load → rebuild graph + config → `graph.ainvoke(Command(resume=decision), config)`
+- [ ] 14.3 Write integration test: interrupt → restart → approve → execution completes
+
+## 15. SSE reconnection resume for RUNNING tasks
+
+- [ ] 15.1 In SSE stream route, detect RUNNING task → check for `checkpointer.json`
+- [ ] 15.2 If exists: load checkpointer + rebuild graph → `graph.ainvoke(state, config)` in background → stream new events
+- [ ] 15.3 If not exists: replay events only (current behavior)
+- [ ] 15.4 Write integration test: reconnect to RUNNING task → execution resumes

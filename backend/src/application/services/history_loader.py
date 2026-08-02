@@ -86,8 +86,10 @@ class HistoryLoader:
             # 降级：简单历史加载
             messages = await self._load_fallback(session_id)
 
-        # 追加当前用户消息（用户消息延迟写入文件后，DB 历史中不再包含当前消息）
-        messages.append(HumanMessage(content=content))
+        # 追加当前用户消息（用户消息延迟写入文件后，DB 历史中不再包含当前消息）。
+        # 注意：team leader 不需要此追加（leader 的任务通过 team coordination 注入）。
+        if not (team_mode and team_role == "leader"):
+            messages.append(HumanMessage(content=content))
         return messages
 
     async def _load_team_mode(

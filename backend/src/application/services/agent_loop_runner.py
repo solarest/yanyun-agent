@@ -140,6 +140,7 @@ class AgentLoopRunner:
             team_message_bus=team_message_bus,
             team_context=team_context,
             leader_agent_id=leader_agent_id,
+            task_dir=task_dir,
         )
 
         # 从 config 中提取 event_emitter（build_all 已构建）
@@ -164,6 +165,8 @@ class AgentLoopRunner:
             )
 
         except GraphInterrupt:
+            # Persist checkpointer state (includes writes for Command(resume=))
+            self._save_checkpointer_to_file(task_dir)
             await self._lifecycle.handle_interrupt(
                 task=task,
                 session_id=session_id,
@@ -186,6 +189,22 @@ class AgentLoopRunner:
                 error=e,
                 event_emitter=effective_event_emitter,
             )
+
+    def _save_checkpointer_to_file(self, task_dir: str | None) -> None:
+        """Persist the checkpointer's full state (storage + writes) to file.
+
+        Called after GraphInterrupt so writes from interrupt() are captured.
+        """
+        if not self._file_storage or not task_dir:
+            return
+        try:
+            from src.infrastructure.agent.save_checkpoint_node import save_checkpoint_node
+            config = {"configurable": {
+                "checkpointer_file": str(Path(task_dir) / "checkpointer.json"),
+            }}
+            save_checkpoint_node({}, config)  # state not needed, only saves checkpointer
+        except Exception:
+            logger.exception("Failed to save checkpointer for task")
 
     def _save_checkpoint(self, task_id: str, task_dir: str | None, state: dict) -> None:
         """Save an AgentState checkpoint to file storage."""

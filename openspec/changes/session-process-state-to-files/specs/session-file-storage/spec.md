@@ -73,3 +73,26 @@ The `sse_events` database table and all associated ORM models and repository imp
 #### Scenario: sse_events table dropped from schema
 - **WHEN** the application starts and runs schema initialization
 - **THEN** the `sse_events` table SHALL NOT exist in the database schema
+
+### Requirement: Checkpointer state persisted as JSON in task directory
+
+The LangGraph `MemorySaver` internal state SHALL be persisted as `checkpointer.json` in the task directory, containing `storage`, `writes`, and `blobs` with base64-encoded msgpack data.
+
+#### Scenario: checkpointer.json written before each LLM call
+- **WHEN** the graph transitions through `save_checkpoint_node` before `llm_call`
+- **THEN** `checkpointer.json` SHALL be written to the task directory
+- **AND** the file SHALL contain the serialized MemorySaver state
+
+#### Scenario: checkpointer.json written on graph interrupt
+- **WHEN** a `GraphInterrupt` is raised during tool execution
+- **AND** LangGraph has populated `writes` in the checkpointer
+- **THEN** `checkpointer.json` SHALL be updated with the writes needed for resume
+
+### Requirement: Resume metadata stored as resume_meta.json
+
+A `resume_meta.json` file SHALL be written at task start containing parameters needed to rebuild graph config after process restart.
+
+#### Scenario: resume_meta.json contains rebuild parameters
+- **WHEN** a task execution begins
+- **THEN** `resume_meta.json` SHALL be written with `agent_id`, `session_id`, `model`, `workspace`, `max_turns`
+- **AND** these parameters SHALL be sufficient to rebuild the graph config for resume

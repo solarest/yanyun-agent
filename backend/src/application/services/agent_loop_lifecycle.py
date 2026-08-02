@@ -104,7 +104,11 @@ class AgentLoopLifecycle:
                     result=result,
                     event_emitter=event_emitter,
                     persist_session_messages=persist_session_messages,
+                    task_dir=Path(task_dir) if task_dir else None,
                 )
+                # Clean up task_dir registration to prevent memory leak
+                if hasattr(event_emitter, 'remove_task_dir'):
+                    event_emitter.remove_task_dir(task.id)
                 if event_emitter:
                     await event_emitter.emit(
                         task.id, AgentEventType.TASK_COMPLETED, {}

@@ -47,9 +47,12 @@ class AgentWorkflowBuilder(IAgentWorkflowBuilder):
 
         workflow = StateGraph(AgentState)
 
+        from src.infrastructure.agent.save_checkpoint_node import save_checkpoint_node
+
         workflow.add_node("llm_call", llm_call_node)
         workflow.add_node("tool_execute", tool_execute_node)
         workflow.add_node("context_compact", context_compact_node)
+        workflow.add_node("save_checkpoint", save_checkpoint_node)
 
         # 入口: context_compact 作为每轮 LLM 前置守门
         workflow.set_entry_point("context_compact")
@@ -66,10 +69,41 @@ class AgentWorkflowBuilder(IAgentWorkflowBuilder):
             {"context_compact": "context_compact", END: END},
         )
 
-        workflow.add_edge("context_compact", "llm_call")
+        # context_compact → save_checkpoint → llm_call
+        # Checkpointer state is persisted before each LLM invocation
+        workflow.add_edge("context_compact", "save_checkpoint")
+        workflow.add_edge("save_checkpoint", "llm_call")
 
         cls._compiled = workflow.compile(checkpointer=_default_checkpointer())
         return cls._compiled
+
+    @classmethod
+    def build_with_checkpointer(cls, checkpointer):
+        """Build a graph with a specific checkpointer (for checkpoint resume).
+
+        Does NOT use the cached compiled graph — always recompiles.
+        """
+        from langgraph.checkpoint.memory import MemorySaver
+
+        from src.infrastructure.agent.save_checkpoint_node import save_checkpoint_node
+
+        workflow = StateGraph(AgentState)
+        workflow.add_node("llm_call", llm_call_node)
+        workflow.add_node("tool_execute", tool_execute_node)
+        workflow.add_node("context_compact", context_compact_node)
+        workflow.add_node("save_checkpoint", save_checkpoint_node)
+        workflow.set_entry_point("context_compact")
+        workflow.add_conditional_edges(
+            "llm_call", route_after_llm,
+            {"tool_execute": "tool_execute", "context_compact": "context_compact", END: END},
+        )
+        workflow.add_conditional_edges(
+            "tool_execute", route_after_tool_execute,
+            {"context_compact": "context_compact", END: END},
+        )
+        workflow.add_edge("context_compact", "save_checkpoint")
+        workflow.add_edge("save_checkpoint", "llm_call")
+        return workflow.compile(checkpointer=checkpointer)
 
     @classmethod
     def reset(cls) -> None:
