@@ -48,6 +48,8 @@ class AgentLoopRunner:
         default_model: str = "gpt-4",
         file_storage=None,
     ):
+        # 暴露 llm_provider：sub_agent_runtime_scope 以此判断能否构建隔离运行时
+        self.llm_provider = llm_provider
         self._context = AgentLoopContext(
             agent_repo=agent_repo,
             llm_provider=llm_provider,

@@ -166,10 +166,17 @@ class AgentLoopLifecycle:
         """处理 agent loop 失败"""
         logger.exception("Agent loop failed for task %s: %s", task.id, error)
         if self._task_repo:
-            task.status = TaskStatus.FAILED
-            task.completed_at = datetime.now()
-            task.error = str(error)
-            await self._task_repo.update(task)
+            try:
+                task.status = TaskStatus.FAILED
+                task.completed_at = datetime.now()
+                task.error = str(error)
+                await self._task_repo.update(task)
+            except Exception:
+                # DB 写入失败（如 session 处于 rollback 状态）不能吞掉终止事件，
+                # 否则前端会一直停留在"思考中"且无法继续对话
+                logger.exception(
+                    "Failed to persist FAILED status for task %s", task.id
+                )
         if event_emitter:
             await event_emitter.emit_phase_changed(
                 task.id,
