@@ -61,11 +61,16 @@ class GraphResumeManager:
                     "GraphResumeManager: removed task_id=%s", task_id
                 )
 
-    async def resume(self, task_id: str, decision: str) -> bool:
+    async def resume(
+        self, task_id: str, decision: str,
+        file_storage=None, task_repo=None,
+    ) -> bool:
         """恢复暂停的图执行。
 
         以 Command(resume=decision) 重新调用 graph.ainvoke()，
         在后台 asyncio.Task 中运行直到完成或再次中断。
+
+        如果内存中无上下文（进程重启后），回退到 checkpoint 文件恢复。
 
         Returns:
             True 如果找到并启动了恢复；False 如果没有待恢复的上下文。
@@ -73,16 +78,26 @@ class GraphResumeManager:
         from langgraph.types import Command
 
         ctx = await self.get(task_id)
-        if ctx is None:
-            logger.warning(
-                "GraphResumeManager: no pending context for task_id=%s", task_id
+        if ctx is not None:
+            return await self._resume_from_context(task_id, decision, ctx)
+
+        # Fallback: checkpoint-based resume after process restart
+        if file_storage is not None:
+            return await self._resume_from_checkpoint(
+                task_id, decision, file_storage, task_repo,
             )
-            return False
+
+        logger.warning(
+            "GraphResumeManager: no pending context for task_id=%s", task_id
+        )
+        return False
+
+    async def _resume_from_context(self, task_id: str, decision: str, ctx) -> bool:
+        """Resume using in-memory ResumeContext."""
+        from langgraph.types import Command
+        from langgraph.errors import GraphInterrupt as GI
 
         async def _resume_loop():
-            """在后台恢复图执行。若再次中断则重新注册，等待下次决策。"""
-            from langgraph.errors import GraphInterrupt as GI
-
             current_config = ctx.config
             current_config["configurable"]["thread_id"] = task_id
             should_cleanup = True
@@ -95,24 +110,21 @@ class GraphResumeManager:
                 result = await ctx.graph.ainvoke(
                     Command(resume=decision), current_config
                 )
-
                 logger.info(
                     "GraphResumeManager: task_id=%s completed, result keys=%s",
                     task_id, list(result.keys()) if result else "None",
                 )
-
                 if ctx.on_complete:
                     await ctx.on_complete(result)
 
             except GI:
-                # 图再次中断（同一 agent loop 中另一个危险命令）
                 logger.info(
                     "GraphResumeManager: task_id=%s interrupted again, "
                     "re-registering for next decision", task_id
                 )
                 ctx.config = current_config
                 await self.register(task_id, ctx)
-                should_cleanup = False  # 不清理，等待下次 /approvals
+                should_cleanup = False
 
             except asyncio.CancelledError:
                 logger.info("GraphResumeManager: task_id=%s resume cancelled", task_id)
@@ -126,6 +138,75 @@ class GraphResumeManager:
 
         asyncio.create_task(_resume_loop())
         return True
+
+    async def _resume_from_checkpoint(
+        self, task_id: str, decision: str, file_storage, task_repo,
+    ) -> bool:
+        """Resume from checkpointer.json after process restart.
+
+        Loads checkpointer state from file, rebuilds the graph with
+        FileBackedSaver, and resumes with Command(resume=decision).
+        """
+        from datetime import datetime
+        from langgraph.types import Command
+        from src.infrastructure.agent.file_backed_saver import FileBackedSaver
+
+        try:
+            task = await task_repo.get_by_id(task_id) if task_repo else None
+            if task is None:
+                logger.warning("CheckpointResume: task %s not found", task_id)
+                return False
+
+            session_id = task.session_id
+            task_dir = file_storage.base_path / session_id / task_id
+            ckpt_file = task_dir / "checkpointer.json"
+
+            if not ckpt_file.exists():
+                logger.warning("CheckpointResume: no checkpointer.json for %s", task_id)
+                return False
+
+            saver = FileBackedSaver(file_path=str(ckpt_file))
+            from src.infrastructure.agent.workflow_builder import AgentWorkflowBuilder
+            graph = AgentWorkflowBuilder.build_with_checkpointer(saver)
+
+            config = {
+                "configurable": {
+                    "thread_id": task_id,
+                    "checkpoint_ns": "",
+                }
+            }
+
+            async def _resume_loop():
+                try:
+                    result = await graph.ainvoke(
+                        Command(resume=decision), config
+                    )
+                    logger.info(
+                        "CheckpointResume: task_id=%s resumed successfully", task_id
+                    )
+                    # Update task status after successful resume
+                    task.status = result.get("error") and "failed" or "completed"
+                    task.completed_at = datetime.now()
+                    task.result = result.get("final_result")
+                    task.error = result.get("error")
+                    await task_repo.update(task)
+                except Exception:
+                    logger.exception(
+                        "CheckpointResume: task_id=%s resume failed", task_id
+                    )
+                    try:
+                        task.status = "failed"
+                        task.completed_at = datetime.now()
+                        await task_repo.update(task)
+                    except Exception:
+                        pass
+
+            asyncio.create_task(_resume_loop())
+            return True
+
+        except Exception:
+            logger.exception("CheckpointResume: failed for task %s", task_id)
+            return False
 
 
 # ── 进程级共享单例 ─────────────────────────────────────────────

@@ -75,28 +75,58 @@ storage/sessions/<session_id>/<task_id>/
 
 **备选**: 单文件（所有数据混在一起）— 读写冲突，放弃。
 
-### Decision 2: Checkpoint 粒度 — 每轮 ReAct 后
+### Decision 2: Checkpointer 持久化 — LLM 调用前 + interrupt 后
 
-**选择**: 在 `tool_execute_node` 返回后、下一轮 `llm_call_node` 开始前，保存完整 `AgentState` 快照。
+**选择**: 新增 `save_checkpoint_node`，置于 `context_compact` 与 `llm_call` 之间，在每次 LLM 调用前将 `MemorySaver` 内部状态序列化为 JSON 文件 `checkpointer.json`。人机回路中断后由 `AgentLoopRunner` 额外保存一次（此时 `writes` 已填充）。
 
 ```
-一轮 ReAct:  llm_call → [tool_execute] → ★ checkpoint
-                                              │
-                                    ┌─────────┴─────────┐
-                                    │ END   或  下一轮 llm_call
+Graph 结构:
+  context_compact → ★ save_checkpoint_node → llm_call → [tool_execute | END]
+                                                              │
+                                               interrupt() ──┘
+                                                    │
+                                         GraphInterrupt
+                                                    │
+                                    AgentLoopRunner 补存 checkpointer.json
+                                    (此时 writes 已生成)
 ```
 
-**理由**: 粒度选择权衡：
+**理由**: 
 
-| 粒度 | 优点 | 缺点 |
-|------|------|------|
-| 每条消息 | 最细恢复 | 频繁 I/O |
-| **每轮 ReAct** | **合理的恢复点** | **最多损失半轮** |
-| 每 N 轮 | 省 I/O | 恢复损失大 |
+- **LLM 调用前是最佳恢复点** — LLM 调用是唯一有外部副作用（token 消耗、API 费用）且可能失败的步骤。在调用前保存，崩溃后恢复不会重复调用 LLM。
+- **interrupt 后需要补存** — `save_checkpoint_node` 在 LLM 调用前执行，interrupt 发生在之后的 `tool_execute_node` 中，此时 `MemorySaver.writes` 已有待恢复数据。需要额外保存。
+- **JSON 而非 pickle** — `MemorySaver` 内部使用 `msgpack` 序列化，binary 数据用 base64 编码存储为 JSON，可读可调试。
 
-一轮 ReAct 是自然的原子边界——tool 已执行完、结果已收集、LLM 尚未开始下一轮推理。丢失最多重做一轮 tool 执行。
+**checkpointer.json 内容**:
 
-**checkpoint 内容**: `AgentState` TypedDict 完整序列化（messages、tool_results、turn_count 等）。
+```json
+{
+  "thread_id": "task-001",
+  "storage": {
+    "": {
+      "checkpoint_id": {
+        "checkpoint": {"tag": "msgpack", "data": "<base64>"},
+        "metadata":   {"tag": "msgpack", "data": "<base64>"},
+        "parent": "parent_id"
+      }
+    }
+  },
+  "writes": {
+    "task_id": [
+      ["channel", {"tag": "msgpack", "data": "<base64>"}]
+    ]
+  }
+}
+```
+
+`writes` 是 `Command(resume=)` 正确恢复的前提 — 它记录了 `interrupt()` 时节点"本该写入"的 state 更新，没有它 LangGraph 不知道从哪个状态继续。
+
+### Decision 2b: AgentState checkpoint 保留为辅助
+
+AgentState 快照 `checkpoints/turn_N.json` **保留**，用于：
+- 调试检查 agent 状态
+- `HistoryLoader` 若需离线重建对话上下文
+- 不参与 resume 流程（resume 完全依赖 `checkpointer.json`）
 
 ### Decision 3: SSE 重连策略
 
@@ -110,13 +140,36 @@ GET /api/tasks/{task_id}/stream
 │
 ├─► task.status = RUNNING
 │     ├─► 读 events.jsonl → 回放已有事件（支持 Last-Event-ID 增量）
-│     ├─► 读 checkpoints/latest.json → 恢复 AgentState → 驱动 graph 继续
+│     ├─► checkpointer.json 存在 → 加载，重建 graph + config
+│     │     └─► graph.ainvoke(state, config) → 继续执行 → 推流
+│     ├─► checkpointer.json 不存在 → 仅回放，不恢复执行
 │     └─► 订阅新事件 → 推送到 SSE 连接
 │
 └─► task 不存在 / 文件缺失 → 404
 ```
 
-**理由**: 已完成任务只需回放不需恢复；进行中任务需要回放 + 恢复 + 订阅。避免了原来"sse_events 表回放 + 内存订阅"的混合路径。
+**理由**: 已完成任务只需回放不需恢复。进行中任务通过 `checkpointer.json` 恢复 `MemorySaver` 状态后重建 graph 继续执行。无 checkpointer 文件时仅回放已有事件（无法恢复执行）。
+
+### Decision 3b: 审批恢复（/approvals）
+
+**选择**: 进程重启后，`/approvals` 端点从 `checkpointer.json` 加载状态恢复执行，替代原 `GraphResumeManager`。
+
+```
+进程内（GraphResumeManager 保留）:
+  GraphInterrupt → resume_mgr.register(graph, config)
+  → /approvals → resume_mgr.resume(task_id, decision)
+  → graph.ainvoke(Command(resume=decision), config)
+
+进程重启后（checkpointer.json 恢复）:
+  /approvals 收到 decision
+  → 加载 checkpointer.json → 恢复 MemorySaver
+  → 重建 graph（AgentWorkflowBuilder.build()）
+  → 重建 config（llm, event_emitter, tool_registry 等从 DI 重新注入）
+  → graph.ainvoke(Command(resume=decision), config)
+  → 继续执行 → finalize
+```
+
+**config 重建**: `checkpointer.json` 旁存一个 `resume_meta.json`，包含 `agent_id`, `session_id`, `model`, `workspace` 等必要参数，恢复时从这些参数重新构建 `config["configurable"]` 中的依赖对象。
 
 ### Decision 4: 用户消息延迟入库
 

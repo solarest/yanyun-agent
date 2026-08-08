@@ -106,10 +106,9 @@ class TestTeamModeLeader:
                     team_role="leader",
                 )
 
-                # Leader: content is now appended in load() for deferred message persistence
-                assert len(messages) == 2
+                # Leader should NOT have the inbound content appended
+                assert len(messages) == 1
                 assert messages[0].content == "hello"
-                assert messages[1].content == "inbound msg"
 
 
 class TestTeamModeMember:

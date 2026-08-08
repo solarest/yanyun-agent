@@ -39,6 +39,10 @@ class StreamEventService(IEventEmitter):
         """Register the file storage directory for a task."""
         self._task_dirs[task_id] = task_dir
 
+    def remove_task_dir(self, task_id: str) -> None:
+        """Remove the registered task directory (cleanup to prevent memory leak)."""
+        self._task_dirs.pop(task_id, None)
+
     def _get_lock(self, task_id: str) -> asyncio.Lock:
         lock = self._locks.get(task_id)
         if lock is None:

@@ -202,6 +202,7 @@ async def submit_approval(
 
     校验 PendingApprovalRegistry 中存在对应 toolCallId 后，
     通过 GraphResumeManager 以 Command(resume=decision) 恢复图执行。
+    如果内存中无上下文（进程重启），回退到 checkpointer.json 恢复。
     不存在对应待审批调用则返回 404。
     """
     # 校验待审批调用存在（中间件已登记）
@@ -224,9 +225,23 @@ async def submit_approval(
     from src.infrastructure.agent.graph_resume_manager import (
         get_default_resume_manager,
     )
+    from src.application.services.session_file_storage import SessionFileStorage
+    from src.presentation.dependencies import get_task_repository
 
     resume_mgr = get_default_resume_manager()
-    resumed = await resume_mgr.resume(task_id, dto.decision)
+    file_storage = SessionFileStorage()
+
+    # Create short-lived DB session for checkpoint resume fallback
+    from src.infrastructure.database.session import AsyncSessionLocal
+    from src.infrastructure.repositories.sqlite_task_repo import SQLiteTaskRepository
+
+    async with AsyncSessionLocal() as db:
+        task_repo = SQLiteTaskRepository(db)
+        resumed = await resume_mgr.resume(
+            task_id, dto.decision,
+            file_storage=file_storage,
+            task_repo=task_repo,
+        )
     if not resumed:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

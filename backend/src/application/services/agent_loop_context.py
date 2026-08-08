@@ -8,6 +8,7 @@ InitialState / GraphConfig。
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 from src.domain.aggregates.agent.state_groups import (
@@ -120,6 +121,7 @@ class AgentLoopContext:
         team_message_bus: Any = None,
         team_context: Optional[str] = None,
         leader_agent_id: Optional[str] = None,
+        task_dir: Optional[str] = None,
     ) -> tuple[Any, dict, dict]:
         """构建 graph 执行所需的一切
 
@@ -226,6 +228,7 @@ class AgentLoopContext:
                 "team_role": team_role,
                 "team_message_bus": team_message_bus,
                 "leader_agent_id": leader_agent_id or "",
+                "checkpointer_file": str(Path(task_dir) / "checkpointer.json") if task_dir else None,
             }
         }
 

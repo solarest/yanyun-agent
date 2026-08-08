@@ -104,7 +104,11 @@ class AgentLoopLifecycle:
                     result=result,
                     event_emitter=event_emitter,
                     persist_session_messages=persist_session_messages,
+                    task_dir=Path(task_dir) if task_dir else None,
                 )
+                # Clean up task_dir registration to prevent memory leak
+                if hasattr(event_emitter, 'remove_task_dir'):
+                    event_emitter.remove_task_dir(task.id)
                 if event_emitter:
                     await event_emitter.emit(
                         task.id, AgentEventType.TASK_COMPLETED, {}
@@ -162,10 +166,17 @@ class AgentLoopLifecycle:
         """处理 agent loop 失败"""
         logger.exception("Agent loop failed for task %s: %s", task.id, error)
         if self._task_repo:
-            task.status = TaskStatus.FAILED
-            task.completed_at = datetime.now()
-            task.error = str(error)
-            await self._task_repo.update(task)
+            try:
+                task.status = TaskStatus.FAILED
+                task.completed_at = datetime.now()
+                task.error = str(error)
+                await self._task_repo.update(task)
+            except Exception:
+                # DB 写入失败（如 session 处于 rollback 状态）不能吞掉终止事件，
+                # 否则前端会一直停留在"思考中"且无法继续对话
+                logger.exception(
+                    "Failed to persist FAILED status for task %s", task.id
+                )
         if event_emitter:
             await event_emitter.emit_phase_changed(
                 task.id,

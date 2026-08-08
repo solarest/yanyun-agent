@@ -73,11 +73,6 @@ def get_event_service() -> StreamEventService:
     return StreamEventService(file_storage=SessionFileStorage())
 
 
-def create_file_storage():
-    """创建 SessionFileStorage 实例。"""
-    from src.application.services.session_file_storage import SessionFileStorage
-    return SessionFileStorage()
-
 
 def get_session_repository(
     db: AsyncSession = Depends(get_async_db),

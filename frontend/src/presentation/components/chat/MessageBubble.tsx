@@ -297,7 +297,6 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   const content = contentIsClarifyPrompt ? '' : message.content;
   const toolTimeline = buildToolTimeline(visibleToolCalls, visibleToolResults);
   const hasVisibleTools = toolTimeline.length > 0;
-  const displayContent = content;
   const subAgentLabel = isSubAgent
     ? message.meta?.stepId
       ? `Plan ${message.meta.stepId}`
@@ -543,16 +542,16 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
                     />
                   </div>
                 )}
-                {(displayContent.trim() || isStreaming || !clarifyPrompt) && (
+                {(content.trim() || isStreaming || !clarifyPrompt) && (
                   <div className="markdown-content text-sm leading-relaxed">
-                    {displayContent ? (
+                    {content ? (
                       <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {displayContent}
+                        {content}
                       </ReactMarkdown>
                     ) : (
                       <>
                         {isStreaming ? '' : '...'}
-                        {isStreaming && !displayContent && (
+                        {isStreaming && !content && (
                           <span className="inline-block h-4 w-1 animate-pulse bg-current" />
                         )}
                       </>
