@@ -63,7 +63,7 @@ class SoftPruneStrategy(CompactionStrategy):
         pruned_count = 0
         modified_messages = []
 
-        for msg in messages:
+        for index, msg in enumerate(messages):
             is_tool_msg = isinstance(msg, ToolMessage) or (
                 isinstance(msg, dict) and msg.get("role") == "tool"
             )
@@ -110,6 +110,7 @@ class SoftPruneStrategy(CompactionStrategy):
             # 检查是否已达目标
             new_estimate = estimate_context_tokens(modified_messages)
             if new_estimate <= target_tokens:
+                modified_messages.extend(messages[index + 1:])
                 break
 
         after_tokens = estimate_context_tokens(modified_messages)

@@ -7,7 +7,7 @@ Covers:
 - _default_strategies() factory
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from langchain_core.messages import (
@@ -18,7 +18,6 @@ from langchain_core.messages import (
 
 from src.infrastructure.agent.nodes.compaction import (
     CompactionResult,
-    CompactionStrategy,
     SkipStrategy,
     SoftPruneStrategy,
     MicroCompactStrategy,
@@ -259,6 +258,45 @@ class TestSoftPruneStrategy:
         )
         # Should have pruned the one long message and stopped
         assert result.pruned_count == 1
+
+    @pytest.mark.asyncio
+    async def test_apply_preserves_messages_after_target_is_reached(self):
+        """Stopping pruning must not drop the remaining tool-call round."""
+        strategy = SoftPruneStrategy()
+        messages = [
+            _msg("system", role="system", msg_id="sys"),
+            _long_tool_msg(length=25000),
+            ToolMessage(
+                content="second result",
+                tool_call_id="tc_second",
+                id="msg_second",
+            ),
+            ToolMessage(
+                content="third result",
+                tool_call_id="tc_third",
+                id="msg_third",
+            ),
+            _msg("continue", msg_id="after_tools"),
+        ]
+
+        result = await strategy.apply(
+            _make_state(messages=messages),
+            messages,
+            current_tokens=60_000,
+            max_tokens=128_000,
+            config={},
+            context=MagicMock(),
+        )
+
+        assert [message.id for message in result.messages] == [
+            "sys",
+            "msg_long",
+            "msg_second",
+            "msg_third",
+            "after_tools",
+        ]
+        assert result.messages[2].content == "second result"
+        assert result.messages[3].content == "third result"
 
     def test_priority_is_1(self):
         assert SoftPruneStrategy().priority == 1

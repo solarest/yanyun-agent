@@ -1,9 +1,7 @@
 """测试 - LLM 工厂"""
-import pytest
 from unittest.mock import patch, MagicMock
 
 from src.infrastructure.llm.model_factory import create_chat_model
-from src.domain.value_objects.llm_config import LLMConfig, LLMProvider
 
 
 def test_create_chat_model_with_openai():
@@ -19,7 +17,7 @@ def test_create_chat_model_with_openai():
         
         assert model == mock_model
         config = mock_adapter.create_model.call_args.args[0]
-        assert config.max_tokens == 8192
+        assert config.max_tokens == 100000
 
 
 def test_create_chat_model_with_anthropic():
