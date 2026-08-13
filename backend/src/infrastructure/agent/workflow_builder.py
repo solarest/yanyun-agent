@@ -66,7 +66,7 @@ class AgentWorkflowBuilder(IAgentWorkflowBuilder):
         workflow.add_conditional_edges(
             "tool_execute",
             route_after_tool_execute,
-            {"context_compact": "context_compact", END: END},
+            {"tool_execute": "tool_execute", "context_compact": "context_compact", END: END},
         )
 
         # context_compact → save_checkpoint → llm_call
@@ -83,8 +83,6 @@ class AgentWorkflowBuilder(IAgentWorkflowBuilder):
 
         Does NOT use the cached compiled graph — always recompiles.
         """
-        from langgraph.checkpoint.memory import MemorySaver
-
         from src.infrastructure.agent.save_checkpoint_node import save_checkpoint_node
 
         workflow = StateGraph(AgentState)
@@ -99,7 +97,7 @@ class AgentWorkflowBuilder(IAgentWorkflowBuilder):
         )
         workflow.add_conditional_edges(
             "tool_execute", route_after_tool_execute,
-            {"context_compact": "context_compact", END: END},
+            {"tool_execute": "tool_execute", "context_compact": "context_compact", END: END},
         )
         workflow.add_edge("context_compact", "save_checkpoint")
         workflow.add_edge("save_checkpoint", "llm_call")

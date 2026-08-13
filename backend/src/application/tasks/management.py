@@ -31,11 +31,15 @@ class TaskManagementUseCase:
         agent_repo: IAgentRepository,
         running_tasks: Optional[Dict[str, asyncio.Task]] = None,
         event_emitter: Optional[IEventEmitter] = None,
+        resume_manager: Any = None,
+        approval_registry: Any = None,
     ) -> None:
         self._task_repo = task_repo
         self._agent_repo = agent_repo
         self._running_tasks = running_tasks if running_tasks is not None else {}
         self._event_emitter = event_emitter
+        self._resume_manager = resume_manager
+        self._approval_registry = approval_registry
 
     async def create(
         self,
@@ -108,18 +112,24 @@ class TaskManagementUseCase:
             asyncio_task.cancel()
             return {"task_id": task_id, "cancelled": True}
 
-        # 暂停状态，无 asyncio.Task，直接标记取消
-        if task.status == TaskStatus.PAUSED:
+        # 确认等待态也会保持 RUNNING，但对应的图执行任务已经结束。
+        # 此时必须自行完成取消，而不能只返回成功。
+        if task.status in (TaskStatus.RUNNING, TaskStatus.PAUSED):
             task.status = TaskStatus.CANCELLED
             task.completed_at = datetime.now()
             task.error = "cancelled"
             await self._task_repo.update(task)
 
+            if self._resume_manager:
+                await self._resume_manager.remove(task_id)
+            if self._approval_registry:
+                await self._approval_registry.remove_task(task_id)
+
             if self._event_emitter:
                 await self._event_emitter.emit_phase_changed(
                     task_id,
                     "cancelled",
-                    "paused",
+                    "awaiting_confirmation",
                     task.current_turn,
                 )
                 await self._event_emitter.emit(

@@ -222,6 +222,8 @@ export const useChat = ({
   const subStreamsRef = useRef<Map<string, AgentEventStream>>(new Map());
   const subAgentMessagesRef = useRef<Set<string>>(new Set());
   const mainMessageIdRef = useRef<string | null>(null);
+  // 发送后延迟刷新会话标题的定时器
+  const sessionRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // —— localStorage 持久化辅助函数 (跨标签页存活, 支持心跳续期) ——
   const TASK_STATE_KEY = 'activeTaskState';
@@ -280,13 +282,6 @@ export const useChat = ({
     }
   }, [stopHeartbeat]);
 
-  // 切换会话时重置 UI 状态（不清理 localStorage：页面刷新恢复时仍需读取，由任务终态事件清理）
-  useEffect(() => {
-    setState((prev) => ({ ...prev, currentTask: null }));
-    disconnectAllStreams();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
-
   const updateMessage = useCallback((
     messageId: string | null,
     updater: (msg: SessionMessage) => SessionMessage,
@@ -315,6 +310,13 @@ export const useChat = ({
     disconnectStream();
     disconnectSubStreams();
   }, [disconnectStream, disconnectSubStreams]);
+
+  // 切换会话时重置 UI 状态（不清理 localStorage：页面刷新恢复时仍需读取，由任务终态事件清理）
+  useEffect(() => {
+    setState(INITIAL_STATE);
+    mainMessageIdRef.current = null;
+    disconnectAllStreams();
+  }, [sessionId, disconnectAllStreams]);
 
   /**
    * 向消息的 segments 追加内容，同类型连续追加（不创建新片段）
@@ -539,13 +541,6 @@ export const useChat = ({
   // localStorage 不再有硬超时 — 心跳每 30s 更新 timestamp，
   // 仅当后端 active-tasks API 不可用时作为 fallback。
   const restoreActiveStream = useCallback(async (forceReplay = false, taskId?: string) => {
-    console.log('[useChat] restoreActiveStream called:', {
-      forceReplay,
-      taskId,
-      agentId,
-      sessionId,
-    });
-
     // —— 确定恢复目标 taskId ——
     let targetTaskId: string | null = null;
     let targetSessionId: string | null = null;
@@ -567,7 +562,6 @@ export const useChat = ({
           const latest = activeTasks[0];
           targetTaskId = latest.task_id;
           targetSessionId = sessionId;
-          console.log('[useChat] Found active task via API:', latest.task_id, latest.status);
         }
       } catch (err) {
         apiFailed = true;
@@ -585,7 +579,6 @@ export const useChat = ({
           if (state.agentId === agentId && state.sessionId === sessionId && state.taskId) {
             targetTaskId = state.taskId;
             targetSessionId = state.sessionId;
-            console.log('[useChat] Found active task via localStorage:', targetTaskId);
           }
         }
       } catch {
@@ -594,17 +587,13 @@ export const useChat = ({
     }
 
     if (!targetTaskId || !targetSessionId) {
-      console.log('[useChat] No active task to restore');
       return;
     }
 
     // 如果已有连接且不是强制重放，不重复恢复
     if (streamRef.current && !forceReplay) {
-      console.log('[useChat] Stream already connected, skipping restore');
       return;
     }
-
-    console.log('[useChat] Restoring/replaying stream for task:', targetTaskId);
 
     // 断开之前的连接
     if (streamRef.current) {
@@ -997,8 +986,12 @@ export const useChat = ({
         onAppendMessage?.(user_message);
 
         // 3. 延迟刷新会话列表以获取 LLM 生成的标题
-        // 后端异步生成标题，通常 1-3 秒完成
-        setTimeout(() => {
+        // 后端异步生成标题，通常 1-3 秒完成；卸载时清理定时器
+        if (sessionRefreshTimerRef.current !== null) {
+          clearTimeout(sessionRefreshTimerRef.current);
+        }
+        sessionRefreshTimerRef.current = setTimeout(() => {
+          sessionRefreshTimerRef.current = null;
           onSessionUpdated?.();
         }, 2000);
 
@@ -1079,14 +1072,12 @@ export const useChat = ({
     return () => {
       disconnectAllStreams();
       stopHeartbeat();
+      if (sessionRefreshTimerRef.current !== null) {
+        clearTimeout(sessionRefreshTimerRef.current);
+        sessionRefreshTimerRef.current = null;
+      }
     };
-  }, [disconnectAllStreams]);
-
-  useEffect(() => {
-    setState(INITIAL_STATE);
-    mainMessageIdRef.current = null;
-    disconnectAllStreams();
-  }, [sessionId, disconnectAllStreams]);
+  }, [disconnectAllStreams, stopHeartbeat]);
 
   // 页面加载时恢复活动任务流 (仅 sessionId/agentId 变化时触发)
   const restoreActiveStreamRef = useRef(restoreActiveStream);

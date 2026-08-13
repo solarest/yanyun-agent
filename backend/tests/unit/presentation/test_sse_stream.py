@@ -1,4 +1,5 @@
 import asyncio
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import FastAPI
@@ -90,6 +91,29 @@ async def test_stream_route_replays_then_yields_live_events() -> None:
     assert "event: task-completed" in chunk2
     assert event_service.after_event_id == "1"
     assert event_service.unsubscribed is True
+
+
+@pytest.mark.asyncio
+async def test_stream_route_does_not_start_another_agent_loop(monkeypatch) -> None:
+    """SSE 重连只订阅事件，绝不能恢复或重复启动运行中的任务。"""
+    replay_event = SSEEventDTO.create(
+        "task-1", 1, AgentEventType.TASK_STARTED, {}).model_dump_json()
+    live_event = SSEEventDTO.create(
+        "task-1", 2, AgentEventType.TASK_COMPLETED, {}).model_dump_json()
+    event_service = FakeEventService(
+        replay_events=[replay_event], live_events=[live_event],
+    )
+    app = FastAPI()
+    app.state.event_service = event_service
+    resume = AsyncMock()
+    monkeypatch.setattr(sse_stream, "_try_resume_task", resume, raising=False)
+
+    response = await sse_stream.stream_events("task-1", make_request(app))
+    await anext(response.body_iterator)
+    await anext(response.body_iterator)
+    await response.body_iterator.aclose()
+
+    resume.assert_not_awaited()
 
 
 @pytest.mark.asyncio

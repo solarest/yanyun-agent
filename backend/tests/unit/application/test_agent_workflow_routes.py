@@ -108,3 +108,12 @@ def test_route_after_tool_execute_no_tools_goes_to_context_compact() -> None:
         last_executed_tool_call_ids=[],
     )
     assert route_after_tool_execute(state) == "context_compact"
+
+
+def test_route_after_tool_execute_runs_remaining_tool_calls_first() -> None:
+    state = make_state(
+        pending_tool_calls=[{"id": "call-2", "name": "file_write", "input": {}}],
+        last_executed_tool_call_ids=["call-1"],
+    )
+
+    assert route_after_tool_execute(state) == "tool_execute"

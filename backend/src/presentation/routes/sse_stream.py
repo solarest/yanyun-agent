@@ -3,7 +3,6 @@
 import asyncio
 import json
 import logging
-from pathlib import Path
 
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
@@ -21,8 +20,10 @@ async def stream_events(task_id: str, request: Request):
     客户端连接后：
     1. 先订阅实时队列（防止回放期间丢失新事件）
     2. 回放已有事件（处理晚于任务启动的连接）
-    3. 对于 RUNNING 任务，尝试从 checkpointer.json 恢复执行
-    4. 从队列读取新事件（跳过已回放的）
+    3. 从队列读取新事件（跳过已回放的）
+
+    图恢复仅由审批端点在收到明确的用户决策后执行。SSE 连接是纯订阅操作，
+    不能作为启动或恢复任务的触发器。
     """
     event_service = request.app.state.event_service
 
@@ -58,10 +59,7 @@ async def stream_events(task_id: str, request: Request):
                     max_replayed_seq = seq
                 yield format_sse(event_json)
 
-            # === 2. 尝试恢复 RUNNING 任务的 graph 执行 ===
-            await _try_resume_task(task_id, event_service)
-
-            # === 3. 实时事件流（跳过已回放的） ===
+            # === 2. 实时事件流（跳过已回放的） ===
             while True:
                 if await request.is_disconnected():
                     break
@@ -85,69 +83,3 @@ async def stream_events(task_id: str, request: Request):
             "X-Accel-Buffering": "no",
         },
     )
-
-
-async def _try_resume_task(task_id: str, event_service) -> None:
-    """Try to resume a RUNNING task from checkpointer.json."""
-    from src.infrastructure.database.session import AsyncSessionLocal
-    from src.infrastructure.repositories.sqlite_task_repo import SQLiteTaskRepository
-    from src.application.services.session_file_storage import SessionFileStorage
-    from src.infrastructure.agent.file_backed_saver import FileBackedSaver
-    from src.infrastructure.agent.workflow_builder import AgentWorkflowBuilder
-
-    try:
-        async with AsyncSessionLocal() as db:
-            task_repo = SQLiteTaskRepository(db)
-            task = await task_repo.get_by_id(task_id)
-            if task is None or task.status != "running":
-                return
-
-            session_id = task.session_id
-            file_storage = SessionFileStorage()
-            task_dir = file_storage.base_path / session_id / task_id
-            ckpt_file = task_dir / "checkpointer.json"
-            meta_file = task_dir / "resume_meta.json"
-
-            if not ckpt_file.exists():
-                return
-
-            # Load checkpointer state and rebuild graph
-            saver = FileBackedSaver(file_path=str(ckpt_file))
-            graph = AgentWorkflowBuilder.build_with_checkpointer(saver)
-
-            # Build config with event emitter for live streaming
-            config = {
-                "configurable": {
-                    "thread_id": task_id,
-                    "checkpoint_ns": "",
-                    "event_emitter": event_service,
-                    "llm_model": task.model if hasattr(task, 'model') else None,
-                    "session_id": session_id,
-                }
-            }
-
-            # Resume in background with task finalization
-            async def _run():
-                from datetime import datetime
-                try:
-                    result = await graph.ainvoke(None, config)
-                    logger.info("SSE resume: task %s completed", task_id)
-                    # Update task status
-                    task.status = "completed"
-                    task.completed_at = datetime.now()
-                    task.result = result.get("final_result") if isinstance(result, dict) else None
-                    await task_repo.update(task)
-                except Exception:
-                    logger.exception("SSE resume: task %s failed", task_id)
-                    try:
-                        task.status = "failed"
-                        task.completed_at = datetime.now()
-                        await task_repo.update(task)
-                    except Exception:
-                        pass
-
-            asyncio.create_task(_run())
-            logger.info("SSE resume: started background execution for task %s", task_id)
-
-    except Exception:
-        logger.exception("SSE resume: failed to start for task %s", task_id)

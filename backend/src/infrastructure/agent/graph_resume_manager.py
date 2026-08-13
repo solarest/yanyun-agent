@@ -9,8 +9,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Optional
 
 from langgraph.graph.state import CompiledStateGraph
@@ -63,7 +64,8 @@ class GraphResumeManager:
 
     async def resume(
         self, task_id: str, decision: str,
-        file_storage=None, task_repo=None,
+        file_storage=None, task_repo=None, resume_runner=None,
+        send_message_use_case=None,
     ) -> bool:
         """恢复暂停的图执行。
 
@@ -75,8 +77,6 @@ class GraphResumeManager:
         Returns:
             True 如果找到并启动了恢复；False 如果没有待恢复的上下文。
         """
-        from langgraph.types import Command
-
         ctx = await self.get(task_id)
         if ctx is not None:
             return await self._resume_from_context(task_id, decision, ctx)
@@ -84,7 +84,8 @@ class GraphResumeManager:
         # Fallback: checkpoint-based resume after process restart
         if file_storage is not None:
             return await self._resume_from_checkpoint(
-                task_id, decision, file_storage, task_repo,
+                task_id, decision, file_storage, task_repo, resume_runner,
+                send_message_use_case,
             )
 
         logger.warning(
@@ -141,17 +142,19 @@ class GraphResumeManager:
 
     async def _resume_from_checkpoint(
         self, task_id: str, decision: str, file_storage, task_repo,
+        resume_runner, send_message_use_case,
     ) -> bool:
         """Resume from checkpointer.json after process restart.
 
         Loads checkpointer state from file, rebuilds the graph with
         FileBackedSaver, and resumes with Command(resume=decision).
         """
-        from datetime import datetime
-        from langgraph.types import Command
-        from src.infrastructure.agent.file_backed_saver import FileBackedSaver
-
         try:
+            if resume_runner is None:
+                logger.warning(
+                    "CheckpointResume: no runtime builder for task %s", task_id
+                )
+                return False
             task = await task_repo.get_by_id(task_id) if task_repo else None
             if task is None:
                 logger.warning("CheckpointResume: task %s not found", task_id)
@@ -165,44 +168,37 @@ class GraphResumeManager:
                 logger.warning("CheckpointResume: no checkpointer.json for %s", task_id)
                 return False
 
-            saver = FileBackedSaver(file_path=str(ckpt_file))
-            from src.infrastructure.agent.workflow_builder import AgentWorkflowBuilder
-            graph = AgentWorkflowBuilder.build_with_checkpointer(saver)
+            meta_file = task_dir / "resume_meta.json"
+            if not meta_file.exists():
+                logger.warning("CheckpointResume: no resume_meta.json for %s", task_id)
+                return False
+            resume_meta = json.loads(meta_file.read_text())
+            graph, config = await resume_runner.build_checkpoint_resume(
+                task=task,
+                resume_meta=resume_meta,
+                checkpointer_file=ckpt_file,
+                task_dir=task_dir,
+                send_message_use_case=send_message_use_case,
+            )
 
-            config = {
-                "configurable": {
-                    "thread_id": task_id,
-                    "checkpoint_ns": "",
-                }
-            }
+            async def _on_complete(result: dict) -> None:
+                await resume_runner.finalize_checkpoint_resume(
+                    task=task,
+                    result=result,
+                    task_dir=task_dir,
+                )
 
-            async def _resume_loop():
-                try:
-                    result = await graph.ainvoke(
-                        Command(resume=decision), config
-                    )
-                    logger.info(
-                        "CheckpointResume: task_id=%s resumed successfully", task_id
-                    )
-                    # Update task status after successful resume
-                    task.status = result.get("error") and "failed" or "completed"
-                    task.completed_at = datetime.now()
-                    task.result = result.get("final_result")
-                    task.error = result.get("error")
-                    await task_repo.update(task)
-                except Exception:
-                    logger.exception(
-                        "CheckpointResume: task_id=%s resume failed", task_id
-                    )
-                    try:
-                        task.status = "failed"
-                        task.completed_at = datetime.now()
-                        await task_repo.update(task)
-                    except Exception:
-                        pass
-
-            asyncio.create_task(_resume_loop())
-            return True
+            return await self._resume_from_context(
+                task_id,
+                decision,
+                ResumeContext(
+                    graph=graph,
+                    config=config,
+                    task_id=task_id,
+                    session_id=session_id,
+                    on_complete=_on_complete,
+                ),
+            )
 
         except Exception:
             logger.exception("CheckpointResume: failed for task %s", task_id)

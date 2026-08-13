@@ -1,6 +1,6 @@
 """表现层 - 任务 CRUD 路由"""
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from src.application.dtos.approval_dto import ApprovalDecisionDTO
 from src.application.dtos.task_dto import (
@@ -20,6 +20,7 @@ from src.infrastructure.tools.confirmation.store import (
 )
 from src.presentation.dependencies import (
     get_pending_approval_registry,
+    get_send_message_use_case,
     get_task_management_use_case,
     get_task_repository,
 )
@@ -197,6 +198,7 @@ async def submit_approval(
     task_id: str,
     dto: ApprovalDecisionDTO,
     registry: PendingApprovalRegistry = Depends(get_pending_approval_registry),
+    request: Request = None,
 ):
     """提交命令确认决策。
 
@@ -226,10 +228,9 @@ async def submit_approval(
         get_default_resume_manager,
     )
     from src.application.services.session_file_storage import SessionFileStorage
-    from src.presentation.dependencies import get_task_repository
-
     resume_mgr = get_default_resume_manager()
     file_storage = SessionFileStorage()
+    resume_use_case = get_send_message_use_case(request) if request else None
 
     # Create short-lived DB session for checkpoint resume fallback
     from src.infrastructure.database.session import AsyncSessionLocal
@@ -241,6 +242,8 @@ async def submit_approval(
             task_id, dto.decision,
             file_storage=file_storage,
             task_repo=task_repo,
+            resume_runner=resume_use_case.loop_runner if resume_use_case else None,
+            send_message_use_case=resume_use_case,
         )
     if not resumed:
         raise HTTPException(

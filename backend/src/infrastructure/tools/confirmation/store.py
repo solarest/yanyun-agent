@@ -41,6 +41,12 @@ class PendingApprovalRegistry:
         async with self._lock:
             self._futures.pop((task_id, tool_call_id), None)
 
+    async def remove_task(self, task_id: str) -> None:
+        """移除任务的全部待确认调用（任务取消时使用）。"""
+        async with self._lock:
+            for key in [key for key in self._futures if key[0] == task_id]:
+                self._futures.pop(key, None)
+
 
 class SessionApprovalStore:
     """会话级 allow-all 白名单：`{session_id: set[category]}`。

@@ -49,6 +49,8 @@ export class AgentEventStream {
   private eventQueue: QueuedEvent[] = [];
   private drainTimer: ReturnType<typeof setTimeout> | null = null;
   private isDraining = false;
+  // 手动重连定时器：disconnect 时必须取消，否则会重连已废弃的流
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private baseUrl: string,
@@ -102,6 +104,10 @@ export class AgentEventStream {
     this.reconnectAttempts = 0;
     this.stopDrain();
     this.eventQueue = [];
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
   }
 
   private handleEvent = (e: MessageEvent): void => {
@@ -183,7 +189,10 @@ export class AgentEventStream {
         console.warn(`[EventStream] Reconnecting in ${delay}ms...`);
         this.es.close();
         this.es = null;
-        setTimeout(() => this.connect(), delay);
+        this.reconnectTimer = setTimeout(() => {
+          this.reconnectTimer = null;
+          this.connect();
+        }, delay);
       } else {
         console.error('[EventStream] Max reconnect attempts reached');
         this.dispatch('task:failed', { taskId: this.taskId, error: 'Connection lost' });

@@ -5,15 +5,19 @@ from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
     HumanMessage,
-    RemoveMessage,
     SystemMessage,
     ToolMessage,
 )
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, StateGraph
+from langgraph.types import Command
 
 from src.infrastructure.agent.nodes.context_compact_node import context_compact_node
 from src.infrastructure.agent.nodes.llm_call_node import llm_call_node
 from src.infrastructure.agent.nodes.tool_execute_node import tool_execute_node
+from src.domain.aggregates.agent.agent_state import AgentState
 from src.domain.entities.event_types import AgentEventType
+from src.infrastructure.tools.confirmation.contract import CONFIRMATION_METADATA_KEY
 
 
 class RecordingEmitter:
@@ -78,6 +82,14 @@ class FakeLLM:
         yield AIMessageChunk(content=" world")
 
 
+class ToolCallingLLM:
+    async def astream(self, messages, **kwargs):
+        yield AIMessageChunk(
+            content="",
+            tool_calls=[{"id": "call-search", "name": "search", "args": {"q": "latest"}}],
+        )
+
+
 def make_state(**overrides):
     state = {
         "messages": [],
@@ -135,6 +147,50 @@ async def test_llm_call_node_emits_phase_chunks_and_completion() -> None:
     assert result["is_complete"] is True
     assert result["current_turn"] == 1
     assert result["last_executed_tool_call_ids"] == []
+
+
+@pytest.mark.asyncio
+async def test_llm_call_node_clears_recoverable_context_limit_error_after_success() -> None:
+    """紧急压缩后的成功 LLM 调用必须清除上一轮留下的可恢复错误。"""
+    result = await llm_call_node(
+        make_state(
+            error="context window exceeded",
+            context_compaction_attempts=1,
+        ),
+        {"configurable": {"llm": FakeLLM(), "event_emitter": RecordingEmitter()}},
+    )
+
+    assert result["error"] is None
+
+
+@pytest.mark.asyncio
+async def test_llm_call_node_ends_after_reaching_turn_budget() -> None:
+    """达到 max_turns 的本轮不得继续进入工具循环。"""
+    result = await llm_call_node(
+        make_state(current_turn=4, max_turns=5),
+        {"configurable": {"llm": ToolCallingLLM(), "event_emitter": RecordingEmitter()}},
+    )
+
+    assert result["current_turn"] == 5
+    assert result["pending_tool_calls"]
+    assert result["should_end"] is True
+
+
+@pytest.mark.asyncio
+async def test_llm_call_node_keeps_result_when_chunk_event_emission_fails() -> None:
+    """流式观测失败不得让已经获得的 LLM 输出整轮失效。"""
+
+    class FailingChunkEmitter(RecordingEmitter):
+        async def emit_llm_chunk(self, task_id: str, turn: int, text: str) -> None:
+            raise OSError("event storage unavailable")
+
+    result = await llm_call_node(
+        make_state(),
+        {"configurable": {"llm": FakeLLM(), "event_emitter": FailingChunkEmitter()}},
+    )
+
+    assert result["messages"][0].content == "Hello world"
+    assert result["should_end"] is True
 
 
 @pytest.mark.asyncio
@@ -286,8 +342,8 @@ async def test_tool_execute_node_preserves_previous_tool_results() -> None:
 
 
 @pytest.mark.asyncio
-async def test_tool_execute_node_executes_all_tools_uniformly() -> None:
-    """plan 优先级已移除，所有工具统一执行"""
+async def test_tool_execute_node_executes_one_tool_and_keeps_the_rest_pending() -> None:
+    """工具节点一次只执行一个调用，剩余调用由图路由回本节点。"""
     emitter = RecordingEmitter()
     executed_tools: list[str] = []
 
@@ -318,12 +374,72 @@ async def test_tool_execute_node_executes_all_tools_uniformly() -> None:
         {"configurable": {"tool_registry": FakeToolRegistry(), "event_emitter": emitter}},
     )
 
-    # 所有工具均被执行（不再有 plan 优先级跳过逻辑）
-    assert executed_tools == ["web_search", "plan"]
-    assert result["last_executed_tool_call_ids"] == [
-        "call-search", "call-plan"]
+    assert executed_tools == ["web_search"]
+    assert result["last_executed_tool_call_ids"] == ["call-search"]
     assert result["tool_results"]["call-search"]["status"] == "success"
-    assert result["tool_results"]["call-plan"]["status"] == "success"
+    assert result["pending_tool_calls"] == [
+        {"id": "call-plan", "name": "plan", "input": {"goal": "goal", "steps": ["step"]}},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_confirmation_resume_does_not_repeat_previously_completed_tool() -> None:
+    """确认中断恢复时，已经完成的兄弟工具不可再次执行。"""
+    emitter = RecordingEmitter()
+    calls: list[str] = []
+
+    class FakeToolRegistry:
+        async def execute(self, tool_name, tool_input, context):
+            calls.append(tool_name)
+            if tool_name == "dangerous":
+                return SimpleNamespace(
+                    output=None,
+                    success=False,
+                    error="confirmation_required",
+                    metadata={
+                        CONFIRMATION_METADATA_KEY: True,
+                        "tool_call_id": "call-dangerous",
+                        "command": "rm important-file",
+                        "category": "destructive",
+                        "risk_reason": "destructive operation",
+                    },
+                )
+            return SimpleNamespace(
+                output="safe result",
+                success=True,
+                error=None,
+                metadata={},
+            )
+
+    workflow = StateGraph(AgentState)
+    workflow.add_node("tool_execute", tool_execute_node)
+    workflow.set_entry_point("tool_execute")
+    workflow.add_conditional_edges(
+        "tool_execute",
+        lambda state: "tool_execute" if state["pending_tool_calls"] else END,
+        {"tool_execute": "tool_execute", END: END},
+    )
+    graph = workflow.compile(checkpointer=MemorySaver())
+    config = {
+        "configurable": {
+            "thread_id": "confirmation-replay-test",
+            "tool_registry": FakeToolRegistry(),
+            "event_emitter": emitter,
+        }
+    }
+    initial_state = make_state(
+        pending_tool_calls=[
+            {"id": "call-safe", "name": "safe", "input": {}},
+            {"id": "call-dangerous", "name": "dangerous", "input": {}},
+        ],
+    )
+
+    await graph.ainvoke(initial_state, config)
+    result = await graph.ainvoke(Command(resume="deny"), config)
+
+    assert calls == ["safe", "dangerous", "dangerous"]
+    assert result["tool_results"]["call-safe"]["status"] == "success"
+    assert result["tool_results"]["call-dangerous"]["error"] == "user_denied"
 
 
 @pytest.mark.asyncio

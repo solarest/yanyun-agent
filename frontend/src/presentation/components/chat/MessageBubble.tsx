@@ -1,88 +1,32 @@
 /**
  * 表现层 - 消息气泡（时间线布局）
+ *
+ * 展示职责拆分为：
+ * - MessageTimeline：segments 时间线渲染
+ * - ToolTimeline：tool_calls/tool_results 合并（纯函数）
+ * 本组件负责消息骨架（头像、子代理折叠、clarify 早退分支、旧布局回退）。
+ *
+ * 使用 React.memo：流式期间每 token 更新只重渲染目标消息，
+ * 历史消息因 props 引用稳定而跳过渲染（依赖 MessageList 传入稳定引用）。
  */
 import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { SessionMessage, MessageSegment } from '@domain/entities/session';
+import type { SessionMessage } from '@domain/entities/session';
 import { ClarifyCard } from './ClarifyCard';
-import { CommandConfirmCard } from './CommandConfirmCard';
 import { MultiClarifyCard, parseAllClarifyPrompts } from './MultiClarifyCard';
 import { ToolCallGroup } from './ToolCallGroup';
 import { ThinkingBlock } from './ThinkingBlock';
-import { approvalApi } from '@infrastructure/api/approvals';
+import { MessageTimeline } from './MessageTimeline';
+import { buildToolTimeline, isSpecialTool } from './ToolTimeline';
 
 interface MessageBubbleProps {
   message: SessionMessage;
+  /** 内嵌子代理消息；仅父消息存在时传入（undefined 保证 memo 浅比较稳定） */
   embeddedSubAgents?: SessionMessage[];
   clarifyDisabled?: boolean;
   onClarifyAnswer?: (answer: string) => void;
 }
-
-const SPECIAL_TOOL_NAMES = new Set(['plan', 'plan_execute', 'plan_update', 'clarify']);
-
-const isSpecialTool = (toolName: string): boolean => SPECIAL_TOOL_NAMES.has(toolName);
-
-type VisibleToolCall = SessionMessage['tool_calls'][number];
-type VisibleToolResult = SessionMessage['tool_results'][number];
-
-interface ToolTimelineItem {
-  key: string;
-  name: string;
-  status: string;
-  result?: string;
-  input?: Record<string, unknown>;
-  args?: Record<string, unknown>;
-  /** 仅 awaiting_confirmation：危险命令风险原因 */
-  riskReason?: string;
-}
-
-const buildToolTimeline = (
-  calls: VisibleToolCall[],
-  results: VisibleToolResult[],
-): ToolTimelineItem[] => {
-  const usedResultIndexes = new Set<number>();
-
-  const items: ToolTimelineItem[] = calls.map((call, index) => {
-    const exactIndex = results.findIndex(
-      (result, resultIndex) =>
-        !usedResultIndexes.has(resultIndex) &&
-        !!call.id &&
-        result.id === call.id,
-    );
-    const fallbackIndex =
-      exactIndex >= 0
-        ? exactIndex
-        : results.findIndex(
-            (result, resultIndex) =>
-              !usedResultIndexes.has(resultIndex) &&
-              result.tool_name === call.name,
-          );
-    const result = fallbackIndex >= 0 ? results[fallbackIndex] : undefined;
-    if (fallbackIndex >= 0) usedResultIndexes.add(fallbackIndex);
-
-    return {
-      key: call.id || `${call.name}-${index}`,
-      name: call.name,
-      status: result?.status || 'running',
-      result: result?.result,
-      input: call.input,
-      args: call.args,
-    };
-  });
-
-  results.forEach((result, index) => {
-    if (usedResultIndexes.has(index)) return;
-    items.push({
-      key: result.id || `${result.tool_name}-result-${index}`,
-      name: result.tool_name,
-      status: result.status || 'success',
-      result: result.result,
-    });
-  });
-
-  return items;
-};
 
 interface EmbeddedSubAgentListProps {
   messages: SessionMessage[];
@@ -176,72 +120,6 @@ const EmbeddedSubAgentList: React.FC<EmbeddedSubAgentListProps> = ({ messages })
   );
 };
 
-// ── 时间线片段工具函数 ──────────────────────────────────────
-
-/** 将 segments 转换为可渲染的时间线项，连续 tool 片段自动合并为 ToolCallGroup */
-interface TimelineRenderItem {
-  type: 'thinking' | 'text' | 'tool_group';
-  /** thinking/text: 文本内容 */
-  content?: string;
-  /** tool_group: 工具列表 */
-  tools?: ToolTimelineItem[];
-}
-
-function buildTimelineFromSegments(
-  segments: MessageSegment[],
-): TimelineRenderItem[] {
-  const items: TimelineRenderItem[] = [];
-
-  for (const seg of segments) {
-    if (seg.type === 'tool') {
-      const lastItem = items[items.length - 1];
-      if (lastItem && lastItem.type === 'tool_group') {
-        // 追加到上一个工具组
-        lastItem.tools!.push({
-          key: seg.toolCallId || seg.content || '',
-          name: seg.content || '',
-          status: seg.toolStatus || 'running',
-          result: seg.toolResult,
-          input: seg.toolInput,
-          riskReason: seg.riskReason,
-        });
-      } else {
-        // 新建工具组
-        items.push({
-          type: 'tool_group',
-          tools: [{
-            key: seg.toolCallId || seg.content || '',
-            name: seg.content || '',
-            status: seg.toolStatus || 'running',
-            result: seg.toolResult,
-            input: seg.toolInput,
-            riskReason: seg.riskReason,
-          }],
-        });
-      }
-    } else if (seg.type === 'thinking') {
-      const lastItem = items[items.length - 1];
-      if (lastItem?.type === 'thinking') {
-        // 合并连续 thinking 片段
-        lastItem.content = (lastItem.content || '') + (seg.content || '');
-      } else {
-        items.push({ type: 'thinking', content: seg.content || '' });
-      }
-    } else {
-      // text segment
-      const lastItem = items[items.length - 1];
-      if (lastItem?.type === 'text') {
-        // 合并连续 text 片段
-        lastItem.content = (lastItem.content || '') + (seg.content || '');
-      } else {
-        items.push({ type: 'text', content: seg.content || '' });
-      }
-    }
-  }
-
-  return items;
-}
-
 /** 头像组件 — 替代时间线圆点 */
 const Avatar: React.FC<{ variant: 'user' | 'assistant' | 'error' }> = ({ variant }) => {
   if (variant === 'user') {
@@ -266,16 +144,13 @@ const Avatar: React.FC<{ variant: 'user' | 'assistant' | 'error' }> = ({ variant
   );
 };
 
-export const MessageBubble: React.FC<MessageBubbleProps> = ({
+const MessageBubbleInner: React.FC<MessageBubbleProps> = ({
   message,
   embeddedSubAgents = [],
   clarifyDisabled = false,
   onClarifyAnswer,
 }) => {
   const [clarifySubmitted, setClarifySubmitted] = useState(false);
-  const [confirmSubmitted, setConfirmSubmitted] = useState<Set<string>>(
-    () => new Set(),
-  );
   const [isSubAgentExpanded, setIsSubAgentExpanded] = useState(false);
   const isUser = message.role === 'user';
   const isError = message.status === 'error';
@@ -305,6 +180,12 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   const showSubAgentBody = !isSubAgent || isSubAgentExpanded;
   const subAgentStatusLabel = isStreaming ? '运行中' : isError ? '失败' : '完成';
 
+  // clarify 回答统一入口：更新 submitted 状态后回调（与时间线内 clarify 卡片共享状态）
+  const handleClarifyAnswer = (answer: string) => {
+    setClarifySubmitted(true);
+    onClarifyAnswer?.(answer);
+  };
+
   const timestamp = (
     <div className="mt-1.5 pl-1 text-[10px] text-muted-foreground/50">
       {new Date(message.created_at).toLocaleTimeString()}
@@ -329,10 +210,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
             content={message.content}
             disabled={clarifyDisabled || !onClarifyAnswer}
             timestamp={message.created_at}
-            onAnswer={(answers: string[]) => {
-              setClarifySubmitted(true);
-              onClarifyAnswer?.(answers.join('\n'));
-            }}
+            onAnswer={(answers: string[]) => handleClarifyAnswer(answers.join('\n'))}
           />
           {timestamp}
         </div>
@@ -350,10 +228,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
             prompt={clarifyPrompt}
             disabled={clarifyDisabled || !onClarifyAnswer}
             timestamp={message.created_at}
-            onAnswer={(answer: string) => {
-              setClarifySubmitted(true);
-              onClarifyAnswer?.(answer);
-            }}
+            onAnswer={handleClarifyAnswer}
           />
           {timestamp}
         </div>
@@ -405,109 +280,17 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
 
             // 有 segments 时：按时间线顺序渲染
             if (hasSegments) {
-              const timeline = buildTimelineFromSegments(segments!);
               return (
-                <div className="space-y-1.5">
-                  {timeline.map((item, idx) => {
-                    if (item.type === 'thinking') {
-                      return (
-                        <ThinkingBlock
-                          key={`thinking-${idx}`}
-                          content={item.content || ''}
-                          isStreaming={Boolean(isThinking)}
-                        />
-                      );
-                    }
-                    if (item.type === 'tool_group') {
-                      const awaiting = item
-                        .tools!.filter((t) => t.status === 'awaiting_confirmation');
-                      const rest = item
-                        .tools!.filter((t) => t.status !== 'awaiting_confirmation');
-                      return (
-                        <React.Fragment key={`tools-${idx}`}>
-                          {rest.length > 0 && (
-                            <ToolCallGroup
-                              items={rest}
-                              isStreaming={isStreaming}
-                            />
-                          )}
-                          {awaiting.map((t) => (
-                            <CommandConfirmCard
-                              key={`confirm-${t.key}`}
-                              command={String(t.input?.command ?? '')}
-                              riskReason={t.riskReason}
-                              submitted={confirmSubmitted.has(t.key)}
-                              timestamp={message.created_at}
-                              onDecision={(decision) => {
-                                approvalApi.postApproval(
-                                  message.task_id || '',
-                                  t.key,
-                                  decision,
-                                );
-                                setConfirmSubmitted(
-                                  (prev) => new Set(prev).add(t.key),
-                                );
-                              }}
-                            />
-                          ))}
-                        </React.Fragment>
-                      );
-                    }
-                    if (item.type === 'text') {
-                      const textContent = item.content || '';
-                      // 检查是否仅为 clarify 提示（无其他内容）
-                      const allClarify = parseAllClarifyPrompts(textContent);
-                      if (allClarify.length > 0) {
-                        // 构建问题文本用于判断是否 content 只包含 clarify
-                        const questionsOnly = allClarify.map(c => c.question).join('\n');
-                        const contentWithoutQuestions = textContent.replace(questionsOnly, '').trim();
-                        const isOnlyClarify = contentWithoutQuestions.length === 0 || contentWithoutQuestions === allClarify.map(c => c.options?.join('\n') || '').join('\n');
-                        if (isOnlyClarify && allClarify.length === 1) {
-                          return (
-                            <ClarifyCard
-                              key={`text-${idx}`}
-                              prompt={allClarify[0]}
-                              disabled={clarifyDisabled || !onClarifyAnswer}
-                              submitted={clarifySubmitted}
-                              timestamp={message.created_at}
-                              onAnswer={(answer: string) => {
-                                setClarifySubmitted(true);
-                                onClarifyAnswer?.(answer);
-                              }}
-                            />
-                          );
-                        }
-                        if (isOnlyClarify && allClarify.length > 1) {
-                          return (
-                            <MultiClarifyCard
-                              key={`text-${idx}`}
-                              content={textContent}
-                              disabled={clarifyDisabled || !onClarifyAnswer}
-                              submitted={clarifySubmitted}
-                              timestamp={message.created_at}
-                              onAnswer={(answers: string[]) => {
-                                setClarifySubmitted(true);
-                                onClarifyAnswer?.(answers.join('\n'));
-                              }}
-                            />
-                          );
-                        }
-                      }
-                      return (
-                        <div key={`text-${idx}`} className="markdown-content text-sm leading-relaxed">
-                          {textContent ? (
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                              {textContent}
-                            </ReactMarkdown>
-                          ) : (
-                            isStreaming && <span className="inline-block h-4 w-1 animate-pulse bg-current" />
-                          )}
-                        </div>
-                      );
-                    }
-                    return null;
-                  })}
-                </div>
+                <MessageTimeline
+                  segments={segments!}
+                  isStreaming={isStreaming}
+                  isThinking={Boolean(isThinking)}
+                  createdAt={message.created_at}
+                  taskId={message.task_id}
+                  clarifyDisabled={clarifyDisabled}
+                  clarifySubmitted={clarifySubmitted}
+                  onClarifyAnswer={handleClarifyAnswer}
+                />
               );
             }
 
@@ -535,10 +318,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
                       disabled={clarifyDisabled || !onClarifyAnswer}
                       submitted={clarifySubmitted}
                       timestamp={message.created_at}
-                      onAnswer={(answer: string) => {
-                        setClarifySubmitted(true);
-                        onClarifyAnswer?.(answer);
-                      }}
+                      onAnswer={handleClarifyAnswer}
                     />
                   </div>
                 )}
@@ -582,3 +362,5 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
     </div>
   );
 };
+
+export const MessageBubble = React.memo(MessageBubbleInner);

@@ -22,6 +22,20 @@ from src.infrastructure.agent.nodes.base_node import BaseNode, NodeContext
 logger = logging.getLogger(__name__)
 
 
+async def _emit_llm_event(event_emitter, task_id: str, event_type: str, payload: dict) -> None:
+    """发射 LLM 观测事件，事件通道失败不能中断模型调用。"""
+    if not event_emitter:
+        return
+    emit_safe = getattr(event_emitter, "emit_safe", None)
+    try:
+        if callable(emit_safe) and hasattr(type(event_emitter), "emit_safe"):
+            await emit_safe(task_id, event_type, payload)
+        else:
+            await event_emitter.emit(task_id, event_type, payload)
+    except Exception as exc:
+        logger.warning("LLM event emit failed: %s", exc)
+
+
 class LLMCallNode(BaseNode):
     """LLM 调用节点"""
 
@@ -50,11 +64,30 @@ class LLMCallNode(BaseNode):
         Returns:
             状态更新字典
         """
+        current_turn = context.current_turn + 1
+        if self._exhausted_turn_budget(state):
+            logger.warning(
+                "[NODE:llm_call] TURN_BUDGET_EXHAUSTED | task_id=%s | turn=%d | max_turns=%d",
+                context.task_id,
+                context.current_turn,
+                state.get("max_turns", 100),
+            )
+            return {
+                "pending_tool_calls": [],
+                "last_executed_tool_call_ids": [],
+                "error": None,
+                **ControlFields(
+                    current_turn=context.current_turn,
+                    phase="complete",
+                    should_end=True,
+                    is_complete=True,
+                ).to_update(),
+            }
+
         llm = config["configurable"]["llm"]
         error_registry: LLMErrorHandlerRegistry | None = config.get("configurable", {}).get(
             "llm_error_handlers"
         )
-        current_turn = context.current_turn + 1
 
         # 防御性 SystemMessage 注入
         messages = list(state["messages"])
@@ -107,20 +140,22 @@ class LLMCallNode(BaseNode):
                         if reasoning:
                             thinking_text += reasoning
                             # 发射思考内容流式片段
-                            await context.event_emitter.emit_thinking_chunk(
+                            await _emit_llm_event(
+                                context.event_emitter,
                                 context.task_id,
-                                current_turn,
-                                reasoning,
+                                AgentEventType.THINKING_CHUNK,
+                                {"turn": current_turn, "text": reasoning, "delta": True},
                             )
 
                     # 处理正常回复内容
                     if chunk.content:
                         full_text += chunk.content
                         # 发射流式片段(走 IEventEmitter 抽象,事件名为 llm:chunk)
-                        await context.event_emitter.emit_llm_chunk(
+                        await _emit_llm_event(
+                            context.event_emitter,
                             context.task_id,
-                            current_turn,
-                            chunk.content,
+                            AgentEventType.LLM_CHUNK,
+                            {"turn": current_turn, "text": chunk.content, "delta": True},
                         )
 
                     # 聚合 chunk 以正确合并 tool_call_chunks
@@ -159,7 +194,8 @@ class LLMCallNode(BaseNode):
         )
 
         # 发射 LLM 完成事件(与前端 AgentEventStream 约定:llm:complete)
-        await context.event_emitter.emit(
+        await _emit_llm_event(
+            context.event_emitter,
             context.task_id,
             AgentEventType.LLM_COMPLETE,
             {
@@ -181,8 +217,8 @@ class LLMCallNode(BaseNode):
             len(pending_tool_calls) == 0
         )
 
-        # 如果没有 tool_calls,标记任务完成
-        should_end = len(pending_tool_calls) == 0
+        # 如果没有 tool_calls 或本轮已耗尽预算，标记任务完成。
+        should_end = len(pending_tool_calls) == 0 or current_turn >= state.get("max_turns", 100)
         is_complete = should_end
 
         # ── Token 校准：提取 LLM 返回的真实 prompt_tokens ──
@@ -197,6 +233,8 @@ class LLMCallNode(BaseNode):
             "last_executed_tool_call_ids": [],
             "current_llm_text": full_text,
             "thinking_text": thinking_text,
+            # 紧急压缩后成功重试时，清除上一轮 ContextLimitError 留下的错误。
+            "error": None,
             **ControlFields(
                 current_turn=current_turn,
                 phase="complete" if is_complete else "thinking",

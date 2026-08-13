@@ -3,7 +3,6 @@
 组合根(Composition Root): 在这里将所有依赖组装在一起
 """
 
-from contextlib import asynccontextmanager
 from functools import lru_cache
 
 from fastapi import Depends, Request
@@ -310,8 +309,10 @@ def get_task_management_use_case(
 ):
     """获取 Task 管理用例实例"""
     from src.application.tasks.management import TaskManagementUseCase
+    from src.infrastructure.agent.graph_resume_manager import get_default_resume_manager
     from src.infrastructure.repositories.sqlite_task_repo import SQLiteTaskRepository
     from src.infrastructure.repositories.sqlite_agent_repo import SQLiteAgentRepository
+    from src.infrastructure.tools.confirmation.store import get_default_registry
 
     task_repo = SQLiteTaskRepository(db)
     agent_repo = SQLiteAgentRepository(db)
@@ -327,6 +328,8 @@ def get_task_management_use_case(
         agent_repo=agent_repo,
         running_tasks=running_tasks,
         event_emitter=event_emitter,
+        resume_manager=get_default_resume_manager(),
+        approval_registry=get_default_registry(),
     )
 
 

@@ -90,13 +90,7 @@ export const AgentSessionPage: React.FC = () => {
       }
     }
 
-    console.log('[AgentSessionPage] Replay debug:', {
-      currentTaskId, lastAssistantTaskId: lastAssistantMsg?.task_id,
-      finalTaskId: taskId, messagesCount: messages.length,
-    });
-
     if (taskId) {
-      console.log('[AgentSessionPage] Replaying task:', taskId);
       replayStream(true, taskId);
     } else {
       console.warn('[AgentSessionPage] No task to replay');
@@ -114,22 +108,10 @@ export const AgentSessionPage: React.FC = () => {
   }, [agentId, fetchAgent, fetchSessions, navigate]);
 
   // 检测活动任务恢复状态 (useChat 内部通过 API + localStorage 自动恢复)
+  // 第一条消息追加完成即视为恢复完成；无需轮询
   useEffect(() => {
-    if (isReplaying) {
-      setIsRestoring(true);
-      // 当第一条消息被追加时，认为恢复完成
-      const checkRestored = setInterval(() => {
-        if (messages.length > 0) {
-          setIsRestoring(false);
-          clearInterval(checkRestored);
-        }
-      }, 500);
-      // 最多 10 秒后自动关闭提示
-      setTimeout(() => {
-        setIsRestoring(false);
-        clearInterval(checkRestored);
-      }, 10000);
-      return () => clearInterval(checkRestored);
+    if (isReplaying && messages.length > 0) {
+      setIsRestoring(false);
     }
   }, [isReplaying, messages.length]);
 
@@ -171,7 +153,6 @@ export const AgentSessionPage: React.FC = () => {
       if (state.agentId === agentId && state.sessionId) {
         const targetSession = sessions.find(s => s.id === state.sessionId);
         if (targetSession) {
-          console.log('[AgentSessionPage] Auto-restoring session:', state.sessionId);
           handleSelectSession(state.sessionId);
         }
       }

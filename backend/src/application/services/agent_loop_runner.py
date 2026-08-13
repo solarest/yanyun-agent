@@ -192,6 +192,56 @@ class AgentLoopRunner:
                 event_emitter=effective_event_emitter,
             )
 
+    async def build_checkpoint_resume(
+        self,
+        *,
+        task: Any,
+        resume_meta: dict[str, Any],
+        checkpointer_file: Path,
+        task_dir: Path,
+        send_message_use_case: Any,
+    ) -> tuple[Any, dict]:
+        """重建进程重启后恢复图所需的完整运行时配置。"""
+        from src.infrastructure.agent.file_backed_saver import FileBackedSaver
+        from src.infrastructure.agent.workflow_builder import AgentWorkflowBuilder
+
+        agent_id = resume_meta.get("agent_id") or task.agent_id
+        session_id = resume_meta.get("session_id") or task.session_id
+        model = resume_meta.get("model") or task.model
+        max_turns = resume_meta.get("max_turns") or task.max_turns
+        workspace = resume_meta.get("workspace") or task.workspace
+        _, config, _ = await self._context.build_all(
+            agent_id=agent_id,
+            session_id=session_id,
+            task=task,
+            content=task.message,
+            model=model,
+            max_turns=max_turns,
+            workspace=workspace,
+            send_message_use_case=send_message_use_case,
+            task_dir=str(task_dir),
+        )
+        graph = AgentWorkflowBuilder.build_with_checkpointer(
+            FileBackedSaver(file_path=str(checkpointer_file))
+        )
+        return graph, config
+
+    async def finalize_checkpoint_resume(
+        self,
+        *,
+        task: Any,
+        result: dict,
+        task_dir: Path,
+    ) -> None:
+        """复用正常完成路径持久化重启后恢复的结果。"""
+        await self._lifecycle.handle_normal_completion(
+            task=task,
+            session_id=task.session_id,
+            result=result,
+            event_emitter=self._context._event_emitter,
+            task_dir=str(task_dir),
+        )
+
     def _save_checkpointer_to_file(self, task_dir: str | None) -> None:
         """Persist the checkpointer's full state (storage + writes) to file.
 
