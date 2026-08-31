@@ -96,7 +96,7 @@ def create_app() -> FastAPI:
     app.include_router(memory_router)
     app.include_router(teams_router)
 
-    # Invalidate compiled graph cache to pick up new nodes (e.g., save_checkpoint)
+    # Invalidate compiled graph cache to pick up current workflow nodes.
     from src.infrastructure.agent.workflow_builder import AgentWorkflowBuilder
     AgentWorkflowBuilder.reset()
 
