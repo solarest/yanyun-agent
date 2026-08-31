@@ -17,13 +17,13 @@ ApprovalDecision = Literal["allow_once", "allow_all", "deny"]
 CONFIRMATION_OPTIONS: tuple[str, ...] = ("allow_once", "allow_all", "deny")
 """事件负载 `options` 字段的取值集合。"""
 
-# ── 中断/恢复 元数据键 ───────────────────────────────────────────
+# ── 确认状态 元数据键 ───────────────────────────────────────────
 # ConfirmationMiddleware → ToolResult.metadata 中标记"需确认"的键；
-# tool_execute_node 据此调用 interrupt() 暂停图执行。
+# tool_execute_node 据此创建可持久化的 pending_confirmation 状态。
 CONFIRMATION_METADATA_KEY: str = "confirmation_required"
 
 # ToolContext.extra 中标记"跳过确认"的键；
-# tool_execute_node 恢复后重执行时设置，ConfirmationMiddleware 据此放行。
+# tool_execute_node 从快照恢复后重执行时设置，ConfirmationMiddleware 据此放行。
 BYPASS_CONFIRMATION_KEY: str = "bypass_confirmation"
 
 
@@ -34,16 +34,4 @@ class ConfirmationRequiredPayload(TypedDict):
     command: str
     riskReason: str
     workingDir: str
-    options: list[str]
-
-
-class ConfirmationInterruptPayload(TypedDict):
-    """传给 `interrupt()` 的负载——前端展示 + 恢复上下文。"""
-
-    toolCallId: str
-    command: str
-    category: str
-    riskReason: str
-    sessionId: str
-    taskId: str
     options: list[str]

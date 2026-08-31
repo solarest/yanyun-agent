@@ -4,7 +4,7 @@ LangGraph Node: tool_execute_node
 职责:执行工具调用并返回结果。
 
 支持人在回路确认：当工具返回 confirmation_required 标记时，
-通过 LangGraph interrupt() 暂停图执行；用户决策到达后恢复。
+把待确认调用写入 AgentState；用户决策到达后从本地快照继续。
 """
 
 import logging
@@ -147,7 +147,7 @@ async def _execute_single_tool(
 
 
 class ToolExecuteNode(BaseNode):
-    """工具执行节点（支持人在回路确认中断/恢复）"""
+    """工具执行节点（支持人在回路确认）"""
 
     @property
     def node_name(self) -> str:
@@ -160,9 +160,9 @@ class ToolExecuteNode(BaseNode):
     async def execute(self, state: AgentState, config: RunnableConfig, context: NodeContext) -> dict:
         """执行工具调用
 
-        每次节点调用只执行一个工具调用。这样该调用完成后的状态会先由
-        LangGraph checkpoint 持久化；如果下一个工具需要确认，interrupt() 恢复
-        时不会重放已经完成的兄弟工具。
+        每次节点调用只执行一个工具调用。调用完成后的合并状态会由
+        persist_state 节点写入本地快照；若下一个工具需要确认，恢复时
+        不会重放已经完成的兄弟工具。
 
         Args:
             state: 当前 Agent 状态

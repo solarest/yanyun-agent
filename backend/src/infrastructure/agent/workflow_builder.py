@@ -1,11 +1,11 @@
 """基础设施层 - Agent 工作流构建器实现
 
 编译 LangGraph StateGraph，将领域层路由逻辑与基础设施层节点组合在一起。
-使用 MemorySaver checkpointer 支持 interrupt() 暂停/恢复（人在回路确认）。
+运行状态由持久化节点写入本地快照；工作流本身不安装 checkpointer。
 
-Topology: 3 节点 + 2 条件路由 + 1 固定边
+Topology: 4 节点 + 2 条件路由 + 2 固定边
   context_compact → llm_call → (tool_execute | END)
-                        tool_execute → (context_compact | END)
+                        tool_execute → persist_state → (context_compact | END)
 """
 
 from langgraph.graph import END, StateGraph
@@ -25,7 +25,7 @@ from src.domain.services.agent_routing import (
 
 
 class AgentWorkflowBuilder(IAgentWorkflowBuilder):
-    """Agent StateGraph 构建器 — 3 个核心节点, 2 个条件路由 + 1 个固定边"""
+    """Agent StateGraph 构建器 — 4 个核心节点, 2 个条件路由 + 2 个固定边"""
 
     _compiled: CompiledStateGraph | None = None
 

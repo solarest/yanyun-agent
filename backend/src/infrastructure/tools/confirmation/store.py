@@ -5,8 +5,7 @@
 共享同一实例——见 design 决策 θ。
 
 非阻塞版：注册表仅追踪"哪些 (task_id, tool_call_id) 处于待确认状态"，
-不再持有 Future——暂停/恢复由 LangGraph interrupt() / Command(resume=...)
-机制处理。
+不再持有 Future；恢复状态由任务本地快照保存。
 """
 
 from __future__ import annotations
@@ -70,7 +69,7 @@ class SessionApprovalStore:
 
 # ── 进程级共享单例 ─────────────────────────────────────────────
 # 供管道工厂 build_default_pipeline 与 /approvals 端点共享同一实例——
-# 否则端点解析不到 sub-agent/team 挂起的 Future（见 design 决策 θ）。
+# 否则端点解析不到 sub-agent/team 的待确认调用（见 design 决策 θ）。
 
 _default_registry: Optional[PendingApprovalRegistry] = None
 _default_session_store: Optional[SessionApprovalStore] = None

@@ -4,9 +4,8 @@
 发射 `tool:confirmation_required` SSE 事件、登记待审批调用，并返回
 `ToolResult(metadata={"confirmation_required": True})` ——不阻塞等待。
 
-tool_execute_node 收到此标记后调用 LangGraph `interrupt()` 暂停图执行；
-用户决策到达后通过 `Command(resume=...)` 恢复，中间件再以 bypass 标记
-跳过确认直接执行。
+tool_execute_node 收到此标记后将待确认调用写入 AgentState；用户决策
+到达后由运行器从本地快照恢复，并以 bypass 标记跳过确认直接执行。
 """
 
 from __future__ import annotations
@@ -53,10 +52,10 @@ class ConfirmationMiddleware:
 
         command = str(input.get("command", ""))
 
-        # 恢复执行时携带 bypass 标记 → 跳过确认，直接执行
+        # 快照恢复执行时携带 bypass 标记 → 跳过确认，直接执行
         extra = context.extra if context else {}
         if extra.get(BYPASS_CONFIRMATION_KEY):
-            # allow_all 决策由 tool_execute_node 在 interrupt 恢复后
+            # allow_all 决策由 tool_execute_node 在快照恢复后
             # 调用 session_store.allow() 完成，此处只管放行
             return await next_handler(tool, input, context)
 
@@ -99,7 +98,7 @@ class ConfirmationMiddleware:
                 payload,
             )
 
-        # 返回非阻塞标记——tool_execute_node 收到后调用 interrupt()
+        # 返回非阻塞标记——tool_execute_node 将其写为待确认状态
         return ToolResult(
             output=f"⚠️ 需要确认执行: {command}",
             success=False,
