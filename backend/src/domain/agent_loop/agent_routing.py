@@ -57,7 +57,7 @@ def route_after_tool_execute(state: AgentState) -> str:
     - has remaining tool calls → tool_execute (每次节点只处理一个工具)
     - otherwise → context_compact (每轮 LLM 调用前都经过上下文守门)
     """
-    if state.get("awaiting_user_input"):
+    if state.get("pending_confirmation") or state.get("awaiting_user_input"):
         return END
     if state.get("pending_tool_calls"):
         return "tool_execute"

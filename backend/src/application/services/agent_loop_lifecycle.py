@@ -6,12 +6,9 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Optional
-
-from langgraph.errors import GraphInterrupt
+from typing import TYPE_CHECKING, Optional
 
 from src.domain.aggregates.task.task import TaskStatus
 from src.domain.entities.event_types import AgentEventType
@@ -30,7 +27,7 @@ class AgentLoopLifecycle:
 
     封装 graph 执行完成后的 4 种处理分支：
     - handle_normal_completion: 正常完成 → finalize task
-    - handle_interrupt: 人在回路中断 → 注册 ResumeContext
+    - handle_awaiting_confirmation: 持久化确认等待态
     - handle_cancellation: 取消 → 更新 task 为 CANCELLED
     - handle_failure: 失败 → 更新 task 为 FAILED
     """
@@ -64,74 +61,10 @@ class AgentLoopLifecycle:
             task_dir=Path(task_dir) if task_dir else None,
         )
 
-    async def handle_interrupt(
-        self,
-        task: Task,
-        session_id: str,
-        graph: Any,
-        config: dict,
-        event_emitter: Optional[IEventEmitter],
-        persist_session_messages: bool = True,
-        task_dir: Optional[str] = None,
-    ) -> None:
-        """处理人在回路中断（GraphInterrupt）
-
-        注册 ResumeContext，等待用户决策后恢复。
-        """
-        logger.info(
-            "Agent loop interrupted for task %s — awaiting user confirmation", task.id
-        )
-
-        from src.infrastructure.agent.graph_resume_manager import (
-            GraphResumeManager,
-            ResumeContext,
-            get_default_resume_manager,
-        )
-
-        resume_mgr = get_default_resume_manager()
-        lifecycle = self  # capture for callback
-
-        async def _on_resume_complete(result: dict) -> None:
-            """图恢复执行完成后的回调。"""
-            try:
-                if lifecycle._task_repo:
-                    task.status = TaskStatus.COMPLETED
-                    task.completed_at = datetime.now()
-                    await lifecycle._task_repo.update(task)
-                await lifecycle._task_completion_service.finalize(
-                    task=task,
-                    session_id=session_id,
-                    result=result,
-                    event_emitter=event_emitter,
-                    persist_session_messages=persist_session_messages,
-                    task_dir=Path(task_dir) if task_dir else None,
-                )
-                # Clean up task_dir registration to prevent memory leak
-                if hasattr(event_emitter, 'remove_task_dir'):
-                    event_emitter.remove_task_dir(task.id)
-                if event_emitter:
-                    await event_emitter.emit(
-                        task.id, AgentEventType.TASK_COMPLETED, {}
-                    )
-            except Exception:
-                logger.exception(
-                    "Resume completion callback failed for task %s", task.id
-                )
-
-        await resume_mgr.register(
-            task.id,
-            ResumeContext(
-                graph=graph,
-                config=config,
-                task_id=task.id,
-                session_id=session_id,
-                on_complete=_on_resume_complete,
-            ),
-        )
-
-        # 更新任务状态为"运行中"（非终态）
+    async def handle_awaiting_confirmation(self, task: Task) -> None:
+        """Keep a task resumable while its local snapshot awaits approval."""
+        task.status = TaskStatus.RUNNING
         if self._task_repo:
-            task.status = TaskStatus.RUNNING
             await self._task_repo.update(task)
 
     async def handle_cancellation(

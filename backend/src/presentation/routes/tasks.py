@@ -1,5 +1,7 @@
 """表现层 - 任务 CRUD 路由"""
 
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from src.application.dtos.approval_dto import ApprovalDecisionDTO
@@ -191,7 +193,7 @@ async def cancel_task(
     status_code=status.HTTP_200_OK,
     summary="提交命令确认决策",
     description="对挂起等待确认的危险 shell 命令提交用户决策"
-    "（本次允许 / 全部允许 / 拒绝），恢复 LangGraph 图执行。",
+    "（本次允许 / 全部允许 / 拒绝），从本地状态快照继续执行。",
     responses={404: {"description": "无此待确认调用"}},
 )
 async def submit_approval(
@@ -202,14 +204,34 @@ async def submit_approval(
 ):
     """提交命令确认决策。
 
-    校验 PendingApprovalRegistry 中存在对应 toolCallId 后，
-    通过 GraphResumeManager 以 Command(resume=decision) 恢复图执行。
-    如果内存中无上下文（进程重启），回退到 checkpointer.json 恢复。
-    不存在对应待审批调用则返回 404。
+    从任务本地快照读取待确认工具调用并在后台继续执行。
+    进程内注册表仅用于清理旧登记，进程重启后仍可通过快照恢复。
     """
-    # 校验待审批调用存在（中间件已登记）
-    exists = await registry.has(task_id, dto.toolCallId)
-    if not exists:
+    resume_use_case = get_send_message_use_case(request) if request else None
+    if resume_use_case is None or resume_use_case.loop_runner is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": {"code": "NO_PENDING_APPROVAL", "message": "无此待确认调用"}},
+        )
+
+    from src.infrastructure.database.session import AsyncSessionLocal
+    from src.infrastructure.repositories.sqlite_task_repo import SQLiteTaskRepository
+
+    async with AsyncSessionLocal() as db:
+        task_repo = SQLiteTaskRepository(db)
+        task = await task_repo.get_by_id(task_id)
+
+    if task is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": {"code": "NO_PENDING_APPROVAL", "message": "无此待确认调用"}},
+        )
+
+    file_storage = resume_use_case._file_storage
+    task_dir = file_storage.base_path / task.session_id / task.id
+    checkpoint = file_storage.read_latest_checkpoint(task_dir)
+    pending = checkpoint.get("pending_confirmation") if checkpoint else None
+    if not pending or pending.get("tool_call_id") != dto.toolCallId:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
@@ -220,41 +242,15 @@ async def submit_approval(
             },
         )
 
-    # 清理待审批登记
     await registry.remove(task_id, dto.toolCallId)
-
-    # 恢复图执行
-    from src.infrastructure.agent.graph_resume_manager import (
-        get_default_resume_manager,
-    )
-    from src.application.services.session_file_storage import SessionFileStorage
-    resume_mgr = get_default_resume_manager()
-    file_storage = SessionFileStorage()
-    resume_use_case = get_send_message_use_case(request) if request else None
-
-    # Create short-lived DB session for checkpoint resume fallback
-    from src.infrastructure.database.session import AsyncSessionLocal
-    from src.infrastructure.repositories.sqlite_task_repo import SQLiteTaskRepository
-
-    async with AsyncSessionLocal() as db:
-        task_repo = SQLiteTaskRepository(db)
-        resumed = await resume_mgr.resume(
-            task_id, dto.decision,
-            file_storage=file_storage,
-            task_repo=task_repo,
-            resume_runner=resume_use_case.loop_runner if resume_use_case else None,
+    asyncio.create_task(
+        resume_use_case.loop_runner.resume_from_snapshot(
+            task=task,
+            task_dir=task_dir,
+            approval={"tool_call_id": dto.toolCallId, "decision": dto.decision},
             send_message_use_case=resume_use_case,
         )
-    if not resumed:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "error": {
-                    "code": "NO_PENDING_GRAPH",
-                    "message": "无此待恢复的图执行",
-                }
-            },
-        )
+    )
 
     return {
         "message": "approval submitted",

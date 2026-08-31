@@ -153,16 +153,6 @@ class SendMessageUseCase:
             # Register task dir with StreamEventService for file-backed event storage
             if self.event_emitter and hasattr(self.event_emitter, 'set_task_dir'):
                 self.event_emitter.set_task_dir(task.id, task_dir)
-            # Write resume metadata for checkpoint recovery after restart
-            import json
-            (task_dir / "resume_meta.json").write_text(json.dumps({
-                "agent_id": agent_id,
-                "session_id": session_id,
-                "model": effective_model,
-                "workspace": workspace,
-                "max_turns": max_turns,
-            }))
-
         # 2. Save user message — to file (deferred) or DB (sub-agent skips both)
         user_msg: Optional[SessionMessage] = None
         if persist_session_messages:

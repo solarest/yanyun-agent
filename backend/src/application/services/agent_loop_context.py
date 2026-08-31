@@ -8,7 +8,6 @@ InitialState / GraphConfig。
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 from src.domain.aggregates.agent.state_groups import (
@@ -32,10 +31,8 @@ if TYPE_CHECKING:
     from src.domain.repositories.session_repository import ISessionRepository
     from src.domain.repositories.task_repository import ITaskRepository
     from src.domain.repositories.tool_registry import IToolRegistry
-    from src.domain.services import IEventEmitter, ProxyEventEmitter
+    from src.domain.services import IEventEmitter
     from src.domain.skills import ISkillRepository
-    from src.application.services.system_prompt_builder import SystemPromptBuilder
-    from src.application.services.history_loader import HistoryLoader
 
 logger = logging.getLogger(__name__)
 
@@ -228,7 +225,6 @@ class AgentLoopContext:
                 "team_role": team_role,
                 "team_message_bus": team_message_bus,
                 "leader_agent_id": leader_agent_id or "",
-                "checkpointer_file": str(Path(task_dir) / "checkpointer.json") if task_dir else None,
             }
         }
 
@@ -372,4 +368,5 @@ class AgentLoopContext:
                 last_executed_ids=[],
                 final_result=None,
             ).to_update(),
+            "pending_confirmation": None,
         }

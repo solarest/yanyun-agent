@@ -31,14 +31,12 @@ class TaskManagementUseCase:
         agent_repo: IAgentRepository,
         running_tasks: Optional[Dict[str, asyncio.Task]] = None,
         event_emitter: Optional[IEventEmitter] = None,
-        resume_manager: Any = None,
         approval_registry: Any = None,
     ) -> None:
         self._task_repo = task_repo
         self._agent_repo = agent_repo
         self._running_tasks = running_tasks if running_tasks is not None else {}
         self._event_emitter = event_emitter
-        self._resume_manager = resume_manager
         self._approval_registry = approval_registry
 
     async def create(
@@ -120,8 +118,6 @@ class TaskManagementUseCase:
             task.error = "cancelled"
             await self._task_repo.update(task)
 
-            if self._resume_manager:
-                await self._resume_manager.remove(task_id)
             if self._approval_registry:
                 await self._approval_registry.remove_task(task_id)
 

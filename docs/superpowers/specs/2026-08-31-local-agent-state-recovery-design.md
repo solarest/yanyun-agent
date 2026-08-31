@@ -30,9 +30,9 @@ Snapshots are written atomically: serialize to a sibling temporary file, flush i
 
 ## Execution and Recovery Flow
 
-The normal graph has no `save_checkpoint` node and compiles without an application-managed LangGraph checkpointer. The runner owns snapshot timing.
+The normal graph has no `save_checkpoint` node and compiles without an application-managed LangGraph checkpointer. A local-state persistence node receives the merged `AgentState` immediately after each completed tool execution and writes the snapshot; the runner owns terminal snapshots and restart orchestration.
 
-1. After a tool execution returns, the runner writes the resulting state as `turn_N.json`.
+1. After a tool execution returns, the local-state persistence node writes the resulting state as `turn_N.json`.
 2. Before an interrupted task is made available for confirmation, the runner writes a snapshot with `resume_status=awaiting_confirmation` and the pending call.
 3. On normal completion, cancellation, or failure, the runner writes a final state snapshot.
 4. For a running task found after a restart or reconnection, the runner loads the newest usable snapshot, rebuilds ordinary runtime dependencies, and invokes a fresh graph with that state. It does not deserialize LangGraph internals or repeat completed tools.

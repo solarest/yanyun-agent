@@ -8,7 +8,7 @@ import asyncio
 import logging
 from typing import Any, Optional
 
-from langgraph.errors import GraphInterrupt
+from langgraph.graph.message import add_messages
 
 from pathlib import Path
 
@@ -20,7 +20,10 @@ from src.domain.repositories.session_message_repository import (
     ISessionMessageRepository,
 )
 from src.application.services.task_completion_service import TaskCompletionService
-from src.domain.services.checkpoint_serializer import serialize_agent_state
+from src.domain.services.checkpoint_serializer import (
+    deserialize_agent_state,
+    serialize_agent_state,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +147,7 @@ class AgentLoopRunner:
             leader_agent_id=leader_agent_id,
             task_dir=task_dir,
         )
+        self._configure_snapshot_storage(graph_config, task_dir)
 
         # 从 config 中提取 event_emitter（build_all 已构建）
         effective_event_emitter = graph_config["configurable"]["event_emitter"]
@@ -156,24 +160,15 @@ class AgentLoopRunner:
             # Save checkpoint after successful graph execution
             self._save_checkpoint(task.id, task_dir, result)
 
+            if result.get("pending_confirmation"):
+                await self._lifecycle.handle_awaiting_confirmation(task)
+                return
+
             # Step 3: 正常完成
             await self._lifecycle.handle_normal_completion(
                 task=task,
                 session_id=session_id,
                 result=result,
-                event_emitter=effective_event_emitter,
-                persist_session_messages=persist_session_messages,
-                task_dir=task_dir,
-            )
-
-        except GraphInterrupt:
-            # Persist checkpointer state (includes writes for Command(resume=))
-            self._save_checkpointer_to_file(task_dir)
-            await self._lifecycle.handle_interrupt(
-                task=task,
-                session_id=session_id,
-                graph=graph,
-                config=graph_config,
                 event_emitter=effective_event_emitter,
                 persist_session_messages=persist_session_messages,
                 task_dir=task_dir,
@@ -192,71 +187,82 @@ class AgentLoopRunner:
                 event_emitter=effective_event_emitter,
             )
 
-    async def build_checkpoint_resume(
+    async def resume_from_snapshot(
         self,
         *,
         task: Any,
-        resume_meta: dict[str, Any],
-        checkpointer_file: Path,
         task_dir: Path,
-        send_message_use_case: Any,
-    ) -> tuple[Any, dict]:
-        """重建进程重启后恢复图所需的完整运行时配置。"""
-        from src.infrastructure.agent.file_backed_saver import FileBackedSaver
-        from src.infrastructure.agent.workflow_builder import AgentWorkflowBuilder
+        approval: dict[str, str] | None = None,
+        send_message_use_case: Any = None,
+    ) -> bool:
+        """Continue a task from a task-local AgentState snapshot."""
+        if self._file_storage is None:
+            return False
+        checkpoint = self._file_storage.read_latest_checkpoint(task_dir)
+        if checkpoint is None:
+            return False
 
-        agent_id = resume_meta.get("agent_id") or task.agent_id
-        session_id = resume_meta.get("session_id") or task.session_id
-        model = resume_meta.get("model") or task.model
-        max_turns = resume_meta.get("max_turns") or task.max_turns
-        workspace = resume_meta.get("workspace") or task.workspace
-        _, config, _ = await self._context.build_all(
-            agent_id=agent_id,
-            session_id=session_id,
+        state = deserialize_agent_state(checkpoint["state"])
+        pending = checkpoint.get("pending_confirmation")
+        if pending and (
+            not approval or approval.get("tool_call_id") != pending.get("tool_call_id")
+        ):
+            return False
+
+        graph, graph_config, _ = await self._context.build_all(
+            agent_id=task.agent_id,
+            session_id=task.session_id,
             task=task,
             content=task.message,
-            model=model,
-            max_turns=max_turns,
-            workspace=workspace,
+            model=task.model,
+            max_turns=task.max_turns,
+            workspace=task.workspace,
             send_message_use_case=send_message_use_case,
             task_dir=str(task_dir),
         )
-        graph = AgentWorkflowBuilder.build_with_checkpointer(
-            FileBackedSaver(file_path=str(checkpointer_file))
-        )
-        return graph, config
+        self._configure_snapshot_storage(graph_config, str(task_dir))
+        if approval:
+            graph_config["configurable"]["approval"] = approval
 
-    async def finalize_checkpoint_resume(
-        self,
-        *,
-        task: Any,
-        result: dict,
-        task_dir: Path,
-    ) -> None:
-        """复用正常完成路径持久化重启后恢复的结果。"""
+            from src.infrastructure.agent.nodes.tool_execute_node import tool_execute_node
+
+            tool_update = await tool_execute_node(state, graph_config)
+            state = self._apply_state_update(state, tool_update)
+            self._save_checkpoint(task.id, str(task_dir), state)
+            if state.get("pending_confirmation"):
+                await self._lifecycle.handle_awaiting_confirmation(task)
+                return True
+
+        result = await graph.ainvoke(state, graph_config)
+        self._save_checkpoint(task.id, str(task_dir), result)
+        event_emitter = graph_config["configurable"]["event_emitter"]
+        if result.get("pending_confirmation"):
+            await self._lifecycle.handle_awaiting_confirmation(task)
+            return True
         await self._lifecycle.handle_normal_completion(
             task=task,
             session_id=task.session_id,
             result=result,
-            event_emitter=self._context._event_emitter,
+            event_emitter=event_emitter,
             task_dir=str(task_dir),
         )
+        return True
 
-    def _save_checkpointer_to_file(self, task_dir: str | None) -> None:
-        """Persist the checkpointer's full state (storage + writes) to file.
+    def _configure_snapshot_storage(
+        self, graph_config: dict, task_dir: str | None
+    ) -> None:
+        """Expose the task-local storage boundary to graph persistence nodes."""
+        configurable = graph_config.setdefault("configurable", {})
+        configurable["file_storage"] = self._file_storage
+        configurable["task_dir"] = task_dir
 
-        Called after GraphInterrupt so writes from interrupt() are captured.
-        """
-        if not self._file_storage or not task_dir:
-            return
-        try:
-            from src.infrastructure.agent.save_checkpoint_node import save_checkpoint_node
-            config = {"configurable": {
-                "checkpointer_file": str(Path(task_dir) / "checkpointer.json"),
-            }}
-            save_checkpoint_node({}, config)  # state not needed, only saves checkpointer
-        except Exception:
-            logger.exception("Failed to save checkpointer for task")
+    @staticmethod
+    def _apply_state_update(state: dict, update: dict) -> dict:
+        """Apply the node update using the same message reducer as AgentState."""
+        merged = {**state, **update}
+        if "messages" in update:
+            merged["messages"] = add_messages(state.get("messages", []), update["messages"])
+        return merged
 
     def _save_checkpoint(self, task_id: str, task_dir: str | None, state: dict) -> None:
         """Save an AgentState checkpoint to file storage."""
@@ -265,8 +271,15 @@ class AgentLoopRunner:
         try:
             turn = state.get("current_turn", 0)
             serialized = serialize_agent_state(state)
+            pending_confirmation = state.get("pending_confirmation")
             self._file_storage.write_checkpoint(
-                Path(task_dir), serialized, turn_number=turn
+                Path(task_dir),
+                serialized,
+                turn_number=turn,
+                resume_status=(
+                    "awaiting_confirmation" if pending_confirmation else "running"
+                ),
+                pending_confirmation=pending_confirmation,
             )
         except Exception:
             logger.exception("Failed to save checkpoint for task %s", task_id)

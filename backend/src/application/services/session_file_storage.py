@@ -4,7 +4,6 @@ import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 
 class SessionFileStorage:
@@ -99,23 +98,43 @@ class SessionFileStorage:
     # ── checkpoints ──────────────────────────────────────────────────
 
     def write_checkpoint(
-        self, task_dir: Path, state: dict, turn_number: int
+        self,
+        task_dir: Path,
+        state: dict,
+        turn_number: int,
+        *,
+        resume_status: str = "running",
+        pending_confirmation: dict | None = None,
     ) -> Path:
-        """Save an AgentState checkpoint for a given turn."""
+        """Atomically save a recoverable AgentState snapshot for a turn."""
         ckpt_dir = task_dir / "checkpoints"
         filename = f"turn_{turn_number:03d}.json"
-        content = {"turn_number": turn_number, "state": state}
         ckpt_path = ckpt_dir / filename
-        ckpt_path.write_text(json.dumps(content, ensure_ascii=False, indent=2))
+        temporary_path = ckpt_path.with_suffix(".json.tmp")
+        content = {
+            "turn_number": turn_number,
+            "saved_at": datetime.now(UTC).isoformat(),
+            "resume_status": resume_status,
+            "pending_confirmation": pending_confirmation,
+            "state": state,
+        }
+        with open(temporary_path, "w", encoding="utf-8") as file:
+            json.dump(content, file, ensure_ascii=False, indent=2)
+            file.flush()
+            os.fsync(file.fileno())
+        temporary_path.replace(ckpt_path)
         return ckpt_path
 
     def read_latest_checkpoint(self, task_dir: Path) -> dict | None:
-        """Read the checkpoint with the highest turn number. Returns None if none."""
+        """Read the newest valid checkpoint, skipping incomplete snapshots."""
         ckpt_dir = task_dir / "checkpoints"
-        files = sorted(ckpt_dir.glob("turn_*.json"))
-        if not files:
-            return None
-        return json.loads(files[-1].read_text())
+        files = sorted(ckpt_dir.glob("turn_*.json"), reverse=True)
+        for path in files:
+            try:
+                return json.loads(path.read_text())
+            except (OSError, json.JSONDecodeError):
+                continue
+        return None
 
     # ── sub-agent ────────────────────────────────────────────────────
 

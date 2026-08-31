@@ -1,17 +1,8 @@
-"""Tests for AgentLoopLifecycle
+"""Tests for AgentLoopLifecycle."""
 
-Covers 4 lifecycle branches:
-- handle_normal_completion → finalize task
-- handle_interrupt → register ResumeContext
-- handle_cancellation → set CANCELLED + emit events
-- handle_failure → set FAILED + emit events
-"""
-
-from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from langgraph.errors import GraphInterrupt
 
 from src.application.services.agent_loop_lifecycle import AgentLoopLifecycle
 from src.domain.aggregates.task.task import TaskStatus
@@ -93,60 +84,15 @@ class TestNormalCompletion:
         assert call_kwargs["event_emitter"] == event_emitter
 
 
-# ─────────────────────────────────────────────────────────────────
-# Interrupt (Human-in-the-loop)
-# ─────────────────────────────────────────────────────────────────
-
-class TestInterrupt:
+class TestAwaitingConfirmation:
 
     @pytest.mark.asyncio
-    async def test_registers_resume_context(self, lifecycle, task, event_emitter):
-        """handle_interrupt() registers a ResumeContext for graph resumption"""
-        graph = MagicMock()
-        config = {"configurable": {"thread_id": "task-1"}}
+    async def test_keeps_task_running_without_finalizing(self, lifecycle, task, task_repo, completion_service):
+        await lifecycle.handle_awaiting_confirmation(task)
 
-        with patch(
-            "src.infrastructure.agent.graph_resume_manager.get_default_resume_manager"
-        ) as mock_get_mgr:
-            mock_mgr = MagicMock()
-            mock_mgr.register = AsyncMock()
-            mock_get_mgr.return_value = mock_mgr
-
-            await lifecycle.handle_interrupt(
-                task=task,
-                session_id="sess-1",
-                graph=graph,
-                config=config,
-                event_emitter=event_emitter,
-            )
-
-            mock_mgr.register.assert_called_once()
-            resume_ctx = mock_mgr.register.call_args[0][1]
-            assert resume_ctx.graph == graph
-            assert resume_ctx.config == config
-            assert resume_ctx.task_id == "task-1"
-            assert resume_ctx.session_id == "sess-1"
-
-    @pytest.mark.asyncio
-    async def test_updates_task_status_to_running(self, lifecycle, task, task_repo, event_emitter):
-        """handle_interrupt() keeps task status as RUNNING (not terminal)"""
-        with patch(
-            "src.infrastructure.agent.graph_resume_manager.get_default_resume_manager"
-        ) as mock_get_mgr:
-            mock_mgr = MagicMock()
-            mock_mgr.register = AsyncMock()
-            mock_get_mgr.return_value = mock_mgr
-
-            await lifecycle.handle_interrupt(
-                task=task,
-                session_id="sess-1",
-                graph=MagicMock(),
-                config={},
-                event_emitter=event_emitter,
-            )
-
-            assert task.status == TaskStatus.RUNNING
-            task_repo.update.assert_called_with(task)
+        assert task.status == TaskStatus.RUNNING
+        task_repo.update.assert_called_once_with(task)
+        completion_service.finalize.assert_not_called()
 
 
 # ─────────────────────────────────────────────────────────────────

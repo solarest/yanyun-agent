@@ -1,6 +1,7 @@
 """Tests for AgentLoopRunner checkpoint save behavior."""
 
-from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
@@ -153,3 +154,84 @@ class TestSaveCheckpoint:
         checkpoint = storage.read_latest_checkpoint(task_dir)
         assert checkpoint is not None
         assert checkpoint["turn_number"] == 1
+
+
+def test_runner_adds_local_storage_to_graph_config(tmp_path):
+    storage = SessionFileStorage(base_path=str(tmp_path))
+    task_dir = storage.create_task_dir("sess-001", "task-001")
+    runner = make_minimal_runner(file_storage=storage)
+    graph_config = {"configurable": {}}
+
+    runner._configure_snapshot_storage(graph_config, str(task_dir))
+
+    assert graph_config["configurable"]["file_storage"] is storage
+    assert graph_config["configurable"]["task_dir"] == str(task_dir)
+
+
+@pytest.mark.asyncio
+async def test_runner_resumes_pending_tool_from_local_snapshot(tmp_path):
+    storage = SessionFileStorage(base_path=str(tmp_path))
+    task_dir = storage.create_task_dir("sess-001", "task-001")
+    state = {
+        "messages": [],
+        "current_turn": 2,
+        "pending_tool_calls": [{"id": "call-1", "name": "shell", "input": {}}],
+        "tool_results": {},
+        "pending_confirmation": {"tool_call_id": "call-1"},
+        "workspace": "/tmp/ws",
+        "task_id": "task-001",
+    }
+    storage.write_checkpoint(
+        task_dir,
+        state,
+        2,
+        resume_status="awaiting_confirmation",
+        pending_confirmation=state["pending_confirmation"],
+    )
+    runner = make_minimal_runner(file_storage=storage)
+
+    class FakeToolRegistry:
+        async def execute(self, tool_name, tool_input, context):
+            if not context.extra.get("bypass_confirmation"):
+                return SimpleNamespace(
+                    output=None,
+                    success=False,
+                    error="confirmation_required",
+                    metadata={
+                        "confirmation_required": True,
+                        "tool_call_id": "call-1",
+                        "command": "rm -rf build",
+                        "category": "destructive",
+                        "risk_reason": "destructive operation",
+                    },
+                )
+            return SimpleNamespace(output="executed", success=True, error=None, metadata={})
+
+    class FakeGraph:
+        async def ainvoke(self, restored_state, graph_config):
+            assert restored_state["tool_results"]["call-1"]["output"] == "executed"
+            return {**restored_state, "final_result": "done", "pending_confirmation": None}
+
+    graph_config = {
+        "configurable": {
+            "tool_registry": FakeToolRegistry(),
+            "event_emitter": AsyncMock(),
+            "agent_id": "agent-1",
+            "session_id": "sess-001",
+        }
+    }
+    runner._context.build_all = AsyncMock(return_value=(FakeGraph(), graph_config, {}))
+    runner._lifecycle.handle_normal_completion = AsyncMock()
+    task = SimpleNamespace(
+        id="task-001", agent_id="agent-1", session_id="sess-001",
+        message="continue", model="test", max_turns=5, workspace="/tmp/ws",
+    )
+
+    resumed = await runner.resume_from_snapshot(
+        task=task,
+        task_dir=task_dir,
+        approval={"tool_call_id": "call-1", "decision": "allow_once"},
+    )
+
+    assert resumed is True
+    runner._lifecycle.handle_normal_completion.assert_awaited_once()

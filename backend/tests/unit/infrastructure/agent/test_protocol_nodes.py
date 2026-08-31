@@ -8,14 +8,10 @@ from langchain_core.messages import (
     SystemMessage,
     ToolMessage,
 )
-from langgraph.checkpoint.memory import MemorySaver
-from langgraph.graph import END, StateGraph
-from langgraph.types import Command
 
 from src.infrastructure.agent.nodes.context_compact_node import context_compact_node
 from src.infrastructure.agent.nodes.llm_call_node import llm_call_node
 from src.infrastructure.agent.nodes.tool_execute_node import tool_execute_node
-from src.domain.aggregates.agent.agent_state import AgentState
 from src.domain.entities.event_types import AgentEventType
 from src.infrastructure.tools.confirmation.contract import CONFIRMATION_METADATA_KEY
 
@@ -383,14 +379,23 @@ async def test_tool_execute_node_executes_one_tool_and_keeps_the_rest_pending() 
 
 
 @pytest.mark.asyncio
-async def test_confirmation_resume_does_not_repeat_previously_completed_tool() -> None:
-    """确认中断恢复时，已经完成的兄弟工具不可再次执行。"""
+async def test_confirmation_is_persistable_and_denial_does_not_repeat_tool() -> None:
+    """确认等待和拒绝都由普通 AgentState 表示，不使用图中断。"""
     emitter = RecordingEmitter()
-    calls: list[str] = []
+    confirmation_checks: list[str] = []
+    executed_tools: list[str] = []
 
     class FakeToolRegistry:
         async def execute(self, tool_name, tool_input, context):
-            calls.append(tool_name)
+            if context.extra.get("bypass_confirmation"):
+                executed_tools.append(tool_name)
+                return SimpleNamespace(
+                    output="executed",
+                    success=True,
+                    error=None,
+                    metadata={},
+                )
+            confirmation_checks.append(tool_name)
             if tool_name == "dangerous":
                 return SimpleNamespace(
                     output=None,
@@ -411,35 +416,37 @@ async def test_confirmation_resume_does_not_repeat_previously_completed_tool() -
                 metadata={},
             )
 
-    workflow = StateGraph(AgentState)
-    workflow.add_node("tool_execute", tool_execute_node)
-    workflow.set_entry_point("tool_execute")
-    workflow.add_conditional_edges(
-        "tool_execute",
-        lambda state: "tool_execute" if state["pending_tool_calls"] else END,
-        {"tool_execute": "tool_execute", END: END},
+    state = make_state(
+        pending_tool_calls=[
+            {"id": "call-dangerous", "name": "dangerous", "input": {}},
+        ],
     )
-    graph = workflow.compile(checkpointer=MemorySaver())
     config = {
         "configurable": {
-            "thread_id": "confirmation-replay-test",
             "tool_registry": FakeToolRegistry(),
             "event_emitter": emitter,
         }
     }
-    initial_state = make_state(
-        pending_tool_calls=[
-            {"id": "call-safe", "name": "safe", "input": {}},
-            {"id": "call-dangerous", "name": "dangerous", "input": {}},
-        ],
+
+    pending = await tool_execute_node(state, config)
+    denied = await tool_execute_node(
+        state,
+        {
+            "configurable": {
+                **config["configurable"],
+                "approval": {
+                    "tool_call_id": "call-dangerous",
+                    "decision": "deny",
+                },
+            }
+        },
     )
 
-    await graph.ainvoke(initial_state, config)
-    result = await graph.ainvoke(Command(resume="deny"), config)
-
-    assert calls == ["safe", "dangerous", "dangerous"]
-    assert result["tool_results"]["call-safe"]["status"] == "success"
-    assert result["tool_results"]["call-dangerous"]["error"] == "user_denied"
+    assert pending["pending_confirmation"]["tool_call_id"] == "call-dangerous"
+    assert pending["pending_tool_calls"][0]["id"] == "call-dangerous"
+    assert confirmation_checks == ["dangerous", "dangerous"]
+    assert executed_tools == []
+    assert denied["tool_results"]["call-dangerous"]["error"] == "user_denied"
 
 
 @pytest.mark.asyncio

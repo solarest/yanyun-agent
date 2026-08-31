@@ -217,3 +217,9 @@ LLM 调用节点的 system prompt 由 **PromptAssembleService** 组装，采用 
 3. 更新路由逻辑（如修改路由条件）
 4. 更新状态管理（如修改状态结构）
 5. **确认新节点是否注册**: 代码中写好的节点未必接入工作流，需检查 `workflow_builder.py` 中的 `workflow.add_node()` 和 `add_conditional_edges()` 调用
+
+## 本地状态恢复
+
+每个工具调用完成后，`persist_state_node` 将合并后的 `AgentState` 写入任务目录的 `checkpoints/turn_N.json`。恢复时，新的运行时读取最新可用快照；若最新文件损坏，会回退到更早的可读快照。
+
+危险工具的待确认调用以 `pending_confirmation` 字段保存在同一快照中。批准或拒绝后，服务加载该状态并继续执行；此流程不使用 `MemorySaver`、`GraphInterrupt` 或 `Command(resume=...)`。

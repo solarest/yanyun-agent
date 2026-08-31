@@ -36,6 +36,8 @@ class AgentState(TypedDict):
     tool_results: Dict[str, Dict[str, Any]]
     awaiting_user_input: bool
     last_executed_tool_call_ids: List[str]
+    pending_confirmation: Optional[Dict[str, Any]]
+    """等待用户决定的危险工具调用；由任务本地快照恢复。"""
 
     # === 流式输出 ===
     current_llm_text: str

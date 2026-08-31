@@ -1,10 +1,7 @@
 """Tests for SessionFileStorage service."""
 
 import json
-import os
 from pathlib import Path
-
-import pytest
 
 from src.application.services.session_file_storage import SessionFileStorage
 
@@ -197,6 +194,37 @@ class TestCheckpoint:
 
         result = storage.read_latest_checkpoint(task_dir)
         assert result is None
+
+    def test_read_latest_checkpoint_skips_corrupt_newer_snapshot(self, tmp_path):
+        storage = SessionFileStorage(base_path=str(tmp_path))
+        task_dir = storage.create_task_dir("sess-001", "task-001")
+        storage.write_checkpoint(task_dir, {"turn": 1}, turn_number=1)
+        (task_dir / "checkpoints" / "turn_002.json").write_text("{")
+
+        result = storage.read_latest_checkpoint(task_dir)
+
+        assert result["turn_number"] == 1
+        assert result["state"]["turn"] == 1
+
+    def test_checkpoint_records_pending_confirmation(self, tmp_path):
+        storage = SessionFileStorage(base_path=str(tmp_path))
+        task_dir = storage.create_task_dir("sess-001", "task-001")
+
+        storage.write_checkpoint(
+            task_dir,
+            {"turn": 2},
+            turn_number=2,
+            resume_status="awaiting_confirmation",
+            pending_confirmation={
+                "tool_call_id": "call-1",
+                "tool_name": "shell",
+            },
+        )
+
+        result = storage.read_latest_checkpoint(task_dir)
+
+        assert result["resume_status"] == "awaiting_confirmation"
+        assert result["pending_confirmation"]["tool_call_id"] == "call-1"
 
     def test_checkpoint_files_named_with_turn_number(self, tmp_path):
         storage = SessionFileStorage(base_path=str(tmp_path))

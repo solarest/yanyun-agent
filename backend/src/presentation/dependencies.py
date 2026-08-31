@@ -147,20 +147,6 @@ def get_session_approval_store():
     return get_default_session_store()
 
 
-@lru_cache()
-def get_graph_resume_manager():
-    """获取图恢复管理器单例。
-
-    agent_loop_runner 在 GraphInterrupt 时注册恢复上下文；
-    /approvals 端点取回并执行 graph.ainvoke(Command(resume=decision))。
-    """
-    from src.infrastructure.agent.graph_resume_manager import (
-        get_default_resume_manager,
-    )
-
-    return get_default_resume_manager()
-
-
 # === Tool Registry 依赖注入 ===
 
 
@@ -309,7 +295,6 @@ def get_task_management_use_case(
 ):
     """获取 Task 管理用例实例"""
     from src.application.tasks.management import TaskManagementUseCase
-    from src.infrastructure.agent.graph_resume_manager import get_default_resume_manager
     from src.infrastructure.repositories.sqlite_task_repo import SQLiteTaskRepository
     from src.infrastructure.repositories.sqlite_agent_repo import SQLiteAgentRepository
     from src.infrastructure.tools.confirmation.store import get_default_registry
@@ -328,7 +313,6 @@ def get_task_management_use_case(
         agent_repo=agent_repo,
         running_tasks=running_tasks,
         event_emitter=event_emitter,
-        resume_manager=get_default_resume_manager(),
         approval_registry=get_default_registry(),
     )
 

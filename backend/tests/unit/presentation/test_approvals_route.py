@@ -1,8 +1,4 @@
-"""审批端点测试（非阻塞版 task 5.1 / 5.2）。
-
-/approvals 端点校验 PendingApprovalRegistry 存在性后，
-通过 GraphResumeManager 恢复图执行。
-"""
+"""审批端点测试（非阻塞版 task 5.1 / 5.2）。"""
 
 import pytest
 from fastapi import HTTPException
@@ -45,26 +41,17 @@ class TestSubmitApprovalEndpoint:
     """task 5.1：POST /api/tasks/{task_id}/approvals 校验与错误处理。"""
 
     @pytest.mark.asyncio
-    async def test_registered_toolcall_clears_and_returns_200(self) -> None:
-        """已登记的 toolCallId → 清理登记并返回 200。
-
-        注：图恢复依赖 GraphResumeManager（完整 LangGraph 集成测试单独覆盖），
-        此处验证登记清理语义。
-        """
+    async def test_registered_toolcall_without_snapshot_remains_pending(self) -> None:
+        """内存登记不是重启恢复依据，缺少快照时不可消费确认。"""
         reg = PendingApprovalRegistry()
         await reg.register("t1", "c1")
 
-        # 注意：图恢复需要 GraphResumeManager 中有对应上下文，
-        # 单元测试中无上下文 → 会 404。但登记存在性已校验通过。
         with pytest.raises(HTTPException) as exc:
             await submit_approval(
                 "t1", ApprovalDecisionDTO(toolCallId="c1", decision="allow_once"), reg
             )
-        # 登记存在但无图上下文 → 404 (NO_PENDING_GRAPH)
         assert exc.value.status_code == 404
-
-        # 登记已被端点清理
-        assert await reg.has("t1", "c1") is False
+        assert await reg.has("t1", "c1") is True
 
     @pytest.mark.asyncio
     async def test_unknown_toolcall_returns_404(self) -> None:

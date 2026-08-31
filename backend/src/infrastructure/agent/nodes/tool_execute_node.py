@@ -10,7 +10,7 @@ LangGraph Node: tool_execute_node
 import logging
 
 from langchain_core.messages import ToolMessage
-from langgraph.types import RunnableConfig, interrupt
+from langgraph.types import RunnableConfig
 
 from src.domain.aggregates.agent.agent_state import AgentState
 from src.domain.aggregates.agent.state_groups import ToolFields
@@ -279,30 +279,31 @@ class ToolExecuteNode(BaseNode):
             )
 
             if result_dict.get("metadata", {}).get(CONFIRMATION_METADATA_KEY):
-                # 需要人在回路确认 → interrupt() 暂停图
                 meta = result_dict["metadata"]
-                effective_task_id = extra.get("parent_task_id") or context.task_id
-                interrupt_payload = {
-                    "toolCallId": meta["tool_call_id"],
-                    "command": meta["command"],
-                    "category": meta["category"],
-                    "riskReason": meta["risk_reason"],
-                    "sessionId": meta.get("session_id", ""),
-                    "taskId": effective_task_id,
-                    "options": ["allow_once", "allow_all", "deny"],
-                }
+                approval = config["configurable"].get("approval")
+                if (
+                    not approval
+                    or approval.get("tool_call_id") != meta["tool_call_id"]
+                ):
+                    logger.info(
+                        "[NODE:tool_execute] AWAITING_CONFIRMATION | task_id=%s | "
+                        "tool_call_id=%s | command=%s",
+                        context.task_id, meta["tool_call_id"], meta["command"],
+                    )
+                    return {
+                        "pending_tool_calls": pending_tools,
+                        "pending_confirmation": {
+                            "tool_call_id": meta["tool_call_id"],
+                            "tool_name": tc.get("name", ""),
+                            "tool_input": tc.get("input", {}),
+                            "category": meta["category"],
+                            "risk_reason": meta["risk_reason"],
+                            "session_id": meta.get("session_id", ""),
+                        },
+                        "phase": "awaiting_confirmation",
+                    }
 
-                logger.info(
-                    "[NODE:tool_execute] AWAITING_CONFIRMATION | task_id=%s | "
-                    "tool_call_id=%s | command=%s",
-                    effective_task_id, meta["tool_call_id"], meta["command"],
-                )
-                decision = interrupt(interrupt_payload)
-                logger.info(
-                    "[NODE:tool_execute] CONFIRMATION_RESUMED | task_id=%s | "
-                    "tool_call_id=%s | decision=%s",
-                    effective_task_id, meta["tool_call_id"], decision,
-                )
+                decision = approval["decision"]
 
                 if decision == "deny":
                     tool_call_id = meta["tool_call_id"]
@@ -384,6 +385,7 @@ class ToolExecuteNode(BaseNode):
             "last_executed_tool_call_ids": last_executed_tool_call_ids,
             "final_result": final_result,
             "phase": "tool_executing",
+            "pending_confirmation": None,
         }
 
 
