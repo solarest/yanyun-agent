@@ -122,5 +122,6 @@ storage/sessions/
 # OS 和工具
 # ==========================
 .fseventsd
+.worktrees/
 
 storage/
